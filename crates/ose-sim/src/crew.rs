@@ -26,6 +26,31 @@ pub const KERBAL_MASS_T: f64 = 0.07;
 pub const JETPACK_PROPELLANT_T: f64 = 0.025;
 /// How close a Kerbal has to be to board, m.
 pub const BOARD_RANGE_M: f64 = 6.0;
+/// Reach of the hatch ladder when floating freely.
+pub const GRAB_RANGE_M: f64 = 1.5;
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HatchFrame {
+    pub position: DVec3,
+    pub up: DVec3,
+    pub forward: DVec3,
+}
+
+pub(crate) fn hatch_frames() -> &'static std::collections::HashMap<String, HatchFrame> {
+    static FRAMES: std::sync::LazyLock<std::collections::HashMap<String, HatchFrame>> =
+        std::sync::LazyLock::new(|| {
+            serde_json::from_str(include_str!("../../../assets/own/eva-hatches.json"))
+                .expect("EVA hatch frames")
+        });
+    &FRAMES
+}
+
+/// The supporting part, rather than an independently integrated orbit.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct EvaAttachment {
+    pub vessel: Entity,
+    pub part: usize,
+}
 
 /// The crew aboard a vessel: (part index, name) per seat taken.
 #[derive(Component, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -47,6 +72,178 @@ pub struct Flag {
 }
 
 impl Universe {
+    pub fn eva_attachment(&self, e: Entity) -> Option<EvaAttachment> {
+        self.world.get::<EvaAttachment>(e).copied()
+    }
+
+    /// Hatch offsets from the vessel's mass centre, in inertial axes, for interaction targeting.
+    pub fn eva_hatch_offsets(&self, e: Entity) -> Vec<DVec3> {
+        let Some(st) = self.structure(e) else {
+            return Vec::new();
+        };
+        let Some(r) = self.position_of(e) else {
+            return Vec::new();
+        };
+        (0..st.eva_hatches.len())
+            .filter_map(|part| self.eva_hatch_state(e, part).map(|s| s.0 - r))
+            .collect()
+    }
+
+    fn eva_hatch_state(&self, target: Entity, part: usize) -> Option<(DVec3, DVec3, DVec3, DVec3)> {
+        let st = self.world.get::<structure::Structure>(target)?;
+        if !st.rigid.present.get(part).copied().unwrap_or(false) {
+            return None;
+        }
+        let hatch = st.eva_hatches.get(part).copied().flatten()?;
+        let p = self.powered(target).or_else(|| self.dormant(target))?;
+        if p.crashed {
+            return None;
+        }
+        let (r, v) = if self.powered(target).is_some() {
+            (p.r, p.v)
+        } else {
+            self.world
+                .get::<bodies::OnRails>(target)?
+                .0
+                .state_at(self.vessel_tick(target).seconds())
+        };
+        let mut pose;
+        let current = if self.powered(target).is_some() {
+            p
+        } else {
+            pose = p.clone();
+            pose.r = r;
+            &pose
+        };
+        let (x, y, z) = flight::vessel_basis(current);
+        let world = |v: DVec3| x * v.x + y * v.y + z * v.z;
+        let offset = world(hatch.position - st.rigid.rest_centre());
+        let omega = p.angvel + p.facing * p.roll_rate;
+        Some((
+            r + offset,
+            v + omega.cross(offset),
+            world(hatch.up),
+            world(hatch.forward),
+        ))
+    }
+
+    pub fn restore_eva_attachment(&mut self, e: Entity, vessel: Entity, part: usize) {
+        if self.eva_kerbal(e).is_some()
+            && self.same_time(e, vessel)
+            && self.eva_hatch_state(vessel, part).is_some()
+        {
+            self.world
+                .entity_mut(e)
+                .insert(EvaAttachment { vessel, part });
+            self.sync_eva_attachment(e);
+        }
+    }
+
+    fn sync_eva_attachment(&mut self, e: Entity) {
+        let Some(a) = self.eva_attachment(e) else {
+            return;
+        };
+        let state = self
+            .same_time(e, a.vessel)
+            .then(|| self.eva_hatch_state(a.vessel, a.part))
+            .flatten();
+        let Some((r, v, up, forward)) = state else {
+            self.world.entity_mut(e).remove::<EvaAttachment>();
+            return;
+        };
+        let Some(body) = self.world.get::<bodies::ReferenceBody>(a.vessel).copied() else {
+            return;
+        };
+        self.world.entity_mut(e).insert(body);
+        if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+            p.r = r;
+            p.v = v;
+            p.facing = up;
+            flight::set_vessel_top(&mut p, forward);
+            p.angvel = DVec3::ZERO;
+            p.roll_rate = 0.0;
+            p.throttle = 0.0;
+            p.rcs.usage = 0.0;
+            p.coasting_since = None;
+        }
+        let mu = self.world.get::<bodies::Body>(body.0).unwrap().mu;
+        let orbit = Orbit::from_state_vectors(mu, r, v, self.vessel_tick(e).seconds());
+        self.world.entity_mut(e).insert(bodies::OnRails(orbit));
+    }
+
+    pub(crate) fn sync_eva_attachments(&mut self) {
+        let mut q = self.world.query_filtered::<Entity, With<EvaAttachment>>();
+        let kerbals: Vec<_> = q
+            .iter(&self.world)
+            .filter(|e| self.in_active_timeline(*e))
+            .collect();
+        for e in kerbals {
+            self.sync_eva_attachment(e);
+        }
+    }
+
+    pub fn release_eva(&mut self, e: Entity) -> bool {
+        if self.eva_attachment(e).is_none() {
+            return false;
+        }
+        self.sync_eva_attachment(e);
+        self.world.entity_mut(e).remove::<EvaAttachment>();
+        // Separation is positional only: letting go must not manufacture orbital delta-v.
+        if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+            let forward = flight::vessel_top(&p);
+            p.r = p.r - forward * 0.2;
+            p.attitude = flight::Attitude::Free;
+            p.throttle = 0.0;
+            p.rcs.translate = DVec3::ZERO;
+        }
+        true
+    }
+
+    /// F releases a handhold, or grabs a nearby hatch without boarding the pod.
+    pub fn eva_interact(&mut self, e: Entity) -> Result<(), String> {
+        if self.eva_kerbal(e).is_none() {
+            return Err("not a Kerbal on EVA".into());
+        }
+        if self.release_eva(e) {
+            return Ok(());
+        }
+        let r = self.position_of(e).ok_or("no flight state")?;
+        let mut closest = None;
+        for target in self.vessels() {
+            if !self.same_time(e, target)
+                || self.world.get::<bodies::ReferenceBody>(e)
+                    != self.world.get::<bodies::ReferenceBody>(target)
+            {
+                continue;
+            }
+            let Some(st) = self.structure(target) else {
+                continue;
+            };
+            for part in 0..st.eva_hatches.len() {
+                if let Some((at, v, _, _)) = self.eva_hatch_state(target, part) {
+                    let d = (at - r).length();
+                    let speed = self
+                        .powered(e)
+                        .map(|p| (p.v - v).length())
+                        .unwrap_or(f64::INFINITY);
+                    if d <= GRAB_RANGE_M
+                        && speed <= 2.0
+                        && closest.is_none_or(|(_, _, best)| d < best)
+                    {
+                        closest = Some((target, part, d));
+                    }
+                }
+            }
+        }
+        let (vessel, part, _) = closest.ok_or("no hatch ladder within reach")?;
+        self.wake(vessel);
+        self.world
+            .entity_mut(e)
+            .insert(EvaAttachment { vessel, part });
+        self.sync_eva_attachment(e);
+        Ok(())
+    }
+
     pub fn crew(&self, e: Entity) -> Vec<(usize, String)> {
         self.world
             .get::<Crew>(e)
@@ -121,8 +318,8 @@ impl Universe {
         members
     }
 
-    /// A Kerbal steps out of `e`. On the ground they stand beside it; in flight they float a couple of metres
-    /// off it with its velocity. Returns the Kerbal's vessel.
+    /// A Kerbal steps out of `e`. In space they hold the occupied part's authored hatch ladder.
+    /// The surface path stands beside the vessel. Returns the Kerbal's vessel.
     pub fn go_eva(&mut self, e: Entity, name: Option<&str>) -> Result<Entity, String> {
         let mut crew = self.crew(e);
         let idx = match name {
@@ -135,7 +332,7 @@ impl Universe {
             .get::<bodies::ReferenceBody>(e)
             .ok_or("vessel has no body")?
             .0;
-        let ut = self.ut();
+        let ut = self.vessel_tick(e).seconds();
         let b = self
             .world
             .get::<bodies::Body>(body)
@@ -153,7 +350,7 @@ impl Universe {
                 (r, v, false, r.normalized())
             }
         };
-        let (_, kname) = crew.remove(idx);
+        let (part, kname) = crew.remove(idx);
         self.set_crew(e, crew);
         let spec = flight::FlightSpec {
             stages: vec![flight::StageSpec {
@@ -164,6 +361,7 @@ impl Universe {
                 isp_asl_s: JETPACK_ISP_S,
                 propellant_t: JETPACK_PROPELLANT_T,
                 start_mass_t: KERBAL_MASS_T + JETPACK_PROPELLANT_T,
+                moi_tm2: 0.01,
                 ..Default::default()
             }],
             drag_area_m2: 0.6,
@@ -173,7 +371,11 @@ impl Universe {
             // a few metres east of the vessel on the ground
             let (lat, lon) = flight::lat_lon(&b, r, ut);
             let dlon = 4.0 / (b.radius_m * lat.to_radians().cos().max(0.01)) * 57.29578;
-            self.spawn_powered_on_surface(&kname, body, spec, lat, lon + dlon)
+            let base = self.tick();
+            self.set_tick(self.vessel_tick(e));
+            let child = self.spawn_powered_on_surface(&kname, body, spec, lat, lon + dlon);
+            self.set_tick(base);
+            child
         } else {
             let side = {
                 let s = facing.cross(DVec3::new(0.0, 0.0, 1.0));
@@ -183,10 +385,18 @@ impl Universe {
                     DVec3::new(1.0, 0.0, 0.0)
                 }
             };
-            let r2 = r + side * 2.5;
-            let mut p = flight::Powered::new(spec, r2, v, false);
-            p.facing = facing;
-            let orbit = Orbit::from_state_vectors(b.mu, r2, v, ut);
+            let (r2, velocity, up, forward) = self.eva_hatch_state(e, part).unwrap_or((
+                r + side * 2.5,
+                v,
+                facing,
+                flight::roll_reference(facing, r.normalized()),
+            ));
+            let mut p = flight::Powered::new(spec, r2, velocity, false);
+            p.facing = up;
+            p.walker = true;
+            flight::set_vessel_top(&mut p, forward);
+            p.attitude = flight::Attitude::Free;
+            let orbit = Orbit::from_state_vectors(b.mu, r2, velocity, ut);
             self.world
                 .spawn((
                     vessels::Vessel {
@@ -198,15 +408,17 @@ impl Universe {
                 ))
                 .id()
         };
+        self.assign_timeline(kerbal, self.timeline_of(e));
         if let Some(mut p) = self.world.get_mut::<flight::Powered>(kerbal) {
-            // a jetpack fires on the throttle without staging; on the ground the Kerbal walks
+            // Walking uses throttle; the pack uses RCS translation, enabled explicitly with R.
             p.ignited = true;
             p.walker = true;
-            // the jetpack also translates (Space/Shift up, Ctrl down, sideways) like RCS, always on
+            // Pack translation is body-relative; attachment suppresses it until release.
             p.rcs.thrust_kn = JETPACK_THRUST_KN;
+            p.rcs.torque_knm = 0.02;
             p.rcs.isp_vac_s = JETPACK_ISP_S;
             p.rcs.isp_asl_s = JETPACK_ISP_S;
-            p.groups.rcs = true;
+            p.groups.rcs = false;
             p.ground_clearance_m = 0.55;
             p.footprint_m = 0.3;
             p.crash_tolerance_mps = 50.0;
@@ -220,6 +432,13 @@ impl Universe {
             name: kname,
             experiments,
         });
+        if !landed && self.eva_hatch_state(e, part).is_some() {
+            self.wake(e);
+            self.world
+                .entity_mut(kerbal)
+                .insert(EvaAttachment { vessel: e, part });
+            self.sync_eva_attachment(kerbal);
+        }
         Ok(kerbal)
     }
 
@@ -234,7 +453,8 @@ impl Universe {
         let d = self
             .distance_between(kerbal, target)
             .ok_or("not near each other")?;
-        if d > BOARD_RANGE_M {
+        let landed = self.powered(kerbal).is_some_and(|p| p.landed);
+        if landed && d > BOARD_RANGE_M {
             return Err(format!("{d:.0} m away; get within {BOARD_RANGE_M:.0} m"));
         }
         let st = self
@@ -242,10 +462,23 @@ impl Universe {
             .get::<structure::Structure>(target)
             .ok_or("that vessel has no seats")?;
         let mut crew = self.crew(target);
-        let seat = (0..st.rigid.len())
+        let seats: Vec<_> = (0..st.rigid.len())
             .filter(|&i| st.rigid.present[i] && st.crew[i] > 0)
-            .find(|&i| crew.iter().filter(|(p, _)| *p == i).count() < st.crew[i] as usize)
-            .ok_or("no free seat")?;
+            .filter(|&i| crew.iter().filter(|(p, _)| *p == i).count() < st.crew[i] as usize)
+            .collect();
+        if seats.is_empty() {
+            return Err("no free seat".into());
+        }
+        let here = self.position_of(kerbal).ok_or("no flight state")?;
+        let seat = seats
+            .into_iter()
+            .find(|&i| {
+                landed
+                    || self
+                        .eva_hatch_state(target, i)
+                        .is_some_and(|s| (s.0 - here).length() <= GRAB_RANGE_M)
+            })
+            .ok_or("get within reach of an available hatch")?;
         crew.push((seat, name));
         self.set_crew(target, crew);
         self.world.despawn(kerbal);
@@ -256,7 +489,7 @@ impl Universe {
     pub fn distance_between(&self, a: Entity, b: Entity) -> Option<f64> {
         let ba = self.world.get::<bodies::ReferenceBody>(a)?.0;
         let bb = self.world.get::<bodies::ReferenceBody>(b)?.0;
-        if ba != bb {
+        if ba != bb || !self.same_time(a, b) {
             return None;
         }
         Some((self.position_of(a)? - self.position_of(b)?).length())
@@ -270,7 +503,7 @@ impl Universe {
                 self.world
                     .get::<bodies::OnRails>(e)?
                     .0
-                    .state_at(self.ut())
+                    .state_at(self.vessel_tick(e).seconds())
                     .0,
             ),
         }
@@ -302,7 +535,7 @@ impl Universe {
             .get::<bodies::Body>(body)
             .ok_or("no body")?
             .clone();
-        let (lat, lon) = flight::lat_lon(&b, p.r, self.ut());
+        let (lat, lon) = flight::lat_lon(&b, p.r, self.vessel_tick(kerbal).seconds());
         let spec = flight::FlightSpec {
             stages: vec![flight::StageSpec {
                 start_mass_t: 0.01,
@@ -312,7 +545,11 @@ impl Universe {
             drag_cd: flight::DEFAULT_CD,
         };
         let dlon = 1.5 / (b.radius_m * lat.to_radians().cos().max(0.01)) * 57.29578;
+        let base = self.tick();
+        self.set_tick(self.vessel_tick(kerbal));
         let flag = self.spawn_powered_on_surface(label, body, spec, lat, lon + dlon);
+        self.assign_timeline(flag, self.timeline_of(kerbal));
+        self.set_tick(base);
         self.world
             .entity_mut(flag)
             .insert(Flag { planted_by: name });
@@ -484,6 +721,7 @@ mod tests {
         );
         // the jetpack lifts it straight up (Translate along the Kerbal's axis)
         u.set_controls(jeb, 0.0, flight::Attitude::Up);
+        u.action_group(jeb, crate::ActionGroup::Rcs, Some(true));
         assert!(u.set_translate(jeb, DVec3::new(0.0, 1.0, 0.0)));
         for _ in 0..crate::TICKS_PER_SECOND {
             u.step();
@@ -506,8 +744,11 @@ mod tests {
         p.landed = false;
         u.set_powered(v, p);
         let jeb = u.go_eva(v, Some("Jebediah Kerman")).unwrap();
+        assert!(u.release_eva(jeb));
+        u.action_group(jeb, crate::ActionGroup::Rcs, Some(true));
         let v0 = u.powered(jeb).unwrap().v;
-        u.set_controls(jeb, 1.0, flight::Attitude::OrbitPrograde);
+        u.set_controls(jeb, 0.0, flight::Attitude::OrbitPrograde);
+        u.set_translate(jeb, DVec3::new(0.0, 1.0, 0.0));
         for _ in 0..(5 * crate::TICKS_PER_SECOND) {
             u.step();
         }
@@ -518,5 +759,108 @@ mod tests {
         assert!(dv > 5.0, "dv {dv}");
         // too far from the craft now to board
         assert!(u.board(jeb, v).is_err());
+    }
+
+    fn k1_in_orbit() -> (Universe, Entity) {
+        let (mut u, v) = k1_on_pad();
+        let body = u.body_entity("Kerbin").unwrap();
+        let mu = u.world.get::<bodies::Body>(body).unwrap().mu;
+        let mut p = u.powered(v).unwrap().clone();
+        p.r = DVec3::new(700_000.0, 0.0, 0.0);
+        p.v = DVec3::new(0.0, (mu / 700_000.0).sqrt(), 0.0);
+        p.landed = false;
+        p.facing = DVec3::new(0.0, 0.0, 1.0);
+        p.roll_rad = 0.7;
+        p.attitude = flight::Attitude::Free;
+        u.set_powered(v, p);
+        (u, v)
+    }
+
+    #[test]
+    fn orbital_eva_holds_the_authored_hatch_without_fuel_or_drift() {
+        let (mut u, v) = k1_in_orbit();
+        let jeb = u.go_eva(v, None).unwrap();
+        assert_eq!(
+            u.eva_attachment(jeb),
+            Some(EvaAttachment { vessel: v, part: 0 })
+        );
+        assert!(!u.powered(jeb).unwrap().groups.rcs, "pack starts off");
+        // Holding movement/throttle must not detach, push the vessel, or burn the pack.
+        u.action_group(jeb, crate::ActionGroup::Rcs, Some(true));
+        u.set_translate(jeb, DVec3::new(1.0, 1.0, 1.0));
+        u.set_controls(jeb, 1.0, flight::Attitude::Up);
+        let fuel = u.powered(jeb).unwrap().propellant_t;
+        let parent_fuel = u.powered(v).unwrap().propellant_t;
+        for _ in 0..(20 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        let (at, vel, up, forward) = u.eva_hatch_state(v, 0).unwrap();
+        let p = u.powered(jeb).unwrap();
+        assert!((p.r - at).length() < 1e-8);
+        assert!((p.v - vel).length() < 1e-8);
+        assert!(p.facing.dot(up) > 0.999999);
+        assert!(flight::vessel_top(p).dot(forward) > 0.999999);
+        assert_eq!(p.propellant_t, fuel);
+        assert_eq!(
+            u.powered(v).or_else(|| u.dormant(v)).unwrap().propellant_t,
+            parent_fuel
+        );
+        u.eva_interact(jeb).unwrap();
+        for _ in 0..10 {
+            u.step();
+        }
+        u.eva_interact(jeb).unwrap();
+        u.board(jeb, v).unwrap();
+    }
+
+    #[test]
+    fn release_inherits_rotating_hatch_velocity_and_grab_does_not_board() {
+        let (mut u, v) = k1_in_orbit();
+        u.world.get_mut::<flight::Powered>(v).unwrap().angvel = DVec3::new(0.1, 0.2, 0.0);
+        let jeb = u.go_eva(v, None).unwrap();
+        let (_, velocity, _, _) = u.eva_hatch_state(v, 0).unwrap();
+        assert!((velocity - u.powered(v).unwrap().v).length() > 0.01);
+        u.eva_interact(jeb).unwrap();
+        assert!(u.eva_attachment(jeb).is_none());
+        assert!((u.powered(jeb).unwrap().v - velocity).length() < 1e-10);
+        u.eva_interact(jeb).unwrap();
+        assert!(u.eva_attachment(jeb).is_some());
+        assert!(u.crew(v).is_empty());
+        assert!(u.set_eva(jeb, false, true), "Space releases");
+        assert!(u.eva_attachment(jeb).is_none());
+    }
+
+    #[test]
+    fn free_eva_keeps_its_space_orientation_and_needs_rcs_for_translation() {
+        let (mut u, v) = k1_in_orbit();
+        let jeb = u.go_eva(v, None).unwrap();
+        u.release_eva(jeb);
+        let start = u.powered(jeb).unwrap().clone();
+        u.set_translate(jeb, DVec3::new(1.0, 0.0, 0.0));
+        for _ in 0..crate::TICKS_PER_SECOND {
+            u.step();
+        }
+        let p = u.powered(jeb).unwrap();
+        assert_eq!(p.propellant_t, start.propellant_t);
+        assert!(p.facing.dot(start.facing) > 0.999999);
+        assert!(flight::vessel_top(p).dot(flight::vessel_top(&start)) > 0.999999);
+        u.action_group(jeb, crate::ActionGroup::Rcs, Some(true));
+        for _ in 0..crate::TICKS_PER_SECOND {
+            u.step();
+        }
+        assert!(u.powered(jeb).unwrap().propellant_t < start.propellant_t);
+        assert!(u.eva_attachment(jeb).is_none());
+    }
+
+    #[test]
+    fn a_destroyed_hatch_releases_its_kerbal() {
+        let (mut u, v) = k1_in_orbit();
+        let jeb = u.go_eva(v, None).unwrap();
+        u.world.despawn(v);
+        u.step();
+        assert!(u.eva_attachment(jeb).is_none());
+        u.step();
+        assert!(!u.powered(jeb).unwrap().crashed);
+        assert!(u.eva_interact(jeb).is_err());
     }
 }

@@ -272,7 +272,9 @@ impl Audio {
         g.gain().set_value(gain as f32);
         src.connect_with_audio_node(&g).ok();
         g.connect_with_audio_node(master).ok();
-        src.start().ok();
+        if src.start().is_ok() {
+            self.mark("data-ose-sfx-started", key);
+        }
     }
 
     /// A loop that follows a level, 0 (stopped) to 1, at a playback rate: wind with dynamic pressure, the

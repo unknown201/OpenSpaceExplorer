@@ -300,7 +300,7 @@ impl ScienceData {
     }
 }
 
-/// Submit reports for the agency: a report it already has scores nothing (`GetPotentialReportValueBase`).
+/// Submit reports for the agency, depleting each experiment/type/location's remaining science.
 /// Returns them with the value each actually earned, and the total.
 pub fn submit(
     c: &mut Campaign,
@@ -311,25 +311,36 @@ pub fn submit(
     let mut out = Vec::new();
     let mut earned = 0.0;
     let mult = option(c, "ScienceRewards");
-    for r in reports {
-        let mut info = report_info(&r);
-        if c.science
+    let mut changed = false;
+    for mut r in reports {
+        let credited: f64 = c
+            .science
             .submitted
             .iter()
-            .any(|s| s.report.key() == r.key())
-        {
-            info.value = 0.0;
-        } else {
+            .filter(|s| s.report.key() == r.key())
+            .map(|s| s.report.value)
+            .sum();
+        let base = r.full_value();
+        r.base_value = base;
+        // Another vessel may have submitted this subject since collection. Never pay more than
+        // either the collected report or the subject's current potential.
+        r.value = r
+            .value
+            .min(ose_sim::science::potential_value(base, credited))
+            .max(0.0);
+        let info = report_info(&r);
+        if r.value > 0.0 {
             earned += r.value.round() * mult;
             c.science.submitted.push(SubmittedReport {
                 report: r,
                 by: Some(by),
                 tick,
             });
+            changed = true;
         }
         out.push(info);
     }
-    if earned > 0.0 {
+    if changed {
         c.science.rev += 1;
     }
     (out, earned)
@@ -467,11 +478,12 @@ mod tests {
             sample: false,
             location: key_loc.into(),
             value,
+            base_value: value,
         }
     }
 
     #[test]
-    fn reports_score_once_and_buy_tech() {
+    fn reports_diminish_and_buy_tech() {
         let d = data();
         let mut c = Campaign::default();
         assert_eq!(c.mode, SessionMode::Exploration);
@@ -483,8 +495,8 @@ mod tests {
         let (r, earned) = submit(&mut c, vec![report("Kerbin_LowOrbit", 24.4)], 2, 20);
         assert_eq!(
             (r[0].value, earned),
-            (0.0, 0.0),
-            "the same report scores nothing twice"
+            (12.2, 12.0),
+            "the same subject pays half on its second submission"
         );
         // the cheapest node whose prerequisites are free
         let have = d.unlocked(&c.science);
@@ -528,6 +540,33 @@ mod tests {
             stages: vec![],
         };
         assert!(d.locked_parts(&c, &craft).is_empty());
+    }
+
+    #[test]
+    fn stale_reports_are_revalued_and_exhaustion_survives_save_restore() {
+        let mut c = Campaign::default();
+        for expected in [8.0, 4.0, 2.0, 1.0, 0.5, 0.0] {
+            let (reports, earned) = submit(&mut c, vec![report("Kerbin_Landed", 8.0)], 1, 0);
+            assert_eq!(reports[0].value, expected);
+            assert_eq!(earned, expected.round());
+        }
+        let count = c.science.submitted.len();
+        let c: Campaign = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        let saved = crate::save::capture(&ose_sim::Universe::default(), &[], &c, &[]);
+        let mut restored = ose_sim::Universe::default();
+        crate::save::restore(&mut restored, &saved, &[], &[]);
+        let ledger = restored.world.resource::<ose_sim::science::ScienceLedger>();
+        assert_eq!(
+            ose_sim::science::potential_value(8.0, ledger.0[&report("Kerbin_Landed", 8.0).key()]),
+            0.0
+        );
+        let mut c = c;
+        assert_eq!(
+            submit(&mut c, vec![report("Kerbin_Landed", 8.0)], 2, 0).1,
+            0.0
+        );
+        assert_eq!(c.science.submitted.len(), count);
+        assert_eq!(submit(&mut c, vec![report("Mun_Landed", 8.0)], 2, 0).1, 8.0);
     }
 
     #[test]

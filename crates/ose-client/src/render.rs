@@ -41,11 +41,22 @@ struct ObjectUniform {
     params: [f32; 4],
     /// x: how strongly the material's emissive map lights up (window lights at night), yzw unused.
     extra: [f32; 4],
+    lamps: [Lamp; 8],
+}
+
+/// A camera-relative lamp, in the same world units as the drawn meshes.
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Lamp {
+    pub position_range: [f32; 4],
+    pub direction_cone: [f32; 4],
+    pub color_intensity: [f32; 4],
 }
 
 const SHADER: &str = r#"
 struct Camera { view_proj: mat4x4<f32> };
-struct Object { model: mat4x4<f32>, color: vec4<f32>, light_dir: vec4<f32>, light2: vec4<f32>, params: vec4<f32>, extra: vec4<f32> };
+struct Lamp { position_range: vec4<f32>, direction_cone: vec4<f32>, color_intensity: vec4<f32> };
+struct Object { model: mat4x4<f32>, color: vec4<f32>, light_dir: vec4<f32>, light2: vec4<f32>, params: vec4<f32>, extra: vec4<f32>, lamps: array<Lamp, 8> };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(1) @binding(0) var<uniform> object: Object;
 @group(2) @binding(0) var tex: texture_2d<f32>;
@@ -115,7 +126,20 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     }
     let fill = max(dot(n, normalize(object.light2.xyz)), 0.0) * object.light2.w;
     let ambient = max(object.params.w, 0.08);
-    let lit = base.rgb * min(ambient + (1.0 - ambient) * diffuse + fill, 1.6);
+    var local = vec3<f32>(0.0);
+    for (var i = 0u; i < 8u; i++) {
+        let lamp = object.lamps[i];
+        let delta = lamp.position_range.xyz - in.world;
+        let distance = length(delta);
+        if lamp.position_range.w > distance && distance > 0.0001 {
+            let dir = delta / distance;
+            let cone = dot(-dir, lamp.direction_cone.xyz);
+            let beam = select(smoothstep(lamp.direction_cone.w, min(lamp.direction_cone.w + 0.1, 1.0), cone), 1.0, lamp.direction_cone.w < 0.0);
+            let attenuation = pow(1.0 - distance / lamp.position_range.w, 2.0);
+            local += lamp.color_intensity.rgb * lamp.color_intensity.w * attenuation * beam * max(dot(n, dir), 0.0);
+        }
+    }
+    let lit = base.rgb * (min(ambient + (1.0 - ambient) * diffuse + fill, 1.6) + local);
     // Specular from the metallic-gloss map (metal in red, smoothness in alpha): a Blinn-Phong lobe whose
     // sharpness follows smoothness, tinted by the base colour on metal.
     let metal = mg.r * 0.8;
@@ -167,6 +191,8 @@ pub struct Model {
     /// (index into `meshes`, world transform within the model) per drawn node.
     primitives: Vec<(usize, Mat4, usize)>,
     pub rig: crate::animation::Rig,
+    /// The default pose is shared by static instances; only animated/control-driven instances rebuild it.
+    default_world: Vec<Mat4>,
     rest_vertices: Vec<Vec<Vertex>>,
     influences: Vec<Option<Influences>>,
     textures: Vec<Option<wgpu::TextureView>>,
@@ -278,6 +304,7 @@ pub struct DrawItem {
     pub sun: f32,
     /// Emissive map strength, 0 (off) to 1: the KSC's window and flood lights at night.
     pub glow: f32,
+    pub lamps: Vec<Lamp>,
 }
 
 impl DrawItem {
@@ -307,6 +334,7 @@ impl DrawItem {
             mirror_z: false,
             sun: 1.0,
             glow: 0.0,
+            lamps: Vec::new(),
         }
     }
 }
@@ -365,7 +393,10 @@ pub struct Renderer {
     /// Default texture views: white colour, flat normal, no metal or gloss.
     default_views: [wgpu::TextureView; 4],
     depth: wgpu::TextureView,
-    objects: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    object_buffer: Option<wgpu::Buffer>,
+    objects: Vec<wgpu::BindGroup>,
+    object_data: Vec<u8>,
+    object_stride: usize,
     models: HashMap<String, Model>,
     pending: HashMap<String, ()>,
     inbox: ModelInbox,
@@ -745,6 +776,8 @@ impl Renderer {
         let post = crate::fx_post::FxPost::new(&device, width, height, surface_format);
         let engine_fx =
             crate::engine_fx_gpu::EngineFxGpu::new(&device, &queue, &depth, &post.snapshot_view);
+        let alignment = device.limits().min_uniform_buffer_offset_alignment as usize;
+        let object_stride = std::mem::size_of::<ObjectUniform>().div_ceil(alignment) * alignment;
         Some(Renderer {
             device,
             queue,
@@ -769,7 +802,10 @@ impl Renderer {
             white,
             default_views,
             depth,
+            object_stride,
+            object_buffer: None,
             objects: Vec::new(),
+            object_data: Vec::new(),
             models: HashMap::new(),
             pending: HashMap::new(),
             inbox: Rc::new(RefCell::new(Vec::new())),
@@ -1009,6 +1045,9 @@ impl Renderer {
                 })
                 .collect();
             let mut model = Model {
+                default_world: cpu
+                    .rig
+                    .world_matrices(&cpu.rig.pose(cpu.rig.default_sample())),
                 rig: cpu.rig,
                 rest_vertices,
                 influences: cpu.influences,
@@ -1090,23 +1129,34 @@ impl Renderer {
 
     /// Make sure at least `n` object uniform slots exist (grown ahead of a frame so draws only borrow).
     fn ensure_slots(&mut self, n: usize) {
-        while self.objects.len() < n {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("object"),
-                size: std::mem::size_of::<ObjectUniform>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+        if self.objects.len() >= n {
+            return;
+        }
+        let capacity = n.next_power_of_two();
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("frame objects"),
+            size: (capacity * self.object_stride) as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.objects.clear();
+        for slot in 0..capacity {
             let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("object"),
                 layout: &self.object_layout,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: buf.as_entire_binding(),
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &buf,
+                        offset: (slot * self.object_stride) as u64,
+                        size: wgpu::BufferSize::new(std::mem::size_of::<ObjectUniform>() as u64),
+                    }),
                 }],
             });
-            self.objects.push((buf, bind));
+            self.objects.push(bind);
         }
+        self.object_data.resize(capacity * self.object_stride, 0);
+        self.object_buffer = Some(buf);
     }
 
     pub fn device(&self) -> &wgpu::Device {
@@ -1115,6 +1165,10 @@ impl Renderer {
 
     pub fn queue(&self) -> &wgpu::Queue {
         &self.queue
+    }
+
+    pub fn has_line(&self, key: &str) -> bool {
+        self.lines.contains_key(key)
     }
 
     /// Colour attachment format of the main pass.
@@ -1310,18 +1364,25 @@ impl Renderer {
                 item.rotation,
                 item.rel_pos_km,
             );
-            let mut pose = model
-                .rig
-                .pose(item.animation.or_else(|| model.rig.default_sample()));
-            for (node, turn) in &item.node_turns {
-                if let Some(i) = model.rig.nodes.iter().position(|n| n.name == *node) {
-                    pose[i].rotation = (pose[i].rotation * *turn).normalize();
+            let world = if item.animation.is_none()
+                && item.node_turns.is_empty()
+                && item.node_rotations.is_empty()
+            {
+                std::borrow::Cow::Borrowed(model.default_world.as_slice())
+            } else {
+                let mut pose = model
+                    .rig
+                    .pose(item.animation.or_else(|| model.rig.default_sample()));
+                for (node, turn) in &item.node_turns {
+                    if let Some(i) = model.rig.nodes.iter().position(|n| n.name == *node) {
+                        pose[i].rotation = (pose[i].rotation * *turn).normalize();
+                    }
                 }
-            }
-            for (i, turn) in &item.node_rotations {
-                pose[*i].rotation = (pose[*i].rotation * *turn).normalize();
-            }
-            let world = model.rig.world_matrices(&pose);
+                for (i, turn) in &item.node_rotations {
+                    pose[*i].rotation = (pose[*i].rotation * *turn).normalize();
+                }
+                std::borrow::Cow::Owned(model.rig.world_matrices(&pose))
+            };
             for (pi, (mesh_i, _, node)) in model.primitives.iter().enumerate() {
                 if hide.is_some_and(|h| h.contains(&model.mesh_names[*mesh_i])) {
                     continue;
@@ -1383,9 +1444,21 @@ impl Renderer {
                         item.ambient,
                     ],
                     extra: [item.glow, 0.0, 0.0, 0.0],
+                    lamps: {
+                        let mut lamps = item.lamps.clone();
+                        lamps.sort_by(|a, b| {
+                            let distance = |l: &Lamp| {
+                                Vec3::from_array(l.position_range[..3].try_into().unwrap())
+                                    .distance_squared(m.w_axis.truncate().as_vec3())
+                            };
+                            distance(a).total_cmp(&distance(b))
+                        });
+                        std::array::from_fn(|i| lamps.get(i).copied().unwrap_or_default())
+                    },
                 };
-                self.queue
-                    .write_buffer(&self.objects[slot].0, 0, bytemuck::bytes_of(&u));
+                let at = slot * self.object_stride;
+                self.object_data[at..at + std::mem::size_of::<ObjectUniform>()]
+                    .copy_from_slice(bytemuck::bytes_of(&u));
                 mesh_draws.push((item.model.clone(), pi, slot, m.determinant() < 0.0, skinned));
                 slot += 1;
             }
@@ -1407,11 +1480,21 @@ impl Renderer {
                 light2: [0.0; 4],
                 params: [1.0, 0.0, 0.0, 0.0],
                 extra: [0.0; 4],
+                lamps: [Lamp::default(); 8],
             };
-            self.queue
-                .write_buffer(&self.objects[slot].0, 0, bytemuck::bytes_of(&u));
+            let at = slot * self.object_stride;
+            self.object_data[at..at + std::mem::size_of::<ObjectUniform>()]
+                .copy_from_slice(bytemuck::bytes_of(&u));
             line_draws.push((l.key.clone(), slot));
             slot += 1;
+        }
+        // One WASM -> WebGPU upload replaces a queue operation for every primitive and orbit strip.
+        if slot > 0 {
+            self.queue.write_buffer(
+                self.object_buffer.as_ref().unwrap(),
+                0,
+                &self.object_data[..slot * self.object_stride],
+            );
         }
 
         let mut encoder = self
@@ -1475,7 +1558,7 @@ impl Renderer {
                         continue;
                     }
                     let tex = prim.bind.as_ref().unwrap_or(&self.white);
-                    pass.set_bind_group(1, &self.objects[*s].1, &[]);
+                    pass.set_bind_group(1, &self.objects[*s], &[]);
                     pass.set_bind_group(2, tex, &[]);
                     pass.set_vertex_buffer(0, skinned.as_ref().unwrap_or(&prim.vertices).slice(..));
                     pass.set_index_buffer(prim.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -1486,7 +1569,7 @@ impl Renderer {
             pass.set_bind_group(2, &self.white, &[]);
             for (key, s) in &line_draws {
                 let (buf, n) = &self.lines[key];
-                pass.set_bind_group(1, &self.objects[*s].1, &[]);
+                pass.set_bind_group(1, &self.objects[*s], &[]);
                 pass.set_vertex_buffer(0, buf.slice(..));
                 pass.draw(0..*n, 0..1);
             }
@@ -1494,8 +1577,8 @@ impl Renderer {
         if self.fixture_grid {
             self.post.reference_grid(&mut encoder);
         }
-        self.post.snapshot(&mut encoder);
-        {
+        if self.engine_fx.has_draws() {
+            self.post.snapshot(&mut encoder);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("authored engine effects"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

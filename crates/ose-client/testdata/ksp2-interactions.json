@@ -1,0 +1,1873 @@
+{
+  "cases": [
+    {
+      "id": "throttle-0",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 0,
+        "axis": -1,
+        "dt": 0.02
+      },
+      "expected": 0,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-1",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 0,
+        "axis": -1,
+        "dt": 0.1
+      },
+      "expected": 0,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-2",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 0,
+        "axis": 0,
+        "dt": 0.02
+      },
+      "expected": 0,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-3",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 0,
+        "axis": 0,
+        "dt": 0.1
+      },
+      "expected": 0,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-4",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 0,
+        "axis": 1,
+        "dt": 0.02
+      },
+      "expected": 0.02,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-5",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 0,
+        "axis": 1,
+        "dt": 0.1
+      },
+      "expected": 0.1,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-6",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 0.4,
+        "axis": -1,
+        "dt": 0.02
+      },
+      "expected": 0.38,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-7",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 0.4,
+        "axis": -1,
+        "dt": 0.1
+      },
+      "expected": 0.3,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-8",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 0.4,
+        "axis": 0,
+        "dt": 0.02
+      },
+      "expected": 0.4,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-9",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 0.4,
+        "axis": 0,
+        "dt": 0.1
+      },
+      "expected": 0.4,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-10",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 0.4,
+        "axis": 1,
+        "dt": 0.02
+      },
+      "expected": 0.42000002,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-11",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 0.4,
+        "axis": 1,
+        "dt": 0.1
+      },
+      "expected": 0.5,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-12",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 1,
+        "axis": -1,
+        "dt": 0.02
+      },
+      "expected": 0.98,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-13",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 1,
+        "axis": -1,
+        "dt": 0.1
+      },
+      "expected": 0.9,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-14",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 1,
+        "axis": 0,
+        "dt": 0.02
+      },
+      "expected": 1,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-15",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 1,
+        "axis": 0,
+        "dt": 0.1
+      },
+      "expected": 1,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-16",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 1,
+        "axis": 1,
+        "dt": 0.02
+      },
+      "expected": 1,
+      "unit": "fraction"
+    },
+    {
+      "id": "throttle-17",
+      "category": "throttle",
+      "op": "throttle",
+      "input": {
+        "current": 1,
+        "axis": 1,
+        "dt": 0.1
+      },
+      "expected": 1,
+      "unit": "fraction"
+    },
+    {
+      "id": "Z",
+      "category": "throttle",
+      "op": "preset",
+      "input": {
+        "full": true
+      },
+      "expected": 1,
+      "unit": "fraction"
+    },
+    {
+      "id": "X",
+      "category": "throttle",
+      "op": "preset",
+      "input": {
+        "full": false
+      },
+      "expected": 0,
+      "unit": "fraction"
+    },
+    {
+      "id": "rotation-False-False",
+      "category": "vab_rotation",
+      "op": "rotation",
+      "input": {
+        "snap": false,
+        "fine": false
+      },
+      "expected": 90,
+      "unit": "degree"
+    },
+    {
+      "id": "rotation-False-True",
+      "category": "vab_rotation",
+      "op": "rotation",
+      "input": {
+        "snap": false,
+        "fine": true
+      },
+      "expected": 5,
+      "unit": "degree"
+    },
+    {
+      "id": "rotation-True-False",
+      "category": "vab_rotation",
+      "op": "rotation",
+      "input": {
+        "snap": true,
+        "fine": false
+      },
+      "expected": 90,
+      "unit": "degree"
+    },
+    {
+      "id": "rotation-True-True",
+      "category": "vab_rotation",
+      "op": "rotation",
+      "input": {
+        "snap": true,
+        "fine": true
+      },
+      "expected": 5,
+      "unit": "degree"
+    },
+    {
+      "id": "flight-orbit-Ground-False-0.033333335",
+      "category": "flight_camera",
+      "op": "orbit",
+      "input": {
+        "context": "flight",
+        "pixels": 100,
+        "fine": false,
+        "dt": 0.033333335
+      },
+      "expected": 15.000000782310963,
+      "unit": "degree"
+    },
+    {
+      "id": "flight-orbit-Ground-False-0.016666668",
+      "category": "flight_camera",
+      "op": "orbit",
+      "input": {
+        "context": "flight",
+        "pixels": 100,
+        "fine": false,
+        "dt": 0.016666668
+      },
+      "expected": 7.500000391155481,
+      "unit": "degree"
+    },
+    {
+      "id": "flight-orbit-Ground-False-0.0069444445",
+      "category": "flight_camera",
+      "op": "orbit",
+      "input": {
+        "context": "flight",
+        "pixels": 100,
+        "fine": false,
+        "dt": 0.0069444445
+      },
+      "expected": 3.1250000232830644,
+      "unit": "degree"
+    },
+    {
+      "id": "flight-orbit-Ground-True-0.033333335",
+      "category": "flight_camera",
+      "op": "orbit",
+      "input": {
+        "context": "flight",
+        "pixels": 100,
+        "fine": true,
+        "dt": 0.033333335
+      },
+      "expected": 4.500000234693289,
+      "unit": "degree"
+    },
+    {
+      "id": "flight-orbit-Ground-True-0.016666668",
+      "category": "flight_camera",
+      "op": "orbit",
+      "input": {
+        "context": "flight",
+        "pixels": 100,
+        "fine": true,
+        "dt": 0.016666668
+      },
+      "expected": 2.2500001173466444,
+      "unit": "degree"
+    },
+    {
+      "id": "flight-orbit-Ground-True-0.0069444445",
+      "category": "flight_camera",
+      "op": "orbit",
+      "input": {
+        "context": "flight",
+        "pixels": 100,
+        "fine": true,
+        "dt": 0.0069444445
+      },
+      "expected": 0.9375000069849193,
+      "unit": "degree"
+    },
+    {
+      "id": "flight-orbit-Orbital-False-0.033333335",
+      "category": "flight_camera",
+      "op": "orbit",
+      "input": {
+        "context": "flight",
+        "pixels": 100,
+        "fine": false,
+        "dt": 0.033333335
+      },
+      "expected": 15.000000782310963,
+      "unit": "degree"
+    },
+    {
+      "id": "flight-orbit-Orbital-False-0.016666668",
+      "category": "flight_camera",
+      "op": "orbit",
+      "input": {
+        "context": "flight",
+        "pixels": 100,
+        "fine": false,
+        "dt": 0.016666668
+      },
+      "expected": 7.500000391155481,
+      "unit": "degree"
+    },
+    {
+      "id": "flight-orbit-Orbital-False-0.0069444445",
+      "category": "flight_camera",
+      "op": "orbit",
+      "input": {
+        "context": "flight",
+        "pixels": 100,
+        "fine": false,
+        "dt": 0.0069444445
+      },
+      "expected": 3.1250000232830644,
+      "unit": "degree"
+    },
+    {
+      "id": "flight-orbit-Orbital-True-0.033333335",
+      "category": "flight_camera",
+      "op": "orbit",
+      "input": {
+        "context": "flight",
+        "pixels": 100,
+        "fine": true,
+        "dt": 0.033333335
+      },
+      "expected": 4.500000234693289,
+      "unit": "degree"
+    },
+    {
+      "id": "flight-orbit-Orbital-True-0.016666668",
+      "category": "flight_camera",
+      "op": "orbit",
+      "input": {
+        "context": "flight",
+        "pixels": 100,
+        "fine": true,
+        "dt": 0.016666668
+      },
+      "expected": 2.2500001173466444,
+      "unit": "degree"
+    },
+    {
+      "id": "flight-orbit-Orbital-True-0.0069444445",
+      "category": "flight_camera",
+      "op": "orbit",
+      "input": {
+        "context": "flight",
+        "pixels": 100,
+        "fine": true,
+        "dt": 0.0069444445
+      },
+      "expected": 0.9375000069849193,
+      "unit": "degree"
+    },
+    {
+      "id": "flight-zoom-Ground-False--0.1",
+      "category": "flight_camera",
+      "op": "zoom",
+      "input": {
+        "context": "flight",
+        "axis": -0.1,
+        "fine": false,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 110.51709180756477,
+      "unit": "metre"
+    },
+    {
+      "id": "flight-zoom-Ground-False-0",
+      "category": "flight_camera",
+      "op": "zoom",
+      "input": {
+        "context": "flight",
+        "axis": 0,
+        "fine": false,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 100,
+      "unit": "metre"
+    },
+    {
+      "id": "flight-zoom-Ground-False-0.1",
+      "category": "flight_camera",
+      "op": "zoom",
+      "input": {
+        "context": "flight",
+        "axis": 0.1,
+        "fine": false,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 90.48374180359595,
+      "unit": "metre"
+    },
+    {
+      "id": "flight-zoom-Ground-True--0.1",
+      "category": "flight_camera",
+      "op": "zoom",
+      "input": {
+        "context": "flight",
+        "axis": -0.1,
+        "fine": true,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 103.0454533953517,
+      "unit": "metre"
+    },
+    {
+      "id": "flight-zoom-Ground-True-0",
+      "category": "flight_camera",
+      "op": "zoom",
+      "input": {
+        "context": "flight",
+        "axis": 0,
+        "fine": true,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 100,
+      "unit": "metre"
+    },
+    {
+      "id": "flight-zoom-Ground-True-0.1",
+      "category": "flight_camera",
+      "op": "zoom",
+      "input": {
+        "context": "flight",
+        "axis": 0.1,
+        "fine": true,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 97.04455335485082,
+      "unit": "metre"
+    },
+    {
+      "id": "flight-zoom-Orbital-False--0.1",
+      "category": "flight_camera",
+      "op": "zoom",
+      "input": {
+        "context": "flight",
+        "axis": -0.1,
+        "fine": false,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 110.51709180756477,
+      "unit": "metre"
+    },
+    {
+      "id": "flight-zoom-Orbital-False-0",
+      "category": "flight_camera",
+      "op": "zoom",
+      "input": {
+        "context": "flight",
+        "axis": 0,
+        "fine": false,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 100,
+      "unit": "metre"
+    },
+    {
+      "id": "flight-zoom-Orbital-False-0.1",
+      "category": "flight_camera",
+      "op": "zoom",
+      "input": {
+        "context": "flight",
+        "axis": 0.1,
+        "fine": false,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 90.48374180359595,
+      "unit": "metre"
+    },
+    {
+      "id": "flight-zoom-Orbital-True--0.1",
+      "category": "flight_camera",
+      "op": "zoom",
+      "input": {
+        "context": "flight",
+        "axis": -0.1,
+        "fine": true,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 103.0454533953517,
+      "unit": "metre"
+    },
+    {
+      "id": "flight-zoom-Orbital-True-0",
+      "category": "flight_camera",
+      "op": "zoom",
+      "input": {
+        "context": "flight",
+        "axis": 0,
+        "fine": true,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 100,
+      "unit": "metre"
+    },
+    {
+      "id": "flight-zoom-Orbital-True-0.1",
+      "category": "flight_camera",
+      "op": "zoom",
+      "input": {
+        "context": "flight",
+        "axis": 0.1,
+        "fine": true,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 97.04455335485082,
+      "unit": "metre"
+    },
+    {
+      "id": "map-orbit-False-0",
+      "category": "map_camera",
+      "op": "orbit",
+      "input": {
+        "context": "map",
+        "pixels": 100,
+        "fine": false,
+        "pitch": 0
+      },
+      "expected": 10.000000149011612,
+      "unit": "degree"
+    },
+    {
+      "id": "map-orbit-False-40",
+      "category": "map_camera",
+      "op": "orbit",
+      "input": {
+        "context": "map",
+        "pixels": 100,
+        "fine": false,
+        "pitch": 40
+      },
+      "expected": 5.294117704033852,
+      "unit": "degree"
+    },
+    {
+      "id": "map-orbit-False-80",
+      "category": "map_camera",
+      "op": "orbit",
+      "input": {
+        "context": "map",
+        "pixels": 100,
+        "fine": false,
+        "pitch": 80
+      },
+      "expected": 0.58823530562222,
+      "unit": "degree"
+    },
+    {
+      "id": "map-orbit-False-85",
+      "category": "map_camera",
+      "op": "orbit",
+      "input": {
+        "context": "map",
+        "pixels": 100,
+        "fine": false,
+        "pitch": 85
+      },
+      "expected": 0.20000000949949026,
+      "unit": "degree"
+    },
+    {
+      "id": "map-orbit-True-0",
+      "category": "map_camera",
+      "op": "orbit",
+      "input": {
+        "context": "map",
+        "pixels": 100,
+        "fine": true,
+        "pitch": 0
+      },
+      "expected": 0.9999999776482582,
+      "unit": "degree"
+    },
+    {
+      "id": "map-orbit-True-40",
+      "category": "map_camera",
+      "op": "orbit",
+      "input": {
+        "context": "map",
+        "pixels": 100,
+        "fine": true,
+        "pitch": 40
+      },
+      "expected": 0.5294117610901594,
+      "unit": "degree"
+    },
+    {
+      "id": "map-orbit-True-80",
+      "category": "map_camera",
+      "op": "orbit",
+      "input": {
+        "context": "map",
+        "pixels": 100,
+        "fine": true,
+        "pitch": 80
+      },
+      "expected": 0.20000000949949026,
+      "unit": "degree"
+    },
+    {
+      "id": "map-orbit-True-85",
+      "category": "map_camera",
+      "op": "orbit",
+      "input": {
+        "context": "map",
+        "pixels": 100,
+        "fine": true,
+        "pitch": 85
+      },
+      "expected": 0.20000000949949026,
+      "unit": "degree"
+    },
+    {
+      "id": "map-zoom--1",
+      "category": "map_camera",
+      "op": "zoom",
+      "input": {
+        "context": "map",
+        "axis": -1,
+        "fine": false,
+        "shift": false,
+        "distance": 1
+      },
+      "expected": 1.3498588075760032,
+      "unit": "ratio"
+    },
+    {
+      "id": "map-zoom-1",
+      "category": "map_camera",
+      "op": "zoom",
+      "input": {
+        "context": "map",
+        "axis": 1,
+        "fine": false,
+        "shift": false,
+        "distance": 1
+      },
+      "expected": 0.7408182206817179,
+      "unit": "ratio"
+    },
+    {
+      "id": "vab-orbit-False",
+      "category": "vab_camera",
+      "op": "orbit",
+      "input": {
+        "context": "vab",
+        "pixels": 100,
+        "fine": false
+      },
+      "expected": 22.918312,
+      "unit": "degree"
+    },
+    {
+      "id": "vab-zoom-False-False--0.1",
+      "category": "vab_camera",
+      "op": "zoom",
+      "input": {
+        "context": "vab",
+        "axis": -0.1,
+        "fine": false,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 100.3,
+      "unit": "metre"
+    },
+    {
+      "id": "vab-zoom-False-False-0",
+      "category": "vab_camera",
+      "op": "zoom",
+      "input": {
+        "context": "vab",
+        "axis": 0,
+        "fine": false,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 100,
+      "unit": "metre"
+    },
+    {
+      "id": "vab-zoom-False-False-0.1",
+      "category": "vab_camera",
+      "op": "zoom",
+      "input": {
+        "context": "vab",
+        "axis": 0.1,
+        "fine": false,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 99.7,
+      "unit": "metre"
+    },
+    {
+      "id": "vab-zoom-False-True--0.1",
+      "category": "vab_camera",
+      "op": "zoom",
+      "input": {
+        "context": "vab",
+        "axis": -0.1,
+        "fine": false,
+        "shift": true,
+        "distance": 100
+      },
+      "expected": 100.6,
+      "unit": "metre"
+    },
+    {
+      "id": "vab-zoom-False-True-0",
+      "category": "vab_camera",
+      "op": "zoom",
+      "input": {
+        "context": "vab",
+        "axis": 0,
+        "fine": false,
+        "shift": true,
+        "distance": 100
+      },
+      "expected": 100,
+      "unit": "metre"
+    },
+    {
+      "id": "vab-zoom-False-True-0.1",
+      "category": "vab_camera",
+      "op": "zoom",
+      "input": {
+        "context": "vab",
+        "axis": 0.1,
+        "fine": false,
+        "shift": true,
+        "distance": 100
+      },
+      "expected": 99.4,
+      "unit": "metre"
+    },
+    {
+      "id": "vab-orbit-True",
+      "category": "vab_camera",
+      "op": "orbit",
+      "input": {
+        "context": "vab",
+        "pixels": 100,
+        "fine": true
+      },
+      "expected": 5.729578,
+      "unit": "degree"
+    },
+    {
+      "id": "vab-zoom-True-False--0.1",
+      "category": "vab_camera",
+      "op": "zoom",
+      "input": {
+        "context": "vab",
+        "axis": -0.1,
+        "fine": true,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 100.03,
+      "unit": "metre"
+    },
+    {
+      "id": "vab-zoom-True-False-0",
+      "category": "vab_camera",
+      "op": "zoom",
+      "input": {
+        "context": "vab",
+        "axis": 0,
+        "fine": true,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 100,
+      "unit": "metre"
+    },
+    {
+      "id": "vab-zoom-True-False-0.1",
+      "category": "vab_camera",
+      "op": "zoom",
+      "input": {
+        "context": "vab",
+        "axis": 0.1,
+        "fine": true,
+        "shift": false,
+        "distance": 100
+      },
+      "expected": 99.97,
+      "unit": "metre"
+    },
+    {
+      "id": "vab-zoom-True-True--0.1",
+      "category": "vab_camera",
+      "op": "zoom",
+      "input": {
+        "context": "vab",
+        "axis": -0.1,
+        "fine": true,
+        "shift": true,
+        "distance": 100
+      },
+      "expected": 100.06,
+      "unit": "metre"
+    },
+    {
+      "id": "vab-zoom-True-True-0",
+      "category": "vab_camera",
+      "op": "zoom",
+      "input": {
+        "context": "vab",
+        "axis": 0,
+        "fine": true,
+        "shift": true,
+        "distance": 100
+      },
+      "expected": 100,
+      "unit": "metre"
+    },
+    {
+      "id": "vab-zoom-True-True-0.1",
+      "category": "vab_camera",
+      "op": "zoom",
+      "input": {
+        "context": "vab",
+        "axis": 0.1,
+        "fine": true,
+        "shift": true,
+        "distance": 100
+      },
+      "expected": 99.94,
+      "unit": "metre"
+    },
+    {
+      "id": "maneuver-96-0-1",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 0,
+        "dpi": 96,
+        "frames": 1,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 0,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-96-0-30",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 0,
+        "dpi": 96,
+        "frames": 30,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 0,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-96-0-60",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 0,
+        "dpi": 96,
+        "frames": 60,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 0,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-96-24-1",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 24,
+        "dpi": 96,
+        "frames": 1,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 0.0625,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-96-24-30",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 24,
+        "dpi": 96,
+        "frames": 30,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 1.875,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-96-24-60",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 24,
+        "dpi": 96,
+        "frames": 60,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 3.75,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-96-48-1",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 48,
+        "dpi": 96,
+        "frames": 1,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 0.25,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-96-48-30",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 48,
+        "dpi": 96,
+        "frames": 30,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 7.5,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-96-48-60",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 48,
+        "dpi": 96,
+        "frames": 60,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 15,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-96-96-1",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 96,
+        "dpi": 96,
+        "frames": 1,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 1,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-96-96-30",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 96,
+        "dpi": 96,
+        "frames": 30,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 30,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-96-96-60",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 96,
+        "dpi": 96,
+        "frames": 60,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 60,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-192-0-1",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 0,
+        "dpi": 192,
+        "frames": 1,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 0,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-192-0-30",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 0,
+        "dpi": 192,
+        "frames": 30,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 0,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-192-0-60",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 0,
+        "dpi": 192,
+        "frames": 60,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 0,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-192-24-1",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 24,
+        "dpi": 192,
+        "frames": 1,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 0.015625,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-192-24-30",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 24,
+        "dpi": 192,
+        "frames": 30,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 0.46875,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-192-24-60",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 24,
+        "dpi": 192,
+        "frames": 60,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 0.9375,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-192-48-1",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 48,
+        "dpi": 192,
+        "frames": 1,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 0.0625,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-192-48-30",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 48,
+        "dpi": 192,
+        "frames": 30,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 1.875,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-192-48-60",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 48,
+        "dpi": 192,
+        "frames": 60,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 3.75,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-192-96-1",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 96,
+        "dpi": 192,
+        "frames": 1,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 0.25,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-192-96-30",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 96,
+        "dpi": 192,
+        "frames": 30,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 7.5,
+      "unit": "m/s"
+    },
+    {
+      "id": "maneuver-192-96-60",
+      "category": "maneuver",
+      "op": "maneuver",
+      "input": {
+        "pixels": 96,
+        "dpi": 192,
+        "frames": 60,
+        "strength": 1,
+        "fine": false
+      },
+      "expected": 15,
+      "unit": "m/s"
+    },
+    {
+      "id": "warp-ladder",
+      "category": "warp",
+      "op": "ladder",
+      "input": {},
+      "expected": [
+        1,
+        2,
+        4,
+        10,
+        50,
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "unit": "factor"
+    },
+    {
+      "id": "warp-to-0",
+      "category": "warp",
+      "op": "warp_to",
+      "input": {
+        "remaining": 0
+      },
+      "expected": 1,
+      "unit": "factor"
+    },
+    {
+      "id": "warp-to-1",
+      "category": "warp",
+      "op": "warp_to",
+      "input": {
+        "remaining": 1
+      },
+      "expected": 1,
+      "unit": "factor"
+    },
+    {
+      "id": "warp-to-5",
+      "category": "warp",
+      "op": "warp_to",
+      "input": {
+        "remaining": 5
+      },
+      "expected": 1,
+      "unit": "factor"
+    },
+    {
+      "id": "warp-to-10",
+      "category": "warp",
+      "op": "warp_to",
+      "input": {
+        "remaining": 10
+      },
+      "expected": 1,
+      "unit": "factor"
+    },
+    {
+      "id": "warp-to-30",
+      "category": "warp",
+      "op": "warp_to",
+      "input": {
+        "remaining": 30
+      },
+      "expected": 4,
+      "unit": "factor"
+    },
+    {
+      "id": "warp-to-500",
+      "category": "warp",
+      "op": "warp_to",
+      "input": {
+        "remaining": 500
+      },
+      "expected": 50,
+      "unit": "factor"
+    },
+    {
+      "id": "warp-to-10000",
+      "category": "warp",
+      "op": "warp_to",
+      "input": {
+        "remaining": 10000
+      },
+      "expected": 1000,
+      "unit": "factor"
+    },
+    {
+      "id": "auto-drop-1--0.001",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 1,
+        "remaining": -0.001
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-1-0",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 1,
+        "remaining": 0
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-1-0.001",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 1,
+        "remaining": 0.001
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-2--0.001",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 2,
+        "remaining": 1.499
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-2-0",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 2,
+        "remaining": 1.5
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-2-0.001",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 2,
+        "remaining": 1.501
+      },
+      "expected": false,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-4--0.001",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 4,
+        "remaining": 2.499
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-4-0",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 4,
+        "remaining": 2.5
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-4-0.001",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 4,
+        "remaining": 2.501
+      },
+      "expected": false,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-10--0.001",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 10,
+        "remaining": 5.499
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-10-0",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 10,
+        "remaining": 5.5
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-10-0.001",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 10,
+        "remaining": 5.501
+      },
+      "expected": false,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-50--0.001",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 50,
+        "remaining": 25.499
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-50-0",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 50,
+        "remaining": 25.5
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-50-0.001",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 50,
+        "remaining": 25.501
+      },
+      "expected": false,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-100--0.001",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 100,
+        "remaining": 50.499
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-100-0",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 100,
+        "remaining": 50.5
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-100-0.001",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 100,
+        "remaining": 50.501
+      },
+      "expected": false,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-1000--0.001",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 1000,
+        "remaining": 500.499
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-1000-0",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 1000,
+        "remaining": 500.5
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-1000-0.001",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 1000,
+        "remaining": 500.501
+      },
+      "expected": false,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-1000000--0.001",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 1000000,
+        "remaining": 500000.499
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-1000000-0",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 1000000,
+        "remaining": 500000.5
+      },
+      "expected": true,
+      "unit": "boolean"
+    },
+    {
+      "id": "auto-drop-1000000-0.001",
+      "category": "auto_drop",
+      "op": "drop",
+      "input": {
+        "rate": 1000000,
+        "remaining": 500000.501
+      },
+      "expected": false,
+      "unit": "boolean"
+    },
+    {
+      "id": "symmetry-counts",
+      "category": "symmetry",
+      "op": "symmetry_counts",
+      "input": {},
+      "expected": [
+        1,
+        2,
+        3,
+        4,
+        6,
+        8
+      ],
+      "unit": "count"
+    },
+    {
+      "id": "symmetry-angles",
+      "category": "symmetry",
+      "op": "symmetry_angles",
+      "input": {},
+      "expected": [
+        360.0,
+        180.0,
+        120.0,
+        90.0,
+        60.0,
+        45.0
+      ],
+      "unit": "degree"
+    }
+  ],
+  "schema": 1,
+  "provenance": {
+    "kind": "compiled_reference_equations_and_installed_configuration",
+    "game_version": "0.2.2.0.32913",
+    "hashes": {
+      "KSP.Sim.impl/FlightInputHandler.cs": "78a64b9999ff57b472496f96a26a169d932038e10e74e19c5c004466e3af9d63",
+      "KSP.OAB/ObjectAssemblyPlacementTool.cs": "75d84afa7677c8597bbb6d42a6afc5539bcd0b12826e718c4f6a5aa15bb30b2b",
+      "KSP.OAB/ManipulationWidget.cs": "39ca99ec9ab5fbe3af056b8965621cfd432a306a1206d9a3f5f0abc07eb2afba",
+      "KSP.Rendering.impl/BasicCameraRigSolution.cs": "edce6c240625a5d99a4132f06a9bf7e8e87bbbff258e2c8f73ce246c61973bf2",
+      "KSP.Map/MapCameraInputHandler.cs": "d83c7dc21e7493270fdbef399760d0b79a030c2d67d482633c4feb192035d886",
+      "KSP.Sim/CameraInputState.cs": "f73be8074c4ded20fefe3b6ff19e315a60be9f49a3d7c95017885d4495dc6b47",
+      "Mouse.cs": "a8f1dbc8540a99a1b1dd0b5e03b0a677a8e3ddb4187dc6eb377afcb800d16f96",
+      "KSP.OAB/ObjectAssemblyInputHandler.cs": "a16b146bd09c228cc3517e2b8cf163eb7602c44baea32b49d2090efd67e3ec54",
+      "KSP.OAB/ObjectAssemblyCameraManager.cs": "18fc093f4744bc87df846c19d95a66a4647b07d497ca868ac20e01c9787babf8",
+      "KSP.OAB/SymmetrySetPositionerRadial.cs": "e0f40eee3c3c6ccd929c6b44d5117cdacd562d384ae7e53f77863ee2fcd1a558",
+      "KSP.Map/Map3DManeuvers.cs": "139fce16d1cb858ecc21170721c10be0cd76d72dbc34ff37d18e68904fa8cfba",
+      "KSP.Sim.impl/ManeuverPlanComponent.cs": "5fd08fe715e59ca94d932696c087b1e4bf7c9fa81eb6020bcb4ceb3fe5ae10cc",
+      "KSP.Map/MapManeuverGizmo.cs": "98e23b959dcafa2e4ff8735ec5c6401cb06e157d3e08e6900d7d44d63b8479fc",
+      "KSP.Sim.impl/TimeWarp.cs": "4715f05695a26fbe8e8a30c20d34899e0c7364fd59d17affd56ac8990852cd27",
+      "KSP.OAB/BuilderSymmetryMode.cs": "0ebc7edf537e0ee9e9850b38ff322e6f21733196de2250a4033f27378dabb4c6",
+      "Global/GroundCameraTweakables.json": "00444a571a8a5fd775a647675e3e7bdcf04d559eebc4871906b7806947ec8668",
+      "Global/OrbitalCameraTweakables.json": "842d2b35e31c09ec43034d5a36d101fe80e437a4a2c93f5350a5a84041e79c8f",
+      "Global/MapCameraTweakables.json": "0abf8f9e0fb00649ba40605b7fa76e120a497ce298cd459711b30314884fdd22",
+      "Global/oab-config.json": "c4b61deafafaaf85dd65a4bba03b1923ab00809b5498ac37389601308e20ebe2",
+      "Global/PhysicsSettings.json": "cc318b2d68cd524530bb9096bebea7ff4bcd9e3e94cb58ed7b5b5485c1508cf0",
+      "PhysicsSettings.cs": "807b17ebbcf992ec153f6bc6a2cb8a71eb08d80c0052d176ac3d0ec3529c99ab"
+    },
+    "live_input_capture": false
+  },
+  "settings": {
+    "cameras": {
+      "Ground": {
+        "TweakablesVersion": "0.2",
+        "orbitSensitivity": 4.5,
+        "scrollSensitivity": 1.0,
+        "panSensitivity": 2.0,
+        "localOffset": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "defaultFOV": 60.0,
+        "defaultSize": 5.0,
+        "minPitch": -90.0,
+        "maxPitch": 90.0,
+        "minDistance": 1.15,
+        "DefaultDistance": 8.0,
+        "maxDistance": 1000.0,
+        "minFOV": 20.0,
+        "maxFOV": 160.0,
+        "minSize": 0.001,
+        "maxSize": 20000.0,
+        "maxPanAngle": 30.0,
+        "minPanAngle": -30.0,
+        "maxPanDistance": 1000.0,
+        "fineMovementModifier": 0.3,
+        "switchCameraModeBlendDuration": 1.0,
+        "switchCameraModeBlendFunction": "EaseOutQuadratic",
+        "terrainCollisionBuffer": 0.6,
+        "terrainRaycastBufferSize": 4,
+        "terrainCollisionCameraBlendDelay": 0.25,
+        "terrainCollisionCameraBlendDuration": 0.25,
+        "terrainCollisionCameraBlendFunction": "EaseOutQuadratic",
+        "lockCursor": false,
+        "BlockZoomOverUI": false,
+        "TagsForZoomBlock": null
+      },
+      "Orbital": {
+        "TweakablesVersion": "0.2",
+        "orbitSensitivity": 4.5,
+        "scrollSensitivity": 1.0,
+        "panSensitivity": 2.0,
+        "localOffset": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "defaultFOV": 60.0,
+        "defaultSize": 5.0,
+        "minPitch": -90.0,
+        "maxPitch": 90.0,
+        "minDistance": 1.15,
+        "DefaultDistance": 8.0,
+        "maxDistance": 150000.0,
+        "minFOV": 20.0,
+        "maxFOV": 160.0,
+        "minSize": 0.001,
+        "maxSize": 20000.0,
+        "maxPanAngle": 30.0,
+        "minPanAngle": -30.0,
+        "maxPanDistance": 1000.0,
+        "fineMovementModifier": 0.3,
+        "switchCameraModeBlendDuration": 1.0,
+        "switchCameraModeBlendFunction": "EaseOutQuadratic",
+        "terrainCollisionBuffer": 0.75,
+        "terrainRaycastBufferSize": 4,
+        "terrainCollisionCameraBlendDelay": 0.25,
+        "terrainCollisionCameraBlendDuration": 0.25,
+        "terrainCollisionCameraBlendFunction": "EaseOutQuadratic",
+        "lockCursor": false,
+        "BlockZoomOverUI": false,
+        "TagsForZoomBlock": null
+      },
+      "Map": {
+        "ZoomResponsiveness": "EXPONENTIAL",
+        "ZoomCurve": null,
+        "TranslationSpeed": 10.0,
+        "ExponentialZoomFactor": 0.3,
+        "KeyBoardDragMultiplier": 1.0,
+        "MouseDragMultiplier": 0.1,
+        "InvertMouseDrag": true,
+        "TweakablesVersion": "0.0",
+        "orbitSensitivity": 0.05,
+        "scrollSensitivity": 1.1,
+        "panSensitivity": 2.0,
+        "localOffset": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "defaultFOV": 60.0,
+        "defaultSize": 5.0,
+        "minPitch": -90.0,
+        "maxPitch": 90.0,
+        "minDistance": 5.0,
+        "DefaultDistance": 8.0,
+        "maxDistance": 80000.0,
+        "minFOV": 20.0,
+        "maxFOV": 160.0,
+        "minSize": 0.001,
+        "maxSize": 20000.0,
+        "maxPanAngle": 30.0,
+        "minPanAngle": -30.0,
+        "maxPanDistance": 1000.0,
+        "fineMovementModifier": 0.1,
+        "switchCameraModeBlendDuration": 1.0,
+        "switchCameraModeBlendFunction": "EaseOutQuadratic",
+        "terrainCollisionBuffer": 0.75,
+        "terrainRaycastBufferSize": 4,
+        "terrainCollisionCameraBlendDelay": 1.0,
+        "terrainCollisionCameraBlendDuration": 3.0,
+        "terrainCollisionCameraBlendFunction": "EaseOutQuadratic",
+        "lockCursor": false,
+        "BlockZoomOverUI": false,
+        "TagsForZoomBlock": null
+      }
+    },
+    "oab": {
+      "DragSpeed": 4.0,
+      "DefaultMirrorTechnique": "Scale",
+      "PAMClickTimeout": 0.3,
+      "CameraSpeedZoom": 3.0,
+      "CameraSpeedZoomPrecise": 0.3,
+      "CameraSpeedRotate": 0.2,
+      "GamepadCameraSpeedRotate": 1.5,
+      "CameraSpeedRotatePrecise": 0.01,
+      "OrbitalCameraSpeedRotate": 0.004,
+      "OrbitalCameraSpeedRotatePrecise": 0.001,
+      "CameraSpeedMove": 3.0,
+      "CameraSpeedTurboScalar": 2.0,
+      "PartAutoFocusAction": "MIDDLECLICK",
+      "gridDivisions": 12,
+      "gridSubdivisions": 2,
+      "blueprintDistance": 100.0,
+      "NodeDistToConsiderConnection": 5.0,
+      "NodeSnapScalar": 1.75
+    },
+    "ladder": [
+      1.0,
+      2.0,
+      4.0,
+      10.0,
+      50.0,
+      100.0,
+      1000.0,
+      10000.0,
+      100000.0,
+      1000000.0,
+      10000000.0
+    ]
+  },
+  "symmetry": {
+    "counts": [
+      1,
+      2,
+      3,
+      4,
+      6,
+      8
+    ],
+    "angles_deg": [
+      360.0,
+      180.0,
+      120.0,
+      90.0,
+      60.0,
+      45.0
+    ]
+  },
+  "rotation_gizmo": {
+    "snap_deg": [
+      15.0,
+      5.0
+    ],
+    "snap_off": "continuous",
+    "source_expression_sha256": "2828b7d894b43ea1bf37217ba52bc54bb50d489ef6406dbce68830834644d6d6"
+  },
+  "warp_policy": {
+    "max_physics_rate": 4.0,
+    "interstellar_rate": 10000000.0,
+    "orbital_event_cap_rate": 50.0,
+    "soi_lookahead_sim_seconds": 50,
+    "fuel_exhaustion_lookahead_sim_seconds": 10,
+    "nominal_rate_transition_unity_seconds": 1,
+    "maneuver_margin_sim_seconds": 30.0
+  },
+  "boundaries": [
+    "Camera cases use Unity input units; browser CSS pixels and wheel events need live calibration.",
+    "Maneuver cases use an assumed serialized handle strength of 1 and explicit DPI, projected handle displacement, and number of Update frames; not a constant m/s per pixel.",
+    "Warp-to models unrestricted default selection and deceleration trigger; collision, altitude, SOI and multiplayer caps are separate.",
+    "No live Shift/Ctrl hold, camera drag, or maneuver drag was measured in this recording."
+  ]
+}

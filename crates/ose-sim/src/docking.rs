@@ -311,6 +311,27 @@ impl Universe {
         self.world.entity_mut(e).insert(CraftDoc(craft));
     }
 
+    /// Saved actuator state keyed by original part GUID, independent of compacted save indices.
+    pub fn deployed_part_controls(&self, e: Entity) -> Vec<(String, bool, bool)> {
+        let Some(doc) = self.world.get::<CraftDoc>(e) else { return Vec::new(); };
+        let Some(st) = self.world.get::<structure::Structure>(e) else { return Vec::new(); };
+        doc.0.parts.iter().enumerate().filter(|(i, _)| st.rigid.present[*i])
+            .map(|(i, p)| (p.guid.clone(), st.deployed[i], st.gear_out[i])).collect()
+    }
+
+    pub fn restore_deployed_part_controls(&mut self, e: Entity, controls: &[(String, bool, bool)]) {
+        let Some(doc) = self.world.get::<CraftDoc>(e) else { return; };
+        let states: Vec<_> = doc.0.parts.iter().map(|p| controls.iter().find(|c| c.0 == p.guid).map(|c| (c.1, c.2))).collect();
+        if let Some(mut st) = self.world.entity_mut(e).take::<structure::Structure>() {
+            for (i, state) in states.into_iter().enumerate() {
+                if let Some((panel, gear)) = state { st.deployed[i] = panel; st.gear_out[i] = gear; }
+            }
+            if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) { st.sync(&mut p); }
+            else if let Some(mut d) = self.world.get_mut::<flight::Dormant>(e) { st.sync(&mut d.0); }
+            self.world.entity_mut(e).insert(st);
+        }
+    }
+
     /// The vessel's craft as it is now: parts it has lost left out, tanks holding what they hold.
     pub fn current_craft(&self, e: Entity) -> Option<Craft> {
         let doc = &self.world.get::<CraftDoc>(e)?.0;
@@ -630,7 +651,11 @@ impl Universe {
         let name = format!("{} (undocked)", go.name);
         let r_go = p.r + dir * 2.0;
         let v_go = p.v + dir * (ejection / m_go);
+        let base = self.tick();
+        self.set_tick(self.vessel_tick(e));
         let ne = self.spawn_vessel(&name, body, r_go, v_go);
+        self.assign_timeline(ne, self.timeline_of(e));
+        self.set_tick(base);
         self.rebuild_vessel(
             e,
             &stay,

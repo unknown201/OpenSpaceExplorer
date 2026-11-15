@@ -23,6 +23,7 @@ pub mod engine_fx;
 mod engine_fx_gpu;
 #[cfg(target_arch = "wasm32")]
 pub mod flight3d;
+mod frame_pacing;
 pub mod ftue;
 #[cfg(target_arch = "wasm32")]
 mod fx_fixture;
@@ -31,7 +32,9 @@ mod fx_post;
 pub mod gimbal;
 pub mod hud;
 pub mod input;
+pub mod interaction;
 pub mod kerbin_time;
+pub mod map_prediction;
 #[cfg(target_arch = "wasm32")]
 pub mod ksc3d;
 #[cfg(target_arch = "wasm32")]
@@ -236,6 +239,7 @@ struct App {
     campaign_id: String,
     /// What the flight sounds last saw, to play each transition once.
     flight_sound_state: Option<FlightSoundState>,
+    reset_part_animations: bool,
     /// The library craft the flown vessel was launched from, to fill `flight_craft` when its document arrives.
     flight_craft_id: Option<u64>,
     /// The craft a Kerbal asked to board, flown once the server accepts.
@@ -268,6 +272,11 @@ struct App {
     /// Frames counted since `fps_since_ms`, for the FPS counter (Settings > Graphics).
     fps_frames: u32,
     fps_since_ms: f64,
+    /// Text readouts refresh at 20 Hz; camera, navball and controls run every frame.
+    hud_since_ms: f64,
+    frame_pacer: frame_pacing::FramePacer,
+    render_timings: frame_pacing::FrameTimings,
+    state_timings: frame_pacing::FrameTimings,
     /// Flight HUD: speed readout in orbit (true) or surface mode, brakes latched from the action bar.
     speed_orbit: bool,
     brakes_latched: bool,
@@ -338,8 +347,8 @@ struct App {
     orbit_yaw: f64,
     orbit_pitch: f64,
     orbit_dist_km: f64,
-    /// Line keys for trajectory strips, versioned so a new prediction replaces the old buffers.
-    traj_version: u64,
+    #[cfg(target_arch = "wasm32")]
+    map_approach: map_prediction::Cache,
 }
 
 type Shared = Rc<RefCell<App>>;
@@ -459,7 +468,9 @@ fn rgb_css(c: [u8; 3]) -> String {
 
 fn set_text(doc: &Document, id: &str, text: &str) {
     if let Some(el) = doc.get_element_by_id(id) {
-        el.set_text_content(Some(text));
+        if el.text_content().as_deref() != Some(text) {
+            el.set_text_content(Some(text));
+        }
     }
 }
 
@@ -622,6 +633,7 @@ pub fn start() -> Result<(), JsValue> {
         lp_selected: None,
         campaign_id: String::new(),
         flight_sound_state: None,
+        reset_part_animations: false,
         flight_craft_id: None,
         board_target: std::cell::Cell::new(None),
         crew_pending: std::cell::Cell::new(None),
@@ -641,6 +653,12 @@ pub fn start() -> Result<(), JsValue> {
         drive_sent: (0.0, 0.0, false),
         fps_frames: 0,
         fps_since_ms: 0.0,
+        hud_since_ms: f64::NEG_INFINITY,
+        frame_pacer: frame_pacing::FramePacer::new(settings::frame_limit(
+            stored("ose.frameLimit").as_deref(),
+        )),
+        render_timings: frame_pacing::FrameTimings::default(),
+        state_timings: frame_pacing::FrameTimings::default(),
         speed_orbit: false,
         brakes_latched: false,
         target: None,
@@ -686,7 +704,8 @@ pub fn start() -> Result<(), JsValue> {
         orbit_yaw: 0.6,
         orbit_pitch: 0.5,
         orbit_dist_km: 5.0e7,
-        traj_version: 0,
+        #[cfg(target_arch = "wasm32")]
+        map_approach: map_prediction::Cache::default(),
         doc,
         canvas,
         ctx,
@@ -856,6 +875,24 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
     // Graphics: render resolution (applied at once) and the FPS counter.
     {
         let doc = app.borrow().doc.clone();
+        if let Some(input) = doc
+            .get_element_by_id("settings-frame-limit")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlSelectElement>().ok())
+        {
+            input
+                .set_value(&settings::frame_limit(stored("ose.frameLimit").as_deref()).to_string());
+            let a = app.clone();
+            let i2 = input.clone();
+            let cb = Closure::<dyn FnMut()>::new(move || {
+                let value = i2.value();
+                store("ose.frameLimit", &value);
+                a.borrow_mut()
+                    .frame_pacer
+                    .set_limit(settings::frame_limit(Some(&value)));
+            });
+            input.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+            cb.forget();
+        }
         let scale = settings::render_scale(stored("ose.renderScale").as_deref());
         set_text(&doc, "settings-res-text", &format!("{:.0}%", scale * 100.0));
         if let Some(input) = doc
@@ -1372,8 +1409,7 @@ fn stand_of(roster: &[ose_net::KerbalInfo], v: &ose_net::VesselState) -> flight3
 struct FlightSoundState {
     vessel: u64,
     supersonic: bool,
-    gear_out: bool,
-    panels: bool,
+    lights: bool,
     hot: Vec<u16>,
     chutes: Vec<(u16, ose_net::ChuteState)>,
     bays: Vec<(u16, bool)>,
@@ -1590,6 +1626,14 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
         {
             input.set_value(&name);
+        }
+    }
+    if let Some(input) = doc
+        .get_element_by_id("login-code")
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+    {
+        if input.value().is_empty() {
+            input.set_value(&stored("ose.token").unwrap_or_default());
         }
     }
     if let Some(btn) = doc.get_element_by_id("play") {
@@ -1985,7 +2029,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         cb.forget();
     }
     wire("fh-science", Box::new(|a| a.borrow().flight_science(0)))?;
-    for id in ["fh-eva", "fh-board", "fh-flag", "fh-undock"] {
+    for id in ["fh-eva", "fh-board", "fh-flag", "fh-undock", "fh-grab"] {
         wire(id, Box::new(move |a| a.borrow().crew_action(id)))?;
     }
     // A crew portrait's EVA button sends that Kerbal out.
@@ -2880,6 +2924,76 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
+    wire(
+        "join-code-submit",
+        Box::new(|a| {
+            let app = a.borrow();
+            let code = app
+                .doc
+                .get_element_by_id("join-code")
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                .map(|i| i.value().trim().to_string())
+                .unwrap_or_default();
+            if code.is_empty() {
+                set_text(&app.doc, "menu-note", "Enter a game share code first.");
+                return;
+            }
+            if let Some(ws) = &app.ws {
+                send(ws, &ClientMessage::JoinSessionCode { code });
+            }
+        }),
+    )?;
+    wire(
+        "share-current",
+        Box::new(|a| {
+            let app = a.borrow();
+            if let Some(ws) = &app.ws {
+                send(
+                    ws,
+                    &ClientMessage::ShareSession {
+                        id: app.campaign_id.clone(),
+                    },
+                );
+            }
+        }),
+    )?;
+    wire(
+        "account-code-show",
+        Box::new(|a| {
+            let app = a.borrow();
+            if let Some(input) = app
+                .doc
+                .get_element_by_id("account-code")
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+            {
+                let show = input.type_() == "password";
+                input.set_type(if show { "text" } else { "password" });
+                set_text(
+                    &app.doc,
+                    "account-code-show",
+                    if show {
+                        "Hide login code"
+                    } else {
+                        "Show login code"
+                    },
+                );
+                if show {
+                    input.select();
+                }
+            }
+        }),
+    )?;
+    wire(
+        "account-logout",
+        Box::new(|_a| {
+            if let Some(w) = web_sys::window() {
+                if let Ok(Some(storage)) = w.local_storage() {
+                    storage.remove_item("ose.token").ok();
+                }
+                w.location().reload().ok();
+            }
+        }),
+    )?;
     wire("create", Box::new(|a| a.borrow_mut().create_session()))?;
     wire("agency-apply", Box::new(|a| a.borrow_mut().send_agency()))?;
     wire(
@@ -2910,6 +3024,10 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             let action = button.get_attribute("data-ose").unwrap_or_default();
             if action == "session-join" {
                 a.borrow_mut().join_session(&id);
+            } else if action == "session-share" {
+                if let Some(ws) = &a.borrow().ws {
+                    send(ws, &ClientMessage::ShareSession { id });
+                }
             } else {
                 if action == "session-delete"
                     && !web_sys::window().is_some_and(|w| {
@@ -3008,7 +3126,13 @@ fn connect(app: &Shared) -> Result<(), JsValue> {
                 &ws2,
                 &ClientMessage::Hello {
                     protocol: PROTOCOL_VERSION,
-                    token: stored("ose.token"),
+                    token: app
+                        .borrow()
+                        .doc
+                        .get_element_by_id("login-code")
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                        .map(|i| i.value().trim().to_string())
+                        .filter(|s| !s.is_empty()),
                     display_name,
                 },
             );
@@ -3038,11 +3162,13 @@ fn connect(app: &Shared) -> Result<(), JsValue> {
             a.ws = None;
             a.in_session = false;
             a.set_status("disconnected; reload to reconnect");
-            set_text(
-                &a.doc,
-                "menu-note",
-                "disconnected; reload the page to reconnect",
-            );
+            if a.player_id.is_some() {
+                set_text(
+                    &a.doc,
+                    "menu-note",
+                    "disconnected; reload the page to reconnect",
+                );
+            }
             if let Some(m) = a.doc.get_element_by_id("menu") {
                 m.class_list().remove_1("hidden").ok();
             }
@@ -3080,11 +3206,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         let a = app.clone();
         let on_wheel = Closure::<dyn FnMut(WheelEvent)>::new(move |ev: WheelEvent| {
             ev.prevent_default();
-            let mut factor: f64 = if ev.delta_y() > 0.0 { 1.25 } else { 0.8 };
-            // Shift zooms faster, as in the original's VAB (fastScrollModifier).
-            if ev.shift_key() {
-                factor = factor.powi(3);
-            }
+            let factor = interaction::wheel_factor(ev.delta_y(), ev.shift_key());
             let mut app = a.borrow_mut();
             #[cfg(target_arch = "wasm32")]
             if app.in_session && app.ksc_active() {
@@ -3285,8 +3407,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         if let Some((x, y)) = app.drag {
             let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
             if app.is_3d() {
-                app.orbit_yaw -= (nx - x) * 0.005;
-                app.orbit_pitch = (app.orbit_pitch - (ny - y) * 0.005).clamp(-1.5, 1.5);
+                app.orbit_yaw -= interaction::orbit_radians(nx - x);
+                app.orbit_pitch =
+                    (app.orbit_pitch - interaction::orbit_radians(ny - y)).clamp(-1.5, 1.5);
             } else {
                 app.camera.pan_px(nx - x, ny - y);
             }
@@ -3645,11 +3768,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 // act while held and are read every frame (flight_keys_tick); these act once.
                 let handled = match code.as_str() {
                     "KeyZ" => {
-                        app.set_throttle(1.0);
+                        app.set_throttle(interaction::throttle_preset(true));
                         true
                     }
                     "KeyX" if !ev.alt_key() => {
-                        app.set_throttle(0.0);
+                        app.set_throttle(interaction::throttle_preset(false));
                         true
                     }
                     "Space" => {
@@ -3693,8 +3816,12 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         }
                         true
                     }
-                    // Interact on EVA (the original's F): board the craft within reach.
+                    // F interacts with a ladder; B boards the pod.
                     "KeyF" if !ev.repeat() && app.flying_eva() => {
+                        app.eva_interact();
+                        true
+                    }
+                    "KeyB" if !ev.repeat() && app.flying_eva() => {
                         app.crew_action("fh-board");
                         true
                     }
@@ -3922,7 +4049,17 @@ fn animate(app: Shared) {
     let f: FrameCallback = Rc::new(RefCell::new(None));
     let g = f.clone();
     *g.borrow_mut() = Some(Closure::new(move || {
-        app.borrow_mut().frame();
+        {
+            let mut app = app.borrow_mut();
+            let now = now_ms();
+            app.flight_keys_tick(now);
+            if app.doc.hidden() {
+                app.render_timings.pause();
+                app.state_timings.pause();
+            } else if app.frame_pacer.should_render(now) {
+                app.frame();
+            }
+        }
         request_frame(f.borrow().as_ref().unwrap());
     }));
     request_frame(g.borrow().as_ref().unwrap());
@@ -3960,10 +4097,29 @@ impl App {
         }
     }
 
+    fn time_scope(&self, id: &str) -> ose_net::TimeScope {
+        if self
+            .doc
+            .get_element_by_id(id)
+            .and_then(|e| e.dyn_into::<web_sys::HtmlSelectElement>().ok())
+            .is_some_and(|e| e.value() == "global")
+        {
+            ose_net::TimeScope::Global
+        } else {
+            ose_net::TimeScope::Local
+        }
+    }
+
     fn request_warp(&mut self, factor: u32) {
         self.requested_warp = factor;
         if let Some(ws) = &self.ws {
-            send(ws, &ClientMessage::RequestWarp { factor });
+            send(
+                ws,
+                &ClientMessage::RequestScopedWarp {
+                    factor,
+                    scope: self.time_scope("time-scope"),
+                },
+            );
         }
         // Only the server changes the clock rate; keep the request separate from a physics cap.
         self.update_hud(self.time.ut_at(now_ms()));
@@ -4100,6 +4256,15 @@ impl App {
             } => {
                 self.player_id = Some(player_id);
                 store("ose.token", &token);
+                for id in ["login-code", "account-code"] {
+                    if let Some(input) = self
+                        .doc
+                        .get_element_by_id(id)
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    {
+                        input.set_value(&token);
+                    }
+                }
                 self.time.update(tick.seconds(), 1, now_ms());
                 self.set_status(&format!("player {player_id}"));
                 set_text(
@@ -4139,6 +4304,25 @@ impl App {
                     }
                     self.update_warp_holder();
                 }
+            }
+            ServerMessage::SessionShareCode { code, .. } => {
+                for id in ["session-share-code", "paused-share-code"] {
+                    if let Some(input) = self
+                        .doc
+                        .get_element_by_id(id)
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    {
+                        input.set_value(&code);
+                    }
+                }
+                set_text(&self.doc, "menu-note", "Share this game code with a friend. They can enter it under Join with a share code.");
+            }
+            ServerMessage::SessionJoined { name, .. } => {
+                set_text(
+                    &self.doc,
+                    "menu-note",
+                    &format!("Joined {name}. Choose Resume to play."),
+                );
             }
             ServerMessage::SessionList { sessions } => {
                 self.render_sessions(&sessions);
@@ -4429,6 +4613,10 @@ impl App {
                             set_text(&self.doc, "fh-note", "");
                             self.audio.play("eva_exit");
                             self.start_flight(nv, None);
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                self.flight3d.distance = 6.0;
+                            }
                         }
                         (Some("fh-flag"), _) => {
                             set_text(&self.doc, "fh-note", "flag planted");
@@ -4441,6 +4629,10 @@ impl App {
                                 let craft = stored(&self.craft_link_key(target))
                                     .and_then(|s| s.parse::<u64>().ok());
                                 self.start_flight(target, craft);
+                                #[cfg(target_arch = "wasm32")]
+                                {
+                                    self.flight3d.distance = 35.0;
+                                }
                                 set_text(&self.doc, "fh-note", "boarded");
                             }
                         }
@@ -4604,6 +4796,13 @@ impl App {
                 }
             }
             ServerMessage::Vessels { vessels, tick } => {
+                self.state_timings.record(now_ms());
+                if self.reset_part_animations {
+                    #[cfg(target_arch = "wasm32")]
+                    self.flight3d.reset_part_controls();
+                    self.flight_sound_state = None;
+                    self.reset_part_animations = false;
+                }
                 let ids: Vec<u64> = vessels.iter().map(|v| v.id).collect();
                 let known: Vec<u64> = self.vessel_els.iter().map(|(id, _)| *id).collect();
                 let changed = ids != known;
@@ -4628,9 +4827,8 @@ impl App {
                 vessel, patches, ..
             } => {
                 if let Some(scene) = &mut self.scene {
-                    scene.trajectories.insert(vessel, patches);
+                    scene.update_trajectory(vessel, patches);
                 }
-                self.traj_version = self.traj_version.wrapping_add(1);
             }
             ServerMessage::BurnState {
                 vessel,
@@ -4710,6 +4908,7 @@ impl App {
                 };
                 if accepted {
                     if action != ose_net::SaveAction::QuickSave {
+                        self.reset_part_animations = true;
                         if let Some(scene) = &mut self.scene {
                             scene.reset_attitudes();
                         }
@@ -5452,16 +5651,10 @@ impl App {
         }
     }
 
-    /// W/S pitch, A/D yaw, Q/E roll the held part: 90 degrees a press with angle snap, 15 without (5 with
-    /// Shift), as the original's rotate keys; Space puts it back upright.
+    /// W/S pitch, A/D yaw, Q/E roll the held part; Space puts it back upright.
+    /// The parity probe tracks the current snap-off difference from KSP2.
     fn vab_turn_held(&mut self, code: &str, fine: bool) {
-        let step = if fine {
-            5.0
-        } else if self.vab_snap {
-            90.0
-        } else {
-            15.0
-        };
+        let step = interaction::rotation_step_degrees(self.vab_snap, fine);
         let (axis, sign) = match code {
             "KeyW" => (0, 1.0),
             "KeyS" => (0, -1.0),
@@ -6807,7 +7000,7 @@ impl App {
     fn launch_craft_to_orbit(&mut self, id: u64) {
         let altitude_m = input_value(&self.doc, "launch-altitude").unwrap_or(100.0) * 1000.0;
         set_text(&self.doc, "menu-note", "launching to orbit...");
-        self.pending_launch = None;
+        self.pending_launch = Some(id);
         if let Some(ws) = &self.ws {
             send(ws, &ClientMessage::LaunchSavedCraft { id, altitude_m });
         }
@@ -6930,6 +7123,10 @@ impl App {
         let Some(vessel) = self.flying else { return };
         let Some(ws) = &self.ws else { return };
         let msg = match id {
+            "fh-grab" => {
+                self.eva_interact();
+                return;
+            }
             "fh-eva" => {
                 self.crew_eva(None);
                 return;
@@ -6963,6 +7160,12 @@ impl App {
         send(ws, &ClientMessage::GoEva { vessel, kerbal });
     }
 
+    fn eva_interact(&self) {
+        if let (Some(ws), Some(vessel)) = (&self.ws, self.flying) {
+            send(ws, &ClientMessage::EvaInteract { vessel });
+        }
+    }
+
     /// The nearest other vessel (not a Kerbal or a flag) within 10 m of the Kerbal flown.
     fn board_candidate(&self) -> Option<u64> {
         let scene = self.scene.as_ref()?;
@@ -6974,8 +7177,22 @@ impl App {
             .iter()
             .filter(|v| v.id != me.id && v.reference_body == me.reference_body)
             .filter(|v| !v.flight.as_ref().is_some_and(|f| f.eva) && !v.name.ends_with(" flag"))
-            .map(|v| (v.id, (scene.vessel_position(v, ut) - here).length()))
-            .filter(|(_, d)| *d < 10.0)
+            .map(|v| {
+                let center = scene.vessel_position(v, ut);
+                let distance = v
+                    .flight
+                    .as_ref()
+                    .filter(|f| !f.eva_hatches.is_empty())
+                    .map(|f| {
+                        f.eva_hatches
+                            .iter()
+                            .map(|offset| (center + *offset - here).length())
+                            .fold(f64::INFINITY, f64::min)
+                    })
+                    .unwrap_or_else(|| (center - here).length());
+                (v.id, distance)
+            })
+            .filter(|(_, d)| *d < 6.0)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(id, _)| id)
     }
@@ -7140,12 +7357,43 @@ impl App {
         for (id, show) in [
             ("fh-eva", !f.eva && !f.crew.is_empty()),
             ("fh-board", f.eva),
+            ("fh-grab", f.eva),
             ("fh-flag", f.eva && landed),
             ("fh-undock", !f.docked.is_empty()),
         ] {
             if let Some(el) = self.doc.get_element_by_id(id) {
                 el.class_list().toggle_with_force("hidden", !show).ok();
             }
+        }
+        set_text(
+            &self.doc,
+            "fh-grab",
+            if f.eva_attached {
+                "Let go (F)"
+            } else {
+                "Grab (F)"
+            },
+        );
+        for id in ["fh-stages", "fh-stage", "fh-stage-btn", "fh-full", "fh-cut"] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                el.class_list().toggle_with_force("hidden", f.eva).ok();
+            }
+        }
+        set_text(
+            &self.doc,
+            "fh-help",
+            if f.eva {
+                "F grab / let go, B board, R jetpack, W/S forward/back, Q/E strafe, A/D turn, Shift/Ctrl up/down, Space jump / let go, M map"
+            } else {
+                "W/S/A/D steer (hold, Caps Lock fine), Shift/Ctrl throttle, Z/X full/cut, Space stage, T SAS on/off, G gear, B brakes, M map, right-drag to look, Home resets the camera"
+            },
+        );
+        if let Some(el) = self.doc.get_element_by_id("flight-hud") {
+            el.set_attribute(
+                "data-ose-eva-attached",
+                if f.eva_attached { "true" } else { "false" },
+            )
+            .ok();
         }
     }
 
@@ -7322,8 +7570,8 @@ impl App {
             .is_some_and(|f| f.eva)
     }
 
-    /// A Kerbal on EVA, as the original's EVA keys (protocol 33). On the ground W walks ahead, S backs up,
-    /// A/D turn, Q/E step sideways, Shift runs and Space jumps. In the air the jetpack: Shift or Space up,
+    /// On the ground W walks ahead, S backs up, A/D turn, Q/E step sideways, Shift runs and Space jumps.
+    /// In space F/Space release the hatch and R enables the pack: Shift up,
     /// Ctrl down, W/S and Q/E push ahead, back and sideways. The server walks a Kerbal with throttle and a
     /// level heading; the pack takes `Translate` (y up along the Kerbal, z its front, x its right).
     fn eva_keys_tick(&mut self, now: f64, dt: f64) {
@@ -7331,7 +7579,6 @@ impl App {
         let (walk, strafe, turn) = (-k.pitch(), k.roll(), k.yaw());
         let shift = k.is("ShiftLeft") || k.is("ShiftRight");
         let ctrl = k.is("ControlLeft") || k.is("ControlRight");
-        let space = k.is("Space");
         let Some(vessel) = self.flying else { return };
         let landed = self
             .scene
@@ -7339,28 +7586,81 @@ impl App {
             .and_then(|s| s.vessel(vessel))
             .and_then(|v| v.flight.as_ref())
             .is_some_and(|f| matches!(f.situation, ose_net::FlightSituation::Landed));
+        if !landed {
+            let jump = std::mem::take(&mut self.eva_jump);
+            if jump {
+                if let Some(ws) = &self.ws {
+                    send(
+                        ws,
+                        &ClientMessage::EvaControls {
+                            vessel,
+                            run: false,
+                            jump: true,
+                        },
+                    );
+                }
+            }
+            let translate = (
+                strafe as f32,
+                f32::from(shift) - f32::from(ctrl),
+                walk as f32,
+            );
+            if translate != self.translate_sent {
+                self.translate_sent = translate;
+                if let Some(ws) = &self.ws {
+                    send(
+                        ws,
+                        &ClientMessage::Translate {
+                            vessel,
+                            x: translate.0,
+                            y: translate.1,
+                            z: translate.2,
+                        },
+                    );
+                }
+            }
+            self.attitude = ose_net::AttitudeMode::Free;
+            self.throttle = 0.0;
+            if self.control_cadence.due(now, true, [walk, turn, strafe]) {
+                self.controls_dirty = false;
+                if let Some(ws) = &self.ws {
+                    send(
+                        ws,
+                        &ClientMessage::SetControls {
+                            vessel,
+                            throttle: 0.0,
+                            attitude: ose_net::AttitudeMode::Free,
+                        },
+                    );
+                    send(
+                        ws,
+                        &ClientMessage::SetRotation {
+                            vessel,
+                            pitch: 0.0,
+                            yaw: turn as f32,
+                            roll: 0.0,
+                        },
+                    );
+                }
+            }
+            return;
+        }
         let heading = match self.attitude {
             ose_net::AttitudeMode::PitchHeading { heading_deg, .. } => heading_deg,
             _ => self.facing_pitch_heading().map(|(_, h)| h).unwrap_or(90.0),
         };
         let heading = (heading + turn * 90.0 * dt).rem_euclid(360.0);
         // Run and jump: run held while Shift is down on the ground, a jump on each new Space press there.
-        let run = landed && shift;
+        let run = shift;
         // A press is caught on key down, so a tap shorter than a frame still jumps.
-        let jump = landed && std::mem::take(&mut self.eva_jump);
+        let jump = std::mem::take(&mut self.eva_jump);
         if run != self.eva_run_sent || jump {
             self.eva_run_sent = run;
             if let Some(ws) = &self.ws {
                 send(ws, &ClientMessage::EvaControls { vessel, run, jump });
             }
         }
-        // The jetpack in the air.
-        let translate = if landed {
-            (0.0, 0.0, 0.0)
-        } else {
-            let up = f32::from(shift || space) - f32::from(ctrl);
-            (strafe as f32, up, walk as f32)
-        };
+        let translate = (0.0, 0.0, 0.0);
         if translate != self.translate_sent {
             self.translate_sent = translate;
             if let Some(ws) = &self.ws {
@@ -7376,18 +7676,8 @@ impl App {
             }
         }
         // Walking: the direction relative to the Kerbal's own heading (ahead, back, either side or between).
-        // Under the pack in the air the Kerbal stands upright and keeps its heading.
-        let moving = landed && (walk != 0.0 || strafe != 0.0);
-        let held_pitch = match self.attitude {
-            ose_net::AttitudeMode::PitchHeading { pitch_deg, .. } => pitch_deg,
-            _ => 0.0,
-        };
-        let (pitch_deg, heading_deg, throttle) = if !landed && translate != (0.0, 0.0, 0.0) {
-            (85.0, heading, 0.0)
-        } else if !landed {
-            // A hop or a coast: hold the pose it has.
-            (held_pitch, heading, 0.0)
-        } else if moving {
+        let moving = walk != 0.0 || strafe != 0.0;
+        let (pitch_deg, heading_deg, throttle) = if moving {
             let off = strafe.atan2(walk).to_degrees();
             (
                 0.0,
@@ -7530,7 +7820,7 @@ impl App {
             k.brakes() || self.brakes_latched,
         );
         if thr_in != 0.0 {
-            self.throttle = (self.throttle + thr_in * input::THROTTLE_RATE * dt).clamp(0.0, 1.0);
+            self.throttle = interaction::throttle_step(self.throttle, thr_in, dt);
             self.controls_dirty = true;
         }
         let free = matches!(self.attitude, ose_net::AttitudeMode::Free);
@@ -7756,8 +8046,14 @@ impl App {
         let msg = match action {
             ose_net::SaveAction::QuickSave => ClientMessage::QuickSave,
             ose_net::SaveAction::QuickLoad => ClientMessage::QuickLoad,
-            ose_net::SaveAction::RevertToLaunch => ClientMessage::RevertToLaunch,
-            ose_net::SaveAction::RevertToEditor => ClientMessage::RevertToEditor,
+            ose_net::SaveAction::RevertToLaunch => ClientMessage::RevertScoped {
+                editor: false,
+                scope: self.time_scope("revert-scope"),
+            },
+            ose_net::SaveAction::RevertToEditor => ClientMessage::RevertScoped {
+                editor: true,
+                scope: self.time_scope("revert-scope"),
+            },
         };
         send(ws, &msg);
     }
@@ -7792,6 +8088,27 @@ impl App {
             .as_ref()
             .and_then(|s| s.vessel(vessel))
             .and_then(|v| v.flight.clone());
+        if let Some(part) = id
+            .strip_prefix("fh-part-deploy-")
+            .and_then(|n| n.parse::<u16>().ok())
+        {
+            if let Some((_, out)) = f
+                .as_ref()
+                .and_then(|f| f.panels.iter().chain(&f.antennas).find(|p| p.0 == part))
+            {
+                if let Some(ws) = &self.ws {
+                    send(
+                        ws,
+                        &ClientMessage::SetPartDeployment {
+                            vessel,
+                            part,
+                            deploy: !out,
+                        },
+                    );
+                }
+            }
+            return;
+        }
         let msg = match id {
             "fh-act-gear" => {
                 self.toggle_gear();
@@ -7806,9 +8123,17 @@ impl App {
                 self.flight_science(0);
                 return;
             }
+            "fh-act-antennas" => ClientMessage::DeployAntennas {
+                vessel,
+                deploy: f
+                    .as_ref()
+                    .is_none_or(|f| hud::deploy_target(&f.antennas, &f.non_retractable)),
+            },
             "fh-act-solar" => ClientMessage::DeployPanels {
                 vessel,
-                deploy: !f.map(|f| f.panels_deployed).unwrap_or(false),
+                deploy: f
+                    .as_ref()
+                    .is_none_or(|f| hud::deploy_target(&f.panels, &f.non_retractable)),
             },
             "fh-act-chutes" => ClientMessage::DeployParachutes { vessel },
             "fh-act-fairings" => ClientMessage::DeployFairings { vessel },
@@ -8182,8 +8507,7 @@ impl App {
         let now = FlightSoundState {
             vessel: id,
             supersonic: f.surface_speed_mps > 343.0 && f.dynamic_pressure_kpa > 1.0,
-            gear_out: f.gear.iter().any(|g| g.1),
-            panels: f.panels_deployed,
+            lights: f.lights,
             hot: f
                 .heat
                 .iter()
@@ -8236,19 +8560,9 @@ impl App {
             if now.supersonic && !was.supersonic {
                 self.audio.play("sonic_boom");
             }
-            if now.gear_out != was.gear_out {
-                self.audio.play(if now.gear_out {
-                    "leg_deploy"
-                } else {
-                    "leg_retract"
-                });
-            }
-            if now.panels != was.panels {
-                self.audio.play(if now.panels {
-                    "panel_open"
-                } else {
-                    "panel_close"
-                });
+            if now.lights != was.lights && !f.part_lights.is_empty() {
+                self.audio
+                    .play(if now.lights { "light_on" } else { "light_off" });
             }
             if now.hot.iter().any(|p| !was.hot.contains(p)) {
                 self.audio.play("overheat");
@@ -8413,6 +8727,23 @@ impl App {
         let Some(v) = self.scene.as_ref().and_then(|s| s.vessel(id)) else {
             return;
         };
+        for button in ["fh-science", "fh-act-science"] {
+            if let Some(el) = self.doc.get_element_by_id(button) {
+                let _ = el
+                    .class_list()
+                    .toggle_with_force("science-ready", v.science_available);
+                if v.science_available {
+                    let _ = el.remove_attribute("disabled");
+                } else {
+                    let _ = el.set_attribute("disabled", "");
+                }
+                let _ = el.set_attribute("title", if v.science_available {
+                    "New science available: run experiments"
+                } else {
+                    "No experiments available here: already collected, running, or requirements unmet"
+                });
+            }
+        }
         let Some(f) = &v.flight else {
             // On rails: the readout's last values would be stale; altitude and speed from the orbit.
             if let Some(scene) = &self.scene {
@@ -8612,7 +8943,7 @@ impl App {
             html.push_str(&format!(
                 "<li data-ose=\"session\" data-ose-id=\"{id}\"><div><div class=\"name\">{name}</div>\
                  <div class=\"meta\">{mode} \u{b7} {ut} \u{b7} {players} {pl} online \u{b7} {ownership}</div></div>\
-                 <div class=\"session-actions\"><button data-ose=\"session-join\" data-ose-session=\"{id}\">Resume</button>{manage}</div></li>",
+                 <div class=\"session-actions\"><button data-ose=\"session-join\" data-ose-session=\"{id}\">Resume</button><button data-ose=\"session-share\" data-ose-session=\"{id}\">Share</button>{manage}</div></li>",
                 ownership = esc(&ownership),
                 id = esc(&s.id),
                 name = esc(&s.name),
@@ -9007,7 +9338,7 @@ impl App {
         }
         let (ux, uy) = self.mnv_dirs[k];
         let along = (x - x0) * ux + (y - y0) * uy;
-        let dv = along * if fine { 0.1 } else { 1.0 };
+        let dv = interaction::maneuver_delta_mps(along, fine);
         let (axis, sign) = (k / 2, if k % 2 == 0 { 1.0 } else { -1.0 });
         let Some(node) = self.node.as_mut() else {
             return;
@@ -9247,7 +9578,7 @@ impl App {
         };
         self.warp_el.set_text_content(Some(&warp_text));
         let title = if self.requested_warp > self.time.warp {
-            format!("Requested {}×; running at {}×. Physics flight is limited to 4× until vessels can coast safely on rails; other players may also hold warp down.", self.requested_warp, self.time.warp)
+            format!("Requested {}×; running at {}×. Physics flight is limited to 4× until vessels can coast safely on rails; this limit applies to the selected fleet.", self.requested_warp, self.time.warp)
         } else {
             "Increase time warp".to_string()
         };
@@ -9259,16 +9590,26 @@ impl App {
 
     fn frame(&mut self) {
         let now = now_ms();
+        self.render_timings.record(now);
         let ut = self.time.ut_at(now);
         self.update_tracking(now);
         self.update_audio(now);
-        if self.time.have_time {
-            self.update_hud(ut);
+        if now - self.hud_since_ms >= 50.0 {
+            self.hud_since_ms = now;
+            if self.time.have_time {
+                self.update_hud(ut);
+            }
+            self.update_flight_hud();
+            self.update_flight_instruments();
+            self.toasts.watch(&self.doc, "fh-note", "alert");
+            if self.flight_pam.is_some() {
+                if self.flying.is_none() {
+                    self.flight_open_pam(None, 0.0, 0.0);
+                } else {
+                    self.flight_pam_refresh();
+                }
+            }
         }
-        self.update_flight_hud();
-        self.update_flight_instruments();
-        self.toasts.watch(&self.doc, "fh-note", "alert");
-        self.flight_keys_tick(now);
         self.draw_navball();
         // FPS counter, refreshed twice a second while shown.
         self.fps_frames += 1;
@@ -9276,18 +9617,21 @@ impl App {
             let fps = self.fps_frames as f64 * 1000.0 / (now - self.fps_since_ms).max(1.0);
             self.fps_frames = 0;
             self.fps_since_ms = now;
-            set_text(&self.doc, "fps", &format!("{fps:.0} FPS"));
+            let mut text = format!(
+                "{fps:.0} FPS · frame max {:.0} ms",
+                self.render_timings.worst_ms
+            );
+            if self.in_session {
+                text.push_str(&format!(
+                    " · state max {:.0} ms",
+                    self.state_timings.worst_at(now)
+                ));
+            }
+            set_text(&self.doc, "fps", &text);
         }
         self.warp_to_tick(now);
         if self.in_session && self.vab_active() {
             self.vab_report_tick(now);
-        }
-        if self.flight_pam.is_some() {
-            if self.flying.is_none() {
-                self.flight_open_pam(None, 0.0, 0.0);
-            } else {
-                self.flight_pam_refresh();
-            }
         }
         #[cfg(target_arch = "wasm32")]
         if let (Some(p), Some(gpu)) = (self.planet_preview.as_mut(), self.gpu.as_mut()) {
@@ -9304,13 +9648,6 @@ impl App {
         if self.flight_active() && self.frame_flight(ut) {
             return;
         }
-        let dpr = self.dpr;
-        let (w, h) = (self.camera.width, self.camera.height);
-        let ctx = &self.ctx;
-        ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0).ok();
-        ctx.set_fill_style_str("#06080f");
-        ctx.fill_rect(0.0, 0.0, w, h);
-
         // The KSC hub screen shows the campus in 3D; elsewhere its tooltip must not linger.
         #[cfg(target_arch = "wasm32")]
         if !(self.in_session && self.ksc_active()) && self.ksc3d.hovered.is_some() {
@@ -9418,6 +9755,13 @@ impl App {
             self.frame_3d(ut, &positions, centre);
             return;
         }
+        // The map canvas is hidden under WebGPU views. Clear it only when it is actually being drawn.
+        let dpr = self.dpr;
+        let (w, h) = (self.camera.width, self.camera.height);
+        let ctx = &self.ctx;
+        ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0).ok();
+        ctx.set_fill_style_str("#06080f");
+        ctx.fill_rect(0.0, 0.0, w, h);
         // Exposed for tests and debugging: current scale and the star-space position of the focus body.
         self.canvas
             .set_attribute("data-ose-scale", &format!("{:.3e}", cam.m_per_px))
@@ -9564,11 +9908,20 @@ impl App {
             .unwrap_or(0.0);
         let catalog = &self.catalog;
         let is_dec = |pid: &str| catalog.get(pid).map(|p| p.is_decoupler).unwrap_or(false);
-        let nearby_vessels: Vec<(glam::DVec3, flight3d::Stand)> = scene
+        let campaign_id = &self.campaign_id;
+        let craft_docs = &self.craft_docs;
+        let nearby_vessels: Vec<flight3d::NearbyVessel<'_>> = scene
             .vessels
             .iter()
             .filter(|o| o.id != id && o.reference_body == v.reference_body)
-            .map(|o| (g(scene.vessel_position(o, ut)), stand_of(&self.roster, o)))
+            .map(|o| flight3d::NearbyVessel {
+                position: g(scene.vessel_position(o, ut)),
+                stand: stand_of(&self.roster, o),
+                state: o,
+                craft: stored(&format!("ose.flight.{campaign_id}.{}", o.id))
+                    .and_then(|id| id.parse::<u64>().ok())
+                    .and_then(|id| craft_docs.get(&id)),
+            })
             .collect();
         let inp = flight3d::FlightInput {
             vessel: v,
@@ -9605,6 +9958,9 @@ impl App {
             }),
         };
         let drawn = self.flight3d.frame(gpu, &inp);
+        for cue in self.flight3d.audio_events.drain(..) {
+            self.audio.play(&cue);
+        }
         if drawn {
             if let Some(hud) = self.doc.query_selector("[data-ose=flight]").ok().flatten() {
                 hud.set_attribute(
@@ -9683,21 +10039,27 @@ impl App {
                     mirror_z: true,
                     sun: 1.0,
                     glow: 0.0,
+                    lamps: Vec::new(),
                 });
             }
             if let (Some(orbit), Some(p)) = (scene.orbit(i), b.parent) {
-                let n = 256;
-                let pts: Vec<GV> = (0..=n)
-                    .map(|k| {
-                        let nu = k as f64 / n as f64 * std::f64::consts::TAU;
-                        let (rel, _) = orbit.state_at_true_anomaly(nu);
-                        to_km(rel)
-                    })
-                    .collect();
+                let key = format!("orbit:{}", b.id);
+                let pts = if gpu.has_line(&key) {
+                    Vec::new()
+                } else {
+                    let n = 256;
+                    (0..=n)
+                        .map(|k| {
+                            let nu = k as f64 / n as f64 * std::f64::consts::TAU;
+                            let (rel, _) = orbit.state_at_true_anomaly(nu);
+                            to_km(rel)
+                        })
+                        .collect()
+                };
                 let origin = to_km(positions[p as usize]) - cam_km;
                 let focus = i == self.camera.focus;
                 lines.push(render::LineItem {
-                    key: format!("orbit:{}", b.id),
+                    key,
                     points_km: pts,
                     rel_origin_km: origin,
                     color: if focus {
@@ -9711,30 +10073,33 @@ impl App {
         // Vessel trajectories: one strip per patch, keyed by the prediction version.
         let mut traj: Vec<render::LineItem> = Vec::new();
         for v in &scene.vessels {
-            let mine = v.owner.is_some() && v.owner == self.player_id;
             if let Some(patches) = scene.trajectories.get(&v.id) {
                 for (pi, patch) in patches.iter().enumerate() {
                     let Some(body) = scene.bodies.get(patch.body as usize) else {
                         continue;
                     };
-                    let orbit = scene::orbit_from(body.mu, &patch.orbit);
-                    let end_ut = if patch.end_ut.is_finite() {
-                        patch.end_ut
-                    } else if orbit.period.is_finite() {
-                        patch.start_ut + orbit.period
-                    } else {
-                        patch.start_ut + 6.0 * 3600.0
-                    };
-                    let soi = body.soi_radius_m.unwrap_or(f64::INFINITY);
-                    let n = 240;
-                    let mut pts = Vec::with_capacity(n + 1);
-                    for s in 0..=n {
-                        let t = patch.start_ut + (end_ut - patch.start_ut) * s as f64 / n as f64;
-                        let rel = orbit.position_at(t);
-                        if rel.length() > soi * 1.02 {
-                            break;
+                    let key = format!("traj:{}:{}:{}", v.id, pi, scene.trajectory_version(v.id));
+                    let mut pts = Vec::new();
+                    if !gpu.has_line(&key) {
+                        let orbit = scene::orbit_from(body.mu, &patch.orbit);
+                        let end_ut = if patch.end_ut.is_finite() {
+                            patch.end_ut
+                        } else if orbit.period.is_finite() {
+                            patch.start_ut + orbit.period
+                        } else {
+                            patch.start_ut + 6.0 * 3600.0
+                        };
+                        let soi = body.soi_radius_m.unwrap_or(f64::INFINITY);
+                        let n = 240;
+                        pts.reserve(n + 1);
+                        for s in 0..=n {
+                            let t = patch.start_ut + (end_ut - patch.start_ut) * s as f64 / n as f64;
+                            let rel = orbit.position_at(t);
+                            if rel.length() > soi * 1.02 {
+                                break;
+                            }
+                            pts.push(to_km(rel));
                         }
-                        pts.push(to_km(rel));
                     }
                     let colour = match patch.end {
                         PatchEnd::Final => [0.47, 0.86, 0.63, 0.95],
@@ -9745,9 +10110,8 @@ impl App {
                         #[allow(unreachable_patterns)]
                         _ => [0.8, 0.8, 0.8, 0.7],
                     };
-                    let _ = mine;
                     traj.push(render::LineItem {
-                        key: format!("traj:{}:{}:{}", v.id, pi, self.traj_version),
+                        key,
                         points_km: pts,
                         rel_origin_km: to_km(positions[patch.body as usize]) - cam_km,
                         color: colour,
@@ -9869,19 +10233,28 @@ impl App {
             if !(span.is_finite() && span > 0.0) {
                 return None;
             }
-            let mut best = (f64::INFINITY, ut);
-            for k in 0..=720 {
-                let when = ut + span * k as f64 / 720.0;
-                let d = (mine.position_at(when) - theirs.position_at(when)).length();
-                if d < best.0 {
-                    best = (d, when);
+            let cached = self.map_approach.sample(map_prediction::Key {
+                vessel: me.id, target: t.id, body: bi as u16, warp: self.time.warp,
+                vessel_prediction: scene.trajectory_version(me.id),
+                target_prediction: scene.trajectory_version(t.id),
+            }, now_ms(), ut, || {
+                let mut best = (f64::INFINITY, ut);
+                for k in 0..=720 {
+                    let when = ut + span * k as f64 / 720.0;
+                    let d = (mine.position_at(when) - theirs.position_at(when)).length();
+                    if d < best.0 {
+                        best = (d, when);
+                    }
                 }
-            }
-            let (d, when) = best;
+                Some(map_prediction::Approach {
+                    vessel: mine.position_at(best.1), target: theirs.position_at(best.1),
+                    distance: best.0, ut: best.1,
+                })
+            })?;
             Some((
-                to_km(positions[bi] + mine.position_at(when)),
-                to_km(positions[bi] + theirs.position_at(when)),
-                format!("Closest {} {}", hud::fmt_dist(d), hud::fmt_dt(when - ut)),
+                to_km(positions[bi]) + cached.vessel / 1000.0,
+                to_km(positions[bi]) + cached.target / 1000.0,
+                format!("Closest {} {}", hud::fmt_dist(cached.distance), hud::fmt_dt(cached.ut - ut)),
             ))
         })();
         for (k, id) in ["map-ca-me", "map-ca-target"].iter().enumerate() {

@@ -153,6 +153,16 @@ pub fn render_scale(stored: Option<&str>) -> f64 {
         / 100.0
 }
 
+/// Render frame cap. Zero follows the display; invalid or absent preferences default to 60 FPS.
+pub fn frame_limit(stored: Option<&str>) -> u32 {
+    match stored {
+        Some("30") => 30,
+        Some("120") => 120,
+        Some("0") => 0,
+        _ => 60,
+    }
+}
+
 /// UI scale from the stored percentage (50..150, default 100).
 pub fn ui_scale(stored: Option<&str>) -> f64 {
     stored
@@ -170,6 +180,17 @@ mod tests {
         assert_eq!(ui_scale(None), 100.0);
         assert_eq!(ui_scale(Some("300")), 150.0);
         assert_eq!(ui_scale(Some("x")), 100.0);
+    }
+
+    #[test]
+    fn frame_limit_defaults_and_accepts_only_available_choices() {
+        assert_eq!(frame_limit(None), 60);
+        assert_eq!(frame_limit(Some("60")), 60);
+        assert_eq!(frame_limit(Some("30")), 30);
+        assert_eq!(frame_limit(Some("120")), 120);
+        assert_eq!(frame_limit(Some("0")), 0);
+        assert_eq!(frame_limit(Some("NaN")), 60);
+        assert_eq!(frame_limit(Some("-1")), 60);
     }
 
     #[test]

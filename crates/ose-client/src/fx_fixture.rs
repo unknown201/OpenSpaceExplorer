@@ -258,6 +258,98 @@ pub fn rig_fixture_draw(part: String, fraction: f32) -> Result<bool, JsValue> {
     rig_fixture_instances(part, fraction, 3)
 }
 
+/// A dark receiver and the real lamp model, for deterministic lighting comparisons.
+#[wasm_bindgen]
+pub fn light_fixture_draw(part: String, on: bool) -> Result<bool, JsValue> {
+    light_fixture(part, on, true)
+}
+
+#[wasm_bindgen]
+pub fn light_fixture_receiver(part: String, on: bool) -> Result<bool, JsValue> {
+    light_fixture(part, on, false)
+}
+
+fn light_fixture(part: String, on: bool, show_source: bool) -> Result<bool, JsValue> {
+    FIXTURE.with(|f| {
+        let mut state = f.borrow_mut();
+        let gpu = state
+            .as_mut()
+            .ok_or_else(|| JsValue::from_str("fixture not set up"))?;
+        gpu.set_fixture_grid(false);
+        let name = format!("lamp:{part}");
+        let receiver = "lamp:receiver";
+        gpu.request_model(&name, &format!("assets/parts/{part}.glb"));
+        gpu.request_model(receiver, "assets/parts/fueltank_1v_inline_methalox_1x2.glb");
+        // frame drains asynchronously loaded models into the GPU cache.
+        gpu.frame("assets/parts/", &[], &[], [0.01; 3]);
+        let Some(model) = gpu.model(&name) else {
+            return Ok(false);
+        };
+        if !gpu.has_model(receiver) {
+            return Ok(false);
+        }
+        let world = model.rig.world_matrices(&model.rig.pose(None));
+        let Some(light) = model.rig.lights.first() else {
+            return Ok(false);
+        };
+        let node = world[light.node];
+        let target_position = node.w_axis.truncate().as_dvec3()
+            + node
+                .transform_vector3(glam::Vec3::Z)
+                .normalize_or_zero()
+                .as_dvec3()
+                * (light.range as f64 * 0.5).min(1.5);
+        let receiver_scale = (light.range as f64 / 3.0).min(1.0);
+        let camera = target_position * 0.5 + DVec3::new(4., 2., 5.);
+        let emission = model.rig.light_emission;
+        let mut lamps = Vec::new();
+        if on {
+            for light in &model.rig.lights {
+                let node = world[light.node];
+                lamps.push(crate::render::Lamp {
+                    position_range: (node.w_axis.truncate().as_dvec3() - camera)
+                        .as_vec3()
+                        .extend(light.range)
+                        .to_array(),
+                    direction_cone: node
+                        .transform_vector3(glam::Vec3::Z)
+                        .normalize_or_zero()
+                        .extend(light.spot_cos)
+                        .to_array(),
+                    color_intensity: [1., 1., 1., light.intensity],
+                });
+            }
+        }
+        let mut source = crate::render::DrawItem::lit(name, -camera, DQuat::IDENTITY, 1., DVec3::Y);
+        source.sun = 0.;
+        source.glow = if on { emission } else { 0. };
+        source.lamps = lamps.clone();
+        let mut target = crate::render::DrawItem::lit(
+            receiver.into(),
+            target_position - camera,
+            DQuat::IDENTITY,
+            receiver_scale,
+            DVec3::Y,
+        );
+        target.sun = 0.;
+        target.lamps = lamps;
+        gpu.set_camera(
+            target_position * 0.5 - camera,
+            DVec3::Y,
+            45f64.to_radians(),
+            0.05,
+            1e6,
+        );
+        let items = if show_source {
+            vec![source, target]
+        } else {
+            vec![target]
+        };
+        gpu.frame("assets/parts/", &items, &[], [0.01; 3]);
+        Ok(true)
+    })
+}
+
 #[wasm_bindgen]
 pub fn rig_fixture_instances(part: String, fraction: f32, instances: u8) -> Result<bool, JsValue> {
     FIXTURE.with(|f| {

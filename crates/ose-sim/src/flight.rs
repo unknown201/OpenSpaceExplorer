@@ -222,6 +222,9 @@ pub struct Powered {
     /// A Kerbal on EVA: on the ground, the throttle with a level attitude walks instead of firing the pack.
     #[serde(default)]
     pub walker: bool,
+    /// EVA orientation in inertial space; spacewalks do not align with the planet's horizon.
+    #[serde(default)]
+    pub eva_top: Option<DVec3>,
     /// Driving on wheels (rovers).
     #[serde(default)]
     pub drive: Drive,
@@ -370,6 +373,9 @@ pub fn roll_reference(facing: DVec3, up: DVec3) -> DVec3 {
 /// The craft's +Z in flight: the roll reference turned by its roll. For a level craft (a plane, whose +Z
 /// is its belly) the reference is down across the axis, so it flies wings level.
 pub fn vessel_top(p: &Powered) -> DVec3 {
+    if let Some(top) = p.eva_top.filter(|_| p.walker && !p.landed) {
+        return top;
+    }
     let up = p.r.normalized();
     let base = if p.level {
         let down = -up - p.facing * (-up).dot(p.facing);
@@ -415,6 +421,9 @@ fn identity_control_rotation() -> [f64; 4] {
 }
 
 pub fn set_vessel_top(p: &mut Powered, top: DVec3) {
+    if p.walker && !p.landed {
+        p.eva_top = Some((top - p.facing * top.dot(p.facing)).normalized());
+    }
     p.roll_rad = 0.0;
     let base = vessel_top(p);
     p.roll_rad = top.dot(p.facing.cross(base)).atan2(top.dot(base));
@@ -820,6 +829,7 @@ impl Powered {
             crash_tolerance_mps: 0.0,
             tipped: false,
             walker: false,
+            eva_top: None,
             drive: Drive::default(),
             roll_rad: 0.0,
             roll_input: 0.0,
@@ -1521,7 +1531,7 @@ pub fn integrate_with_propulsion(
         None
     };
     // attitude: landed vessels stand upright; otherwise turn toward the commanded attitude with torque
-    let thrust_kn = if walk_dir.is_some() || p.eva_hop {
+    let thrust_kn = if walk_dir.is_some() || p.eva_hop || p.walker {
         0.0
     } else if let Some(engine) = propulsion.as_ref() {
         engine.thrust_kn

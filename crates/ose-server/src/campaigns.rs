@@ -92,8 +92,7 @@ pub fn switch(s: &Shared, player_id: u64, target: Target) -> Result<(), String> 
     {
         let playing = s.playing.lock().expect("playing lock");
         if playing.iter().any(|&p| p != player_id) {
-            let name = s.campaign.lock().expect("campaign lock").name.clone();
-            return Err(format!("another player is playing {name}"));
+            return Err("another player is playing a different campaign; try again after they leave".into());
         }
     }
     let mut u = s.universe.lock().expect("sim lock");
@@ -101,8 +100,8 @@ pub fn switch(s: &Shared, player_id: u64, target: Target) -> Result<(), String> 
     let mut c = s.campaign.lock().expect("campaign lock");
     let mut shelf = s.shelf.lock().expect("shelf lock");
     if let Target::Shelved(id) = &target {
-        if !shelf.iter().any(|x| &x.id == id) {
-            return Err(format!("no campaign {id}"));
+        if !shelf.iter().any(|x| &x.id == id && can_access(&x.save.campaign, player_id)) {
+            return Err("join this campaign with a share code first".into());
         }
     }
     // the live campaign goes on the shelf, even one nobody has joined yet (it stays listed)
@@ -144,9 +143,12 @@ pub fn switch(s: &Shared, player_id: u64, target: Target) -> Result<(), String> 
         }
     }
     u.set_warp(1);
+    for clock in u.timelines.values_mut() { clock.warp = 1; }
+    *s.world_changed_at.lock().expect("world change lock") = std::time::Instant::now();
     drop((u, v, c, shelf));
+    s.pending.lock().expect("pending lock").clear();
     s.playing.lock().expect("playing lock").clear();
-    *s.revert.lock().expect("revert lock") = None;
+    s.revert.lock().expect("revert lock").clear();
     s.warp_requests
         .lock()
         .expect("warp lock")
@@ -167,10 +169,42 @@ pub fn snapshot(s: &Shared) -> save::SaveFile {
 
 /// Where the player's last launch can be reverted to.
 pub struct RevertPoint {
-    pub player: u64,
+    pub local_valid: bool,
     pub editor: save::SaveFile,
     pub launch: save::SaveFile,
     pub craft: ose_data::craft::Craft,
+}
+
+/// Local reversion replaces only this player's fleet and clock. Agency progress is shared.
+pub fn revert(s: &Shared, player: u64, file: &save::SaveFile, global: bool) -> Result<(), String> {
+    if global {
+        reload_global(s, file)?;
+        for factor in s.warp_requests.lock().expect("warp lock").values_mut() { *factor = 1; }
+        return Ok(());
+    }
+    let mut u = s.universe.lock().expect("sim lock");
+    let mut registry = s.vessels.lock().expect("vessels lock");
+    let saved: Vec<_> = file.vessels.iter().filter(|v| v.owner == Some(player)).cloned().collect();
+    // A craft transferred by docking cannot be recreated while its crew/parts live in another fleet.
+    if saved.iter().any(|v| registry.iter().any(|r| r.1 == v.id && r.2 != Some(player))) {
+        return Err("a reverted vessel now belongs to another player; use global revert".into());
+    }
+    let foreign_crew: Vec<_> = registry.iter().filter(|v| v.2 != Some(player))
+        .flat_map(|v| u.crew(v.0).into_iter().map(|(_, name)| name)).collect();
+    if saved.iter().any(|v| v.crew.iter().any(|(_, name)| foreign_crew.contains(name))) {
+        return Err("revert would duplicate crew docked with another player; use global revert".into());
+    }
+    for &(e, _, owner) in registry.iter() {
+        if owner == Some(player) { u.despawn_vessel(e); }
+    }
+    registry.retain(|v| v.2 != Some(player));
+    let tick = file.timelines.get(&player).map_or(file.tick, |c| c.tick);
+    u.timelines.insert(player, ose_sim::timelines::TimelineClock { tick, warp: 1 });
+    registry.extend(save::restore_vessels(&mut u, &saved, &s.parts, &s.resources));
+    drop(registry);
+    drop(u);
+    s.warp_requests.lock().expect("warp lock").insert(player, 1);
+    Ok(())
 }
 
 /// Put the live campaign back to `file` (a quicksave or revert point): its universe, vessels and progress.
@@ -184,6 +218,10 @@ pub fn reload(s: &Shared, player_id: u64, file: &save::SaveFile) -> Result<(), S
     {
         return Err("another player is playing this campaign".into());
     }
+    reload_global(s, file)
+}
+
+fn reload_global(s: &Shared, file: &save::SaveFile) -> Result<(), String> {
     let mut nu = s.setup.universe();
     let registry = save::restore(&mut nu, file, &s.parts, &s.resources);
     let mut u = s.universe.lock().expect("sim lock");
@@ -194,10 +232,13 @@ pub fn reload(s: &Shared, player_id: u64, file: &save::SaveFile) -> Result<(), S
     back.quicksave = c.quicksave.take();
     back.members = c.members.clone();
     back.owner = c.owner;
+    back.share_code = c.share_code.clone();
+    *s.world_changed_at.lock().expect("world change lock") = std::time::Instant::now();
     *u = nu;
     *v = registry;
     *c = back;
     u.set_warp(1);
+    for clock in u.timelines.values_mut() { clock.warp = 1; }
     Ok(())
 }
 
@@ -210,8 +251,58 @@ pub fn allowed(s: &Shared, id: &str) -> bool {
     )
 }
 
-/// Every campaign: the live one first, then the shelf, most recently played first.
-pub fn list(s: &Shared) -> ServerMessage {
+/// Membership and ownership are persisted on the server, never inferred from browser history.
+pub fn can_access(c: &save::Campaign, player: u64) -> bool {
+    c.owner == Some(player) || c.members.iter().any(|m| m.player_id == player)
+}
+
+pub fn live_access(s: &Shared, player: u64) -> bool {
+    can_access(&s.campaign.lock().expect("campaign lock"), player)
+}
+
+pub fn access(s: &Shared, player: u64, id: &str) -> bool {
+    let c = s.campaign.lock().expect("campaign lock");
+    if c.id == id { return can_access(&c, player); }
+    s.shelf.lock().expect("shelf lock").iter()
+        .any(|x| x.id == id && can_access(&x.save.campaign, player))
+}
+
+/// Any member can invite a friend, including while another campaign is live.
+pub fn share(s: &Shared, player: u64, id: &str) -> Result<ServerMessage, String> {
+    let mut c = s.campaign.lock().expect("campaign lock");
+    let mut shelf = s.shelf.lock().expect("shelf lock");
+    let c = if c.id == id { &mut *c } else {
+        &mut shelf.iter_mut().find(|x| x.id == id)
+            .ok_or("campaign unavailable")?.save.campaign
+    };
+    if !can_access(c, player) { return Err("join this campaign with a share code first".into()); }
+    if c.share_code.is_none() {
+        c.share_code = Some(crate::accounts::random_token().map_err(|e| e.to_string())?);
+    }
+    Ok(ServerMessage::SessionShareCode { id: id.into(), code: c.share_code.clone().unwrap() })
+}
+
+/// Redeeming an invitation grants membership; it never interrupts other players or changes ownership.
+pub fn join_code(s: &Shared, player: u64, code: &str) -> Result<ServerMessage, String> {
+    let tick = s.universe.lock().expect("sim lock").tick();
+    let mut c = s.campaign.lock().expect("campaign lock");
+    let mut shelf = s.shelf.lock().expect("shelf lock");
+    let code = code.trim();
+    let c = if c.share_code.as_deref() == Some(code) { &mut *c } else {
+        &mut shelf.iter_mut().find(|x| x.save.campaign.share_code.as_deref() == Some(code))
+            .ok_or("invalid share code")?.save.campaign
+    };
+    if !can_access(c, player) {
+        c.members.push(save::CampaignMember {
+            player_id: player, display_name: crate::display_name_for(s, player), joined_tick: tick, agency: None,
+        });
+    }
+    Ok(ServerMessage::SessionJoined { id: c.id.clone(), name: c.name.clone() })
+}
+
+/// Accessible campaigns: the live one first, then the shelf, most recently played first.
+
+pub fn list(s: &Shared, player: u64) -> ServerMessage {
     let ut_s = s.universe.lock().expect("sim lock").ut();
     let c = s.campaign.lock().expect("campaign lock");
     let shelf = s.shelf.lock().expect("shelf lock");
@@ -226,7 +317,8 @@ pub fn list(s: &Shared) -> ServerMessage {
                 .unwrap_or_else(|| crate::display_name_for(s, id))
         })
     };
-    let mut sessions = vec![ose_net::SessionInfo {
+    let mut sessions = Vec::new();
+    if can_access(&c, player) { sessions.push(ose_net::SessionInfo {
         id: c.id.clone(),
         name: c.name.clone(),
         mode: c.mode,
@@ -235,9 +327,10 @@ pub fn list(s: &Shared) -> ServerMessage {
         players: playing.len() as u32,
         owner: c.owner,
         owner_name: owner_name(&c),
-    }];
+    }); }
     let mut rest: Vec<ose_net::SessionInfo> = shelf
         .iter()
+        .filter(|x| can_access(&x.save.campaign, player))
         .map(|x| ose_net::SessionInfo {
             id: x.id.clone(),
             name: x.save.campaign.name.clone(),
@@ -272,6 +365,9 @@ pub fn manage(s: &Shared, player: u64, id: &str, delete: bool) -> Result<(), Str
             .campaign
     };
     if !delete {
+        if !can_access(campaign, player) {
+            return Err("only a campaign member can claim an unowned session".into());
+        }
         match campaign.owner {
             None => campaign.owner = Some(player),
             Some(owner) if owner == player => {}
@@ -294,6 +390,8 @@ pub fn manage(s: &Shared, player: u64, id: &str, delete: bool) -> Result<(), Str
         return Err("leave the session before deleting it; all players must leave first".into());
     }
     if live {
+        *s.world_changed_at.lock().expect("world change lock") = std::time::Instant::now();
+        s.pending.lock().expect("pending lock").clear();
         // Replace the deleted live world without shelving it again.
         if let Some(back) = shelf.pop() {
             let mut nu = s.setup.universe();
@@ -312,7 +410,8 @@ pub fn manage(s: &Shared, player: u64, id: &str, delete: bool) -> Result<(), Str
             }
         }
         u.set_warp(1);
-        *s.revert.lock().expect("revert lock") = None;
+    for clock in u.timelines.values_mut() { clock.warp = 1; }
+        s.revert.lock().expect("revert lock").clear();
     } else {
         shelf.retain(|x| x.id != id);
     }

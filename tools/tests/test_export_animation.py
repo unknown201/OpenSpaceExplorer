@@ -44,13 +44,16 @@ class ExportAnimationTests(unittest.TestCase):
         names={1:'prefab',2:'bone',3:'fbx',4:'bone'}
         def obj(kind,read=None,tree=None,identity=0):
             return NS(type=NS(name=kind),read=lambda:read,read_typetree=lambda:tree,path_id=identity)
+        c = clip_data()
+        c['m_Events'] = [{'time': 0.5, 'functionName': 'PostAnimWWEvent', 'data': 'Play_test_deploy'}, {'time': 1.0, 'functionName': 'Other', 'data': 'ignored'}]
         env=NS(objects=[obj('Animator',NS(m_GameObject=ptr(1),m_Controller=ptr(10))),
                         obj('Animator',NS(m_GameObject=ptr(3),m_Controller=ptr(0))),
-                        obj('AnimationClip',tree=clip_data(),identity=20)])
+                        obj('AnimationClip',tree=c,identity=20)])
         glb=Glb()
         glb.nodes=[{'name':names[i]} for i in range(1,5)]
         audit=export_rig(env,glb,transforms,names,{i:i-1 for i in transforms},[])
         self.assertEqual(audit['ose_animation_audit']['unresolved_bindings'],[])
+        self.assertEqual(glb.animations[0]['extras']['ose_audio_events'], [{'time':0.5, 'sound':'Play_test_deploy'}])
         self.assertEqual(glb.animations[0]['channels'][0]['target'],{'node':1,'path':'translation'})
         a=glb.accessors[glb.animations[0]['samplers'][0]['output']]
         off=glb.buffer_views[a['bufferView']]['byteOffset']

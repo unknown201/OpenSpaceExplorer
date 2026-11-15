@@ -4,6 +4,8 @@
 // kilometres around the body's centre, as the original's Bruneton LUTs do. The atmosphere is a WGSL port of
 // Eric Bruneton's "Precomputed Atmospheric Scattering" (2017, BSD) reading the LUTs the original baked.
 
+struct Lamp { position_range: vec4<f32>, direction_cone: vec4<f32>, color_intensity: vec4<f32> };
+
 struct Frame {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
@@ -34,7 +36,24 @@ struct Frame {
     star_z: vec4<f32>,
     // the camera's model-frame position modulo TILE_PERIOD (m)
     cam_tile: vec4<f32>,
+    lamps: array<Lamp, 8>,
 };
+
+fn lamp_light(rel: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    var light = vec3<f32>(0.0);
+    for (var i = 0u; i < 8u; i++) {
+        let lamp = frame.lamps[i];
+        let delta = lamp.position_range.xyz - rel;
+        let distance = length(delta);
+        if lamp.position_range.w > distance && distance > 0.0001 {
+            let dir = delta / distance;
+            let cone = dot(-dir, lamp.direction_cone.xyz);
+            let beam = select(smoothstep(lamp.direction_cone.w, min(lamp.direction_cone.w + 0.1, 1.0), cone), 1.0, lamp.direction_cone.w < 0.0);
+            light += lamp.color_intensity.rgb * lamp.color_intensity.w * pow(1.0 - distance / lamp.position_range.w, 2.0) * beam * max(dot(normal, dir), 0.0);
+        }
+    }
+    return light;
+}
 
 struct Chunk {
     // quad centre minus camera (m)
@@ -1007,7 +1026,7 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
     if surface.flags.z > 5.5 && surface.flags.z < 6.5 {
         return vec4<f32>(n * 0.5 + 0.5, 1.0);
     }
-    var radiance = albedo / PI * (light.sun * shade + light.sky) + albedo * ambient(up, frame.sun.xyz);
+    var radiance = albedo / PI * (light.sun * shade + light.sky) + albedo * (ambient(up, frame.sun.xyz) + lamp_light(in.rel, n));
     if under_water() {
         radiance = water_fog(radiance * exp(-max(-in.height, 0.0) / 80.0), dist);
     } else {

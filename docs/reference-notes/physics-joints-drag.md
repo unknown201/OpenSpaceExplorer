@@ -1,5 +1,11 @@
 # Reference notes: physics bubble, part joints, aerodynamics, engines
 
+**Runtime validation update (2026-11-11):** the formulas and OSE mapping below do
+not establish joint parity. The [matched structural comparison](joint-stress-validation.md)
+found earlier OSE breakage, additional KSP2 reinforcement joints, runtime inertia
+scaling, and a crucial difference between drive force and native breakage load.
+Read that comparison before treating OSE's spring torque as a KSP2 breakage signal.
+
 From reading `KSP.Sim.impl` (`RigidbodyBehavior`, `PartOwnerBehavior`, `PartComponent`, `CelestialBodyComponent`,
 `PartComponentModule_Engine`), `KSP.Modules` (`Module_Drag`, `Data_Drag`, `Data_Engine`), `PhysicsSettings` and
 `AeroUtilities`. Numbers quoted are the C# defaults in `PhysicsSettings`; the shipped settings asset can override

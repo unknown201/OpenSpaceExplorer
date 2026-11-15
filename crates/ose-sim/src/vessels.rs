@@ -9,7 +9,7 @@ use crate::bodies::{main_body_at, star_space_state, Body, BodyIndex, OnRails, Re
 use bevy_ecs::prelude::*;
 use ose_math::{DVec3, Orbit};
 
-/// Marks a vessel that is a separated stage (no engines, no control); removed once it crashes.
+/// Marks separated debris; removed once it crashes, lands or splashes down.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Debris;
 

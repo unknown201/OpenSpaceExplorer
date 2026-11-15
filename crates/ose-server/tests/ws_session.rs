@@ -55,6 +55,7 @@ async fn spawn_server_with(extra: &[&str], port: Option<u16>) -> (Server, String
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    TEST_CAMPAIGNS.get_or_init(Default::default).lock().unwrap().remove(&addr);
     (Server(child), addr)
 }
 
@@ -124,6 +125,48 @@ async fn recv(ws: &mut Ws) -> ServerMessage {
 }
 
 #[tokio::test]
+async fn orbital_eva_releases_regrabs_and_boards_through_the_hatch() {
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "EVA pilot").await;
+    send_msg(&mut ws, &ClientMessage::LaunchCraft { craft: starter_craft(), altitude_m: 100_000.0 }).await;
+    let pod = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => { assert!(reason.is_none(), "{reason:?}"); vessel }
+        _ => None,
+    }).await;
+    send_msg(&mut ws, &ClientMessage::GoEva { vessel: pod, kerbal: None }).await;
+    let jeb = wait_for(&mut ws, |m| match m {
+        ServerMessage::CrewAck { accepted, new_vessel, reason, .. } => { assert!(accepted, "{reason:?}"); new_vessel }
+        _ => None,
+    }).await;
+    async fn attached(ws: &mut Ws, vessel: u64, expected: bool) -> ose_net::FlightReadout {
+        wait_for(ws, |m| match m {
+            ServerMessage::Vessels { vessels, .. } => vessels.into_iter().find(|v| v.id == vessel)
+                .and_then(|v| v.flight).filter(|f| f.eva_attached == expected),
+            _ => None,
+        }).await
+    }
+    let initial = attached(&mut ws, jeb, true).await;
+    assert!(initial.eva && !initial.rcs);
+    for expected in [false, true] {
+        send_msg(&mut ws, &ClientMessage::EvaInteract { vessel: jeb }).await;
+        wait_for(&mut ws, |m| match m {
+            ServerMessage::FlightAck { vessel, accepted, reason } if vessel == jeb => { assert!(accepted, "{reason:?}"); Some(()) }
+            _ => None,
+        }).await;
+        let f = attached(&mut ws, jeb, expected).await;
+        assert_eq!(f.propellant_t, initial.propellant_t);
+    }
+    send_msg(&mut ws, &ClientMessage::EvaControls { vessel: jeb, run: false, jump: true }).await;
+    attached(&mut ws, jeb, false).await;
+    send_msg(&mut ws, &ClientMessage::Board { vessel: jeb, target: pod }).await;
+    wait_for(&mut ws, |m| match m {
+        ServerMessage::CrewAck { vessel, accepted, reason, .. } if vessel == jeb => { assert!(accepted, "{reason:?}"); Some(()) }
+        _ => None,
+    }).await;
+}
+
+#[tokio::test]
 async fn hello_catalog_and_snapshots() {
     let (_server, addr) = spawn_server().await;
     let mut ws = connect_ws(&addr).await;
@@ -170,6 +213,7 @@ async fn hello_catalog_and_snapshots() {
         panic!("expected LaunchSites")
     };
     assert!(sites.iter().any(|x| x.runway));
+    establish_test_campaign(&mut ws, &token, "test").await;
     assert!(bodies.len() >= 17, "catalog has {} bodies", bodies.len());
     let kerbin = bodies
         .iter()
@@ -286,7 +330,7 @@ async fn hello_catalog_and_snapshots() {
     for _ in 0..40 {
         if let ServerMessage::SessionList { sessions } = recv(&mut ws).await {
             assert_eq!(sessions.len(), 1);
-            assert_eq!(sessions[0].id, "shared");
+            assert_eq!(sessions[0].name, "Shared campaign");
             assert_eq!(sessions[0].players, 0);
             listed = true;
             break;
@@ -759,8 +803,7 @@ async fn hello_catalog_and_snapshots() {
     }
     assert!(seen, "physics-warp cap never streamed");
 
-    // A second player who has not asked for warp holds it at 1 (lowest wins) and is named as the limiter;
-    // when they leave, warp returns to 100.
+    // A second player stays at 1x without limiting the first player.
     let mut ws2 = connect_ws(&addr).await;
     let hello2 = ClientMessage::Hello {
         protocol: PROTOCOL_VERSION,
@@ -770,9 +813,12 @@ async fn hello_catalog_and_snapshots() {
     ws2.send(Message::Binary(ose_net::encode(&hello2).unwrap().into()))
         .await
         .unwrap();
-    let ServerMessage::Welcome { player_id: p2, .. } = recv(&mut ws2).await else {
+    let ServerMessage::Welcome { player_id: _p2, .. } = recv(&mut ws2).await else {
         panic!("expected Welcome 2")
     };
+    send_msg(&mut ws, &ClientMessage::ListSessions).await;
+    let current = wait_for(&mut ws, |m| match m { ServerMessage::SessionList { sessions } => Some(sessions[0].id.clone()), _ => None }).await;
+    invite(&mut ws, &mut ws2, &current).await;
     // Browsing the menu must not participate in warp arbitration.
     send_msg(&mut ws2, &ClientMessage::JoinCampaign).await;
     wait_for(&mut ws2, |m| {
@@ -787,13 +833,14 @@ async fn hello_catalog_and_snapshots() {
             ..
         } = recv(&mut ws).await
         {
-            if warp == 1 && warp_limited_by == Some(p2) {
+            if warp == 4 && warp_limited_by.is_none() {
                 limited = true;
                 break;
             }
         }
     }
-    assert!(limited, "second player did not hold warp down");
+    assert!(limited, "second player changed the first player clock");
+    wait_for(&mut ws2, |m| matches!(m, ServerMessage::TimeState { warp: 1, .. }).then_some(())).await;
     drop(ws2);
     let mut restored = false;
     for _ in 0..60 {
@@ -1083,7 +1130,44 @@ async fn exploration_science_tech_tree_and_recovery() {
     .await;
     assert!(!accepted && reason.is_some());
 
-    // the same report again is worth nothing
+    // The availability snapshot follows the same rules as running experiments.
+    wait_for(&mut ws, |m| match m {
+        ServerMessage::Vessels { vessels, .. } => vessels.iter()
+            .find(|v| v.id == vessel && v.science_available).map(|_| ()),
+        _ => None,
+    }).await;
+    // The same subject pays less each time and eventually cannot be collected again.
+    let mut previous = obs.value;
+    let mut repeats = 0;
+    loop {
+        send_msg(&mut ws, &ClientMessage::RunExperiments { vessel }).await;
+        let (new, skipped) = wait_for(&mut ws, |m| match m {
+            ServerMessage::ScienceReports { new, skipped, .. } => Some((new, skipped)),
+            _ => None,
+        }).await;
+        if new.is_empty() {
+            assert!(skipped.iter().any(|s| s.reason == "science exhausted"));
+            break;
+        }
+        let next = new.iter().find(|r| r.experiment == "CrewObservation").unwrap().value;
+        assert!(next > 0.0 && next < previous);
+        previous = next;
+        repeats += 1;
+        assert!(repeats < 20);
+        wait_for(&mut ws, |m| match m {
+            ServerMessage::Vessels { vessels, .. } => vessels.iter()
+                .find(|v| v.id == vessel && !v.science_available).map(|_| ()),
+            _ => None,
+        }).await;
+        send_msg(&mut ws, &ClientMessage::TransmitScience { vessel }).await;
+        wait_for(&mut ws, |m| match m {
+            ServerMessage::ScienceSubmitted { earned, reason, .. } => {
+                assert!(earned > 0.0 && reason.is_none()); Some(())
+            }
+            _ => None,
+        }).await;
+    }
+    assert!(repeats > 0);
     send_msg(&mut ws, &ClientMessage::RunExperiments { vessel }).await;
     wait_for(&mut ws, |m| {
         matches!(m, ServerMessage::ScienceReports { .. }).then_some(())
@@ -1449,7 +1533,7 @@ async fn resuming_the_shared_campaign_brings_back_its_mode_and_tech_tree() {
     let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
     // someone starts a sandbox straight away (nobody ever joined the shared campaign) and leaves
     let mut a = connect_ws(&addr).await;
-    hello(&mut a, None, "a").await;
+    let (_, original_token) = hello(&mut a, None, "a").await;
     send_msg(
         &mut a,
         &ClientMessage::CreateSession {
@@ -1467,7 +1551,7 @@ async fn resuming_the_shared_campaign_brings_back_its_mode_and_tech_tree() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     // a new page resumes the shared campaign and asks for its science
     let mut b = connect_ws(&addr).await;
-    hello(&mut b, None, "b").await;
+    hello(&mut b, Some(original_token), "a").await;
     send_msg(&mut b, &ClientMessage::ListSessions).await;
     let list = wait_for(&mut b, |m| match m {
         ServerMessage::SessionList { sessions } => Some(sessions),
@@ -1917,7 +2001,7 @@ async fn stale_guests_are_swept_but_members_stay() {
     ];
     let (_server, addr) = spawn_server_with(&args, None).await;
     let mut g = connect_ws(&addr).await;
-    let (guest_id, _) = hello(&mut g, None, "e2e pilot").await;
+    let (guest_id, _) = raw_hello(&mut g, None, "e2e pilot").await;
     drop(g);
     let mut m = connect_ws(&addr).await;
     let (member_id, _) = hello(&mut m, None, "josh").await;
@@ -1993,6 +2077,7 @@ async fn campaigns_can_be_left_resumed_and_started_again() {
     // a teammate who never played Alpha resumes it with a pilot probe of their own
     let mut late = connect_ws(&addr).await;
     let (late_id, _) = hello(&mut late, None, "bob").await;
+    invite(&mut ws, &mut late, &alpha).await;
     send_msg(
         &mut late,
         &ClientMessage::SelectSession { id: alpha.clone() },
@@ -2027,7 +2112,7 @@ async fn campaigns_can_be_left_resumed_and_started_again() {
     let _ = me;
 }
 
-async fn hello(ws: &mut Ws, token: Option<String>, name: &str) -> (u64, String) {
+async fn raw_hello(ws: &mut Ws, token: Option<String>, name: &str) -> (u64, String) {
     let hello = ClientMessage::Hello {
         protocol: PROTOCOL_VERSION,
         token,
@@ -2044,16 +2129,138 @@ async fn hello(ws: &mut Ws, token: Option<String>, name: &str) -> (u64, String) 
     }
 }
 
+// Gameplay tests explicitly establish a shared test campaign and invite later accounts.
+// Authentication/access tests use raw_hello (or campaign_access.rs) without this fixture.
+static TEST_CAMPAIGNS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (String, String, String)>>> = std::sync::OnceLock::new();
+async fn hello(ws: &mut Ws, token: Option<String>, name: &str) -> (u64, String) {
+    let identity = raw_hello(ws, token, name).await;
+    establish_test_campaign(ws, &identity.1, name).await;
+    identity
+}
+async fn invite(owner: &mut Ws, guest: &mut Ws, id: &str) {
+    send_msg(owner, &ClientMessage::ShareSession { id: id.into() }).await;
+    let code = wait_for(owner, |m| match m {
+        ServerMessage::SessionShareCode { code, .. } => Some(code), _ => None,
+    }).await;
+    send_msg(guest, &ClientMessage::JoinSessionCode { code }).await;
+    wait_for(guest, |m| matches!(m, ServerMessage::SessionJoined { .. }).then_some(())).await;
+    wait_for(guest, |m| matches!(m, ServerMessage::SessionList { .. }).then_some(())).await;
+}
+async fn establish_test_campaign(ws: &mut Ws, token: &str, name: &str) {
+    let addr = match ws.get_ref() {
+        tokio_tungstenite::MaybeTlsStream::Plain(stream) => stream.peer_addr().unwrap().to_string(),
+        _ => unreachable!(),
+    };
+    let fixture = TEST_CAMPAIGNS.get_or_init(Default::default).lock().unwrap().get(&addr).cloned();
+    if let Some((owner_token, initial_id, owner_name)) = fixture {
+        let mut owner = connect_ws(&addr).await;
+        raw_hello(&mut owner, Some(owner_token), &owner_name).await;
+        send_msg(&mut owner, &ClientMessage::ListSessions).await;
+        let id = wait_for(&mut owner, |m| match m {
+            ServerMessage::SessionList { sessions } => Some(sessions.first().map(|s| s.id.clone()).unwrap_or(initial_id.clone())),
+            _ => None,
+        }).await;
+        invite(&mut owner, ws, &id).await;
+    } else {
+        send_msg(ws, &ClientMessage::ListSessions).await;
+        let existing = wait_for(ws, |m| match m { ServerMessage::SessionList { sessions } => Some(sessions), _ => None }).await;
+        if let Some(game) = existing.first() {
+            TEST_CAMPAIGNS.get().unwrap().lock().unwrap().insert(addr, (token.into(), game.id.clone(), name.into()));
+            return;
+        }
+        send_msg(ws, &ClientMessage::CreateSession { name: "Shared campaign".into(), mode: ose_net::SessionMode::Exploration, difficulty: vec![] }).await;
+        let id = wait_for(ws, |m| match m { ServerMessage::CampaignState { id, created: true, .. } => Some(id), _ => None }).await;
+        TEST_CAMPAIGNS.get().unwrap().lock().unwrap().insert(addr, (token.into(), id, name.into()));
+        send_msg(ws, &ClientMessage::LeaveSession).await;
+        wait_for(ws, |m| matches!(m, ServerMessage::SessionList { .. }).then_some(())).await;
+    }
+}
+
+#[tokio::test]
+async fn local_and_global_warp_and_revert_are_independent() {
+    use ose_net::TimeScope::{Global, Local};
+    let (_server, addr) = spawn_server().await;
+    let mut a = connect_ws(&addr).await;
+    let (aid, _) = hello(&mut a, None, "slow").await;
+    let mut b = connect_ws(&addr).await;
+    let (bid, _) = hello(&mut b, None, "fast").await;
+    for ws in [&mut a, &mut b] {
+        send_msg(ws, &ClientMessage::JoinCampaign).await;
+        wait_for(ws, |m| matches!(m, ServerMessage::CampaignState { .. }).then_some(())).await;
+    }
+    async fn clock(ws: &mut Ws, rate: u32) -> ose_data::Tick {
+        wait_for(ws, |m| match m {
+            ServerMessage::TimeState { tick, warp, .. } if warp == rate => Some(tick),
+            _ => None,
+        }).await
+    }
+    send_msg(&mut b, &ClientMessage::RequestScopedWarp { factor: 1000, scope: Local }).await;
+    let bt = clock(&mut b, 1000).await;
+    let at = clock(&mut a, 1).await;
+    assert!(bt.0 >= at.0);
+    send_msg(&mut a, &ClientMessage::RequestScopedWarp { factor: 10, scope: Global }).await;
+    clock(&mut a, 10).await;
+    clock(&mut b, 10).await;
+    send_msg(&mut a, &ClientMessage::RequestScopedWarp { factor: 1, scope: Global }).await;
+    clock(&mut a, 1).await;
+    clock(&mut b, 1).await;
+    async fn launch(ws: &mut Ws, site: &str) -> u64 {
+        send_msg(ws, &ClientMessage::LaunchAt {
+            craft: starter_craft(), site: Some(site.into()), crew: None,
+        }).await;
+        wait_for(ws, |m| match m {
+            ServerMessage::CraftLaunched { vessel, reason, .. } => {
+                assert!(reason.is_none(), "{reason:?}"); vessel
+            }, _ => None,
+        }).await
+    }
+    let ar = launch(&mut a, "LaunchPad_1").await;
+    let br = launch(&mut b, "LaunchPad_2").await;
+    async fn revert(ws: &mut Ws, editor: bool, scope: ose_net::TimeScope) {
+        send_msg(ws, &ClientMessage::RevertScoped { editor, scope }).await;
+        wait_for(ws, |m| match m {
+            ServerMessage::SaveAck { accepted, reason, craft, .. } => {
+                assert!(accepted, "{reason:?}");
+                assert_eq!(craft.is_some(), editor);
+                Some(())
+            }, _ => None,
+        }).await;
+    }
+    async fn vessel_present(ws: &mut Ws, id: u64, owner: u64, present: bool) {
+        wait_for(ws, |m| match m {
+            ServerMessage::Vessels { vessels, .. } =>
+                (vessels.iter().any(|v| v.id == id && v.owner == Some(owner)) == present).then_some(()),
+            _ => None,
+        }).await;
+    }
+    // Each launch has its own revert point. A's rewind leaves B's rocket alive.
+    revert(&mut a, false, Local).await;
+    vessel_present(&mut a, ar, aid, true).await;
+    vessel_present(&mut b, br, bid, true).await;
+    revert(&mut b, false, Local).await;
+    revert(&mut a, true, Local).await;
+    vessel_present(&mut a, ar, aid, false).await;
+    vessel_present(&mut b, br, bid, true).await;
+    // Global revert restores the campaign before B's launch, including A's rocket.
+    revert(&mut b, true, Global).await;
+    vessel_present(&mut a, ar, aid, true).await;
+    vessel_present(&mut b, br, bid, false).await;
+}
+
 #[tokio::test]
 async fn multiplayer_streams_share_consistent_world_updates() {
     let (_server, addr) = spawn_server().await;
     // This peer deliberately stops reading after Hello while the other players keep flying.
     let mut idle = connect_ws(&addr).await;
     hello(&mut idle, None, "idle").await;
+    send_msg(&mut idle, &ClientMessage::JoinCampaign).await;
+    wait_for(&mut idle, |m| matches!(m, ServerMessage::CampaignState { .. }).then_some(())).await;
     let mut peers = Vec::new();
     for i in 0..8 {
         let mut ws = connect_ws(&addr).await;
         let (id, _) = hello(&mut ws, None, &format!("pilot-{i}")).await;
+        send_msg(&mut ws, &ClientMessage::JoinCampaign).await;
+        wait_for(&mut ws, |m| matches!(m, ServerMessage::CampaignState { .. }).then_some(())).await;
         peers.push((id, ws));
     }
     let collect_worlds =
@@ -2210,7 +2417,7 @@ async fn restart_keeps_time_vessels_and_burns() {
     ws.send(Message::Binary(
         ose_net::encode(&ClientMessage::ScheduleBurn {
             vessel: 1,
-            ut: 5.0e5,
+            ut: 2.0e6,
             prograde_mps: 100.0,
             normal_mps: 0.0,
             radial_mps: 0.0,
@@ -2330,7 +2537,7 @@ async fn deployment_snapshots_identify_panel_and_gear_instances() {
     })
     .await;
     let mut craft = starter_craft();
-    for (i, id) in ["solararray_1v_1x6", "solararray_1v_1x6", "landingleg_0v"]
+    for (i, id) in ["solararray_1v_shielded_1x6", "solararray_1v_shielded_1x6", "landingleg_0v", "antenna_0v_16", "light_0v_spot"]
         .iter()
         .enumerate()
     {
@@ -2393,6 +2600,23 @@ async fn deployment_snapshots_identify_panel_and_gear_instances() {
     })
     .await;
     assert_eq!(f.panels, vec![(3, false), (4, false)]);
+    for deploy in [true, false] {
+        send_msg(&mut ws, &ClientMessage::DeployAntennas { vessel, deploy }).await;
+        let f = wait_for(&mut ws, |m| flight(m).filter(|f| f.antennas == vec![(6, deploy)])).await;
+        assert_eq!(f.panels, vec![(3, false), (4, false)]);
+        assert_eq!(f.gear, vec![(5, !initial.gear[0].1)]);
+    }
+    send_msg(&mut ws, &ClientMessage::SetPartDeployment { vessel, part: 3, deploy: true }).await;
+    let f = wait_for(&mut ws, |m| flight(m).filter(|f| f.panels == vec![(3, true), (4, false)])).await;
+    assert_eq!(f.antennas, vec![(6, false)]);
+    for on in [true, false] {
+        send_msg(&mut ws, &ClientMessage::ActionGroup { vessel, group: ose_net::ActionGroup::Lights, on: Some(on) }).await;
+        wait_for(&mut ws, |m| flight(m).filter(|f| f.lights == on && f.part_lights == vec![(7, on)])).await;
+    }
+    let mut visitor = connect_ws(&addr).await;
+    hello(&mut visitor, None, "control visitor").await;
+    send_msg(&mut visitor, &ClientMessage::DeployAntennas { vessel, deploy: true }).await;
+    wait_for(&mut visitor, |m| match m { ServerMessage::FlightAck { vessel: v, accepted: false, .. } if v == vessel => Some(()), _ => None }).await;
 }
 
 #[tokio::test]
@@ -2418,17 +2642,9 @@ async fn session_ownership_presence_and_cleanup() {
         _ => None,
     })
     .await;
-    wait_for(&mut visitor, |m| match m {
-        ServerMessage::SessionPresence { sessions, .. }
-            if sessions
-                .iter()
-                .any(|s| s.id == id && s.owner == Some(owner_id) && s.players == 1) =>
-        {
-            Some(())
-        }
-        _ => None,
-    })
-    .await;
+    send_msg(&mut visitor, &ClientMessage::ListSessions).await;
+    let visible = wait_for(&mut visitor, |m| match m { ServerMessage::SessionList { sessions } => Some(sessions), _ => None }).await;
+    assert!(visible.iter().all(|s| s.id != id));
     // Menu visitors cannot hold down warp.
     send_msg(&mut owner, &ClientMessage::RequestWarp { factor: 100 }).await;
     wait_for(&mut owner, |m| {
@@ -2442,7 +2658,7 @@ async fn session_ownership_presence_and_cleanup() {
     .await;
     wait_for(&mut visitor, |m| match m {
         ServerMessage::Rejected { reason } => {
-            assert!(reason.contains("owner"));
+            assert!(reason.contains("owner") || reason.contains("member"));
             Some(())
         }
         _ => None,
@@ -2455,12 +2671,13 @@ async fn session_ownership_presence_and_cleanup() {
     .await;
     wait_for(&mut visitor, |m| match m {
         ServerMessage::Rejected { reason } => {
-            assert!(reason.contains("owner"));
+            assert!(reason.contains("owner") || reason.contains("member"));
             Some(())
         }
         _ => None,
     })
     .await;
+    invite(&mut owner, &mut visitor, &id).await;
     send_msg(
         &mut visitor,
         &ClientMessage::SelectSession { id: id.clone() },
@@ -2554,11 +2771,12 @@ async fn session_ownership_presence_and_cleanup() {
     })
     .await;
     assert!(sessions.iter().all(|s| s.id != id));
-    // Legacy sessions can be claimed and deleted from the shelf.
+    // An owned shelved session can be managed after reconnecting.
+    let legacy_id = sessions.iter().find(|s| s.name == "Shared campaign").unwrap().id.clone();
     send_msg(
         &mut owner,
         &ClientMessage::ClaimSession {
-            id: "shared".into(),
+            id: legacy_id.clone(),
         },
     )
     .await;
@@ -2568,7 +2786,7 @@ async fn session_ownership_presence_and_cleanup() {
     })
     .await;
     assert_eq!(
-        sessions.iter().find(|s| s.id == "shared").unwrap().owner,
+        sessions.iter().find(|s| s.id == legacy_id).unwrap().owner,
         Some(owner_id)
     );
     send_msg(
@@ -2587,7 +2805,7 @@ async fn session_ownership_presence_and_cleanup() {
     send_msg(
         &mut owner,
         &ClientMessage::DeleteSession {
-            id: "shared".into(),
+            id: legacy_id.clone(),
         },
     )
     .await;
@@ -2596,5 +2814,5 @@ async fn session_ownership_presence_and_cleanup() {
         _ => None,
     })
     .await;
-    assert!(sessions.iter().all(|s| s.id != "shared"));
+    assert!(sessions.iter().all(|s| s.id != legacy_id));
 }

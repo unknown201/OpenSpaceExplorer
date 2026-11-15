@@ -21,6 +21,8 @@ ose-math = { workspace = true }
 bevy_ecs = { workspace = true }
 serde = { workspace = true }
 
+getrandom = "0.3"
+
 [dev-dependencies]
 serde_json = { workspace = true }
 ose-math = { workspace = true }

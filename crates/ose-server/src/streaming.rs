@@ -17,8 +17,9 @@ use tokio::{
 
 pub struct Batch {
     /// Captured before reading the world, so a joining player can skip work begun before they joined.
-    started: Instant,
+    pub(super) started: Instant,
     messages: Box<[Bytes]>,
+    players: std::collections::HashMap<u64, Box<[Bytes]>>,
 }
 
 type Frames = Arc<Batch>;
@@ -34,6 +35,7 @@ impl Default for Streams {
         let empty = Arc::new(Batch {
             started: Instant::now(),
             messages: Box::new([]),
+            players: Default::default(),
         });
         Self {
             snapshots: watch::channel(empty.clone()).0,
@@ -80,10 +82,19 @@ pub fn start(s: super::AppState) {
                     }
                     if s.streams.snapshots.receiver_count() > 0 {
                         let started = std::time::Instant::now();
-                        publish(&s.streams.snapshots, || {
-                            let (time, bodies, vessels) = super::snapshot(&s);
-                            [time, bodies, vessels, super::launch_sites_message(&s)]
-                        });
+                        super::apply_warp(&s);
+                        let players: Vec<_> = s.warp_requests.lock().expect("warp lock").keys().copied().collect();
+                        let mut personalized = std::collections::HashMap::new();
+                        for player in players {
+                            let (time, bodies, vessels) = super::snapshot(&s, player);
+                            if let Some(messages) = encode([time, bodies, vessels, super::launch_sites_message(&s)]) {
+                                personalized.insert(player, messages);
+                            }
+                        }
+                        let (time, bodies, vessels) = super::snapshot(&s, 0);
+                        if let Some(messages) = encode([time, bodies, vessels]) {
+                            let _ = s.streams.snapshots.send(Arc::new(Batch { started, messages, players: personalized }));
+                        }
                         tracing::debug!(elapsed_us = started.elapsed().as_micros() as u64,
                             clients = s.streams.snapshots.receiver_count(), "snapshot published");
                     }
@@ -108,7 +119,7 @@ fn publish<M: IntoIterator<Item = ServerMessage>>(
     let started = Instant::now();
     if let Some(messages) = encode(build()) {
         // send() drops the batch if the last client left while it was being built.
-        let _ = sender.send(Arc::new(Batch { started, messages }));
+        let _ = sender.send(Arc::new(Batch { started, messages, players: Default::default() }));
     }
 }
 
@@ -131,11 +142,11 @@ pub async fn send_bytes(socket: &mut WebSocket, bytes: Bytes) -> bool {
     )
 }
 
-pub async fn send_batch(socket: &mut WebSocket, frames: &Frames) -> bool {
+pub async fn send_batch_for(socket: &mut WebSocket, frames: &Frames, player: u64) -> bool {
     // Bound the whole update, including trajectories for a large fleet. On timeout the caller exits
     // and drops the socket: a partially written frame must never be retried on this connection.
     timeout(WRITE_TIMEOUT, async {
-        for bytes in frames.messages.iter() {
+        for bytes in frames.players.get(&player).unwrap_or(&frames.messages).iter() {
             if socket.send(Message::Binary(bytes.clone())).await.is_err() {
                 return false;
             }

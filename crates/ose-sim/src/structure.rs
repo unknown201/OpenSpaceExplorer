@@ -14,6 +14,7 @@ use ose_math::DVec3;
 use crate::aero::{self, DragCurves, Faces};
 use crate::flight::{Powered, StepOutcome};
 use crate::resources::{FlowNet, Instruction, Request};
+use crate::rigid::to_vessel;
 use crate::rigid::{PartForce, RigidVessel, Turning};
 use crate::thermal;
 
@@ -101,6 +102,8 @@ impl Airflow {
 
 #[derive(Component)]
 pub struct Structure {
+    /// Authored hatch frames transformed into the craft's right-handed vessel axes.
+    pub eva_hatches: Vec<Option<crate::crew::HatchFrame>>,
     pub rigid: RigidVessel,
     /// The part the vessel keeps when it breaks apart (the craft root).
     pub root: usize,
@@ -115,7 +118,7 @@ pub struct Structure {
     /// Last delivered gimbal direction in each engine's exported model frame.
     pub engine_gimbals: Vec<(u16, DVec3)>,
     wheel_actuation_knm: Vec<DVec3>,
-    geometry: Vec<ose_data::flight_geometry::FlightGeometry>,
+    pub(crate) geometry: Vec<ose_data::flight_geometry::FlightGeometry>,
     controls: Vec<ose_data::flight_geometry::PartControl>,
     control_sources: Vec<bool>,
     gimbal_angles: Vec<Vec<[f64; 2]>>,
@@ -128,6 +131,8 @@ pub struct Structure {
     /// Inertial force with a craft-frame application offset; consumed once by `apply`.
     pub(crate) surface_loads: Vec<PartForce>,
     pub suspension_compression_m: Vec<f64>,
+    pub water: Vec<crate::water::WaterPart>,
+    pub(crate) water_damage: Vec<usize>,
     engine_isp: Vec<Option<ose_data::Curve>>,
     engine_throttle_locked: Vec<bool>,
     /// Each part's drag faces after occlusion by stack neighbours (`None` without a drag cube), and its
@@ -150,6 +155,10 @@ pub struct Structure {
     pub crash_tolerance: Vec<f64>,
     /// Deployable solar panels folded out.
     pub deployed: Vec<bool>,
+    pub deploy_defs: Vec<Option<ose_data::Deployable>>,
+    pub light_defs: Vec<Option<ose_data::PartLight>>,
+    /// Effective light output after the electric resource request.
+    pub light_powered: Vec<bool>,
     /// Each part's id and family (like "0010-Probe").
     pub part_ids: Vec<String>,
     pub families: Vec<String>,
@@ -401,6 +410,20 @@ impl Structure {
             })
             .collect();
         let mut s = Structure {
+            eva_hatches: craft
+                .parts
+                .iter()
+                .map(|part| {
+                    let frame = *crate::crew::hatch_frames().get(&part.part_id)?;
+                    let q = part.local_rotation;
+                    let rotate = |v| crate::aero::rotate([q.x, q.y, q.z, q.w], v);
+                    Some(crate::crew::HatchFrame {
+                        position: to_vessel(part.local_position + rotate(frame.position)),
+                        up: to_vessel(rotate(frame.up)),
+                        forward: to_vessel(rotate(frame.forward)),
+                    })
+                })
+                .collect(),
             rigid,
             root,
             stage_parts,
@@ -490,7 +513,39 @@ impl Structure {
             last_airflow: None,
             net: FlowNet::build(craft, defs, resources),
             engine_mixture,
-            deployed: vec![false; n],
+            deployed: craft
+                .parts
+                .iter()
+                .map(|p| {
+                    defs.iter()
+                        .find(|d| d.id == p.part_id)
+                        .and_then(|d| d.deployable)
+                        .is_some_and(|d| d.starts_extended)
+                })
+                .collect(),
+            deploy_defs: craft
+                .parts
+                .iter()
+                .map(|p| {
+                    defs.iter()
+                        .find(|d| d.id == p.part_id)
+                        .and_then(|d| d.deployable)
+                })
+                .collect(),
+            light_defs: craft
+                .parts
+                .iter()
+                .map(|p| {
+                    defs.iter()
+                        .find(|d| d.id == p.part_id)
+                        .and_then(|d| d.light)
+                })
+                .collect(),
+            light_powered: vec![false; n],
+            water: (0..n)
+                .map(|i| crate::water::WaterPart::from_def(def_of(i)))
+                .collect(),
+            water_damage: Vec::new(),
             crash_tolerance: (0..n)
                 .map(|i| def_of(i).map(|d| d.crash_tolerance).unwrap_or(0.0))
                 .collect(),
@@ -756,8 +811,28 @@ impl Structure {
         .map(|v| crate::rigid::to_vessel(aero::rotate(self.part_rot[i], v)).normalized())
     }
 
-    fn part_point(&self, i: usize, point: DVec3) -> DVec3 {
+    pub(crate) fn part_point(&self, i: usize, point: DVec3) -> DVec3 {
         self.rigid.rest_position(i) + crate::rigid::to_vessel(aero::rotate(self.part_rot[i], point))
+    }
+
+    pub(crate) fn water_area_drag(&self, i: usize, velocity: DVec3) -> f64 {
+        let direction = aero::rotate_inverse(
+            self.part_rot[i],
+            crate::rigid::to_vessel(velocity.normalized()),
+        );
+        let sound = self
+            .last_airflow
+            .map(|f| f.speed_of_sound)
+            .unwrap_or(f64::INFINITY);
+        let mach = if sound > 0. {
+            velocity.length() / sound
+        } else {
+            0.
+        };
+        self.faces[i]
+            .as_ref()
+            .map(|f| f.area_drag(&self.curves, direction, mach))
+            .unwrap_or(1.)
     }
 
     fn engine_forces(&self, i: usize, thrust: f64) -> Vec<PartForce> {
@@ -1541,7 +1616,31 @@ impl Structure {
             });
             requests.len() - 1
         });
+        self.light_powered.fill(false);
+        let mut lamps = Vec::new();
+        if p.groups.lights {
+            for i in 0..self.light_defs.len() {
+                if !self.rigid.present[i] {
+                    continue;
+                }
+                if let Some(light) = self.light_defs[i] {
+                    if light.use_per_s > 0.0 {
+                        lamps.push((requests.len(), i));
+                        requests.push(Request {
+                            part: i,
+                            instructions: vec![instruction(light.use_per_s)],
+                            priority: 5,
+                        });
+                    } else {
+                        self.light_powered[i] = true;
+                    }
+                }
+            }
+        }
         let fractions = self.net.process(&requests, dt);
+        for (r, i) in lamps {
+            self.light_powered[i] = fractions[r] >= 0.1;
+        }
         for &(r, i) in &converting {
             self.converter_running[i] = fractions[r];
         }
@@ -2733,6 +2832,32 @@ impl Structure {
         }
     }
 
+    pub fn can_deploy(&self, i: usize, out: bool) -> bool {
+        self.deploy_defs[i].is_none_or(|d| {
+            if out {
+                d.extendable && !(d.shielded_extension && self.shielded[i])
+            } else {
+                d.retractable
+            }
+        })
+    }
+
+    /// Fold antennas without moving panels or landing gear. Fixed antennas are excluded.
+    pub fn deploy_antennas(&mut self, out: bool) -> usize {
+        let mut n = 0;
+        for i in 0..self.deployed.len() {
+            if self.rigid.present[i]
+                && self.deploy_defs[i].is_some_and(|d| d.antenna && d.extendable)
+                && self.can_deploy(i, out)
+                && self.deployed[i] != out
+            {
+                self.deployed[i] = out;
+                n += 1;
+            }
+        }
+        n
+    }
+
     /// Fold all deployable solar panels out (or back in); returns how many changed.
     pub fn deploy_panels(&mut self, out: bool) -> usize {
         let mut n = 0;
@@ -2740,6 +2865,7 @@ impl Structure {
             if self.electric[i].solar_deployable
                 && self.electric[i].solar_output > 0.0
                 && self.rigid.present[i]
+                && self.can_deploy(i, out)
                 && self.deployed[i] != out
             {
                 self.deployed[i] = out;

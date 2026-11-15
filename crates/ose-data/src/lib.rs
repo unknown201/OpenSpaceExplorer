@@ -228,6 +228,9 @@ pub struct PartDef {
     pub crew_capacity: u32,
     pub max_temp_k: f64,
     pub crash_tolerance: f64,
+    /// Authored water displacement multiplier, force offset and optional displacement cube.
+    #[serde(default)]
+    pub water: WaterProperties,
     pub breaking_force: f64,
     pub breaking_torque: f64,
     pub fuel_cross_feed: bool,
@@ -248,6 +251,11 @@ pub struct PartDef {
     /// Electric charge use and production of the part's modules.
     #[serde(default)]
     pub electric: Electric,
+    /// Authored deployment permissions, independent of the electric producer.
+    #[serde(default)]
+    pub deployable: Option<Deployable>,
+    #[serde(default)]
+    pub light: Option<PartLight>,
     /// Experiments the part can run.
     #[serde(default)]
     pub experiments: Vec<science::PartExperiment>,
@@ -297,6 +305,24 @@ pub struct PartDef {
     pub module_names: Vec<String>,
     /// Module data not yet mapped into typed fields, keyed by module name.
     pub raw_modules: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Deployable {
+    pub extendable: bool,
+    pub retractable: bool,
+    pub starts_extended: bool,
+    pub antenna: bool,
+    pub shielded_extension: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PartLight {
+    pub use_per_s: f64,
+    pub color: [f32; 3],
+    pub smooth: bool,
+    pub brighten_s: f32,
+    pub dim_s: f32,
 }
 
 /// Electric charge (units per second) used and made by a part's modules, from their `RequiredResources` /
@@ -536,6 +562,26 @@ pub struct DragCube {
     pub depth: [f64; 6],
     pub center: ose_math::DVec3,
     pub size: ose_math::DVec3,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WaterProperties {
+    #[serde(default = "one")]
+    pub buoyancy: f64,
+    #[serde(default)]
+    pub centre_m: ose_math::DVec3,
+    #[serde(default)]
+    pub cube_name: String,
+}
+
+impl Default for WaterProperties {
+    fn default() -> Self {
+        Self {
+            buoyancy: 1.0,
+            centre_m: Default::default(),
+            cube_name: String::new(),
+        }
+    }
 }
 
 /// Everything the sim needs to start a universe, in one file.

@@ -2,6 +2,10 @@
 
 For repeatable pad/ascent CPU profiles and GPU pass isolation, see
 [ascent performance](../docs/ascent-performance.md) and `scripts/profile-ascent.mjs`.
+For frame caps, batching, sustained-stall measurements and save-lock findings, see
+[client performance](../docs/reference-notes/client-performance.md). Run
+`npx playwright test client_performance.spec.ts --project=chromium` against a private server with
+the built client and real `assets/web` models to check frame caps and held controls.
 
 Playwright drives the real WASM client in Chromium and Firefox against `ose-server` and walks a fixed
 chain of player steps (`src/steps.ts`). Each step ends `PASSED`, `BLOCKED` (the client lacks the
@@ -80,3 +84,11 @@ to `Pass` in the same change.
 | `[data-ose="vessel"]` also carries `data-ose-id` (vessel id); the player's own vessel has class `mine` and the camera follows it; a click follows that vessel |
 | `canvas[data-ose-scale]` | metres per CSS pixel of the map camera, refreshed every frame |
 | `canvas[data-ose-focus]` | id and star-space x y of the focused body, refreshed every frame |
+
+## Campaign access and cross-machine login
+
+`node scripts/check-campaign-access.mjs` checks private campaign lists, sharing from the pause menu,
+joining and sharing as a member, and restoring the owner's account in a fresh browser profile by
+entering the private login code. It defaults to an isolated server at `http://127.0.0.1:7796`; set
+`OSE_BASE_URL` to use another **test** server. It creates accounts and a campaign and writes screenshots
+to `.cache/campaign-sharing.png` and `.cache/campaign-account.png`.

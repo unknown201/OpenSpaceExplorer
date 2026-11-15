@@ -23,6 +23,12 @@ pub fn dock_latched(s: &Shared) -> Vec<(u64, ServerMessage)> {
         list.retain(|x| x.0 != absorbed);
         if let (Some((ida, oa)), Some((idb, ob))) = (ida, idb) {
             tracing::info!(vessel = ida, absorbed = idb, "docked");
+            if oa != ob {
+                let mut points = s.revert.lock().expect("revert lock");
+                for owner in [oa, ob].into_iter().flatten() {
+                    if let Some(point) = points.get_mut(&owner) { point.local_valid = false; }
+                }
+            }
             let mut owners = vec![oa, ob];
             owners.dedup();
             for owner in owners.into_iter().flatten() {

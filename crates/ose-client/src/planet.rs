@@ -67,6 +67,7 @@ struct FrameU {
     star_z: [f32; 4],
     /// the camera's model-frame position modulo TILE_PERIOD (m), for screen-space effects on the tiled maps
     cam_tile: [f32; 4],
+    lamps: [crate::render::Lamp; 8],
 }
 
 #[repr(C)]
@@ -1510,6 +1511,16 @@ impl PlanetRenderer {
 
     /// Prepare a frame for `view` after the camera is set; `false` while the body's terrain or surface texture
     /// is not loaded yet (the caller then draws its own stand-in).
+    pub fn set_lamps(&self, gpu: &Renderer, lamps: &[crate::render::Lamp]) {
+        let values: [crate::render::Lamp; 8] =
+            std::array::from_fn(|i| lamps.get(i).copied().unwrap_or_default());
+        gpu.queue().write_buffer(
+            &self.frame_buf,
+            std::mem::offset_of!(FrameU, lamps) as u64,
+            bytemuck::cast_slice(&values),
+        );
+    }
+
     pub fn prepare(&mut self, gpu: &Renderer, view: &PlanetView) -> bool {
         self.frame_no += 1;
         self.upload_stars();
@@ -1800,6 +1811,7 @@ impl PlanetRenderer {
             ],
             star_x: [star_x.x as f32, star_x.y as f32, star_x.z as f32, 0.0],
             star_z: [star_z.x as f32, star_z.y as f32, star_z.z as f32, 0.0],
+            lamps: [crate::render::Lamp::default(); 8],
             cam_tile: [
                 view.cam.x.rem_euclid(TILE_PERIOD) as f32,
                 view.cam.y.rem_euclid(TILE_PERIOD) as f32,

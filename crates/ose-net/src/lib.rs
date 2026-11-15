@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 42;
+pub const PROTOCOL_VERSION: u16 = 47;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -19,9 +19,19 @@ pub const SNAPSHOT_HZ: u32 = 10;
 /// WebSocket path on the server.
 pub const WS_PATH: &str = "/ws";
 
+/// Scope of time and revert operations. Local affects the player's fleet only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimeScope { Local, Global }
+
 /// Client to server.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {
+    /// Request a persistent invitation for a campaign you own or have joined.
+    ShareSession { id: String },
+    /// Add this account to a campaign using its invitation, without switching the live world.
+    JoinSessionCode { code: String },
+    RequestScopedWarp { factor: u32, scope: TimeScope },
+    RevertScoped { editor: bool, scope: TimeScope },
     Hello {
         protocol: u16,
         token: Option<String>,
@@ -46,7 +56,7 @@ pub enum ClientMessage {
     JoinCampaign,
     /// Ask for the campaign state without joining.
     CampaignInfo,
-    /// Session browser: answers `SessionList`, every campaign on the server, the one being played first.
+    /// Session browser: answers `SessionList`, campaigns owned or joined by this account, the live one first.
     ListSessions,
     /// Play the campaign with this id (resume); answers `CampaignState`, or `Rejected` while another player
     /// is playing a different campaign.
@@ -155,7 +165,7 @@ pub enum ClientMessage {
         vessel: u64,
         kerbal: Option<String>,
     },
-    /// A Kerbal on EVA (`vessel`) climbs into `target` (within 6 m, with a free seat); answers `CrewAck`.
+    /// A Kerbal on EVA boards `target` through a reachable hatch with a free seat; answers `CrewAck`.
     Board {
         vessel: u64,
         target: u64,
@@ -171,6 +181,8 @@ pub enum ClientMessage {
         port: Option<u16>,
     },
     /// Fold the vessel's deployable solar panels out (`deploy`) or in; answers `FlightAck`.
+    SetPartDeployment { vessel: u64, part: u16, deploy: bool },
+    DeployAntennas { vessel: u64, deploy: bool },
     DeployPanels {
         vessel: u64,
         deploy: bool,
@@ -195,13 +207,15 @@ pub enum ClientMessage {
         roll: f32,
     },
     /// A Kerbal on EVA: `run` (Shift) held until changed, `jump` (Space) once from the ground. Its jetpack
-    /// translates with `Translate` (always on for a Kerbal: y up along the Kerbal, Ctrl down). Answers
+    /// translates with `Translate` when RCS is enabled (R); Space also releases a hatch handhold. Answers
     /// `FlightAck`.
     EvaControls {
         vessel: u64,
         run: bool,
         jump: bool,
     },
+    /// Release the current hatch handhold or grab a nearby hatch ladder (F).
+    EvaInteract { vessel: u64 },
     /// Roll input (-1..1, Q/E), held until changed; answers `FlightAck`.
     SetRoll {
         vessel: u64,
@@ -391,6 +405,8 @@ pub struct VesselState {
     pub name: String,
     /// Player who owns the vessel, if any.
     pub owner: Option<u64>,
+    /// At least one onboard experiment can collect science at the current location now.
+    pub science_available: bool,
     pub reference_body: u16,
     pub position_m: DVec3,
     pub velocity_mps: DVec3,
@@ -591,6 +607,9 @@ pub struct FlightReadout {
     pub crew: Vec<(u16, String)>,
     /// This vessel is a Kerbal on EVA.
     pub eva: bool,
+    pub eva_attached: bool,
+    /// Available hatch interaction points as offsets from the mass centre in inertial axes.
+    pub eva_hatches: Vec<DVec3>,
     /// Free docking ports (craft part indices) and docked joints (part docked to, part that docked).
     pub docking_ports: Vec<u16>,
     pub docked: Vec<(u16, u16)>,
@@ -603,6 +622,10 @@ pub struct FlightReadout {
     pub panels_deployed: bool,
     /// Each attached deployable panel's command state, by craft part index (animation instances).
     pub panels: Vec<(u16, bool)>,
+    pub antennas: Vec<(u16, bool)>,
+    pub non_retractable: Vec<u16>,
+    /// Attached light modules and their actual powered output.
+    pub part_lights: Vec<(u16, bool)>,
     /// Fell over on landing and lies on its side.
     pub tipped: bool,
     /// Parachutes: (craft part index, state, how far open 0..1).
@@ -796,6 +819,8 @@ pub struct StageReadout {
 /// Server to client.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ServerMessage {
+    SessionShareCode { id: String, code: String },
+    SessionJoined { id: String, name: String },
     Welcome {
         player_id: u64,
         token: String,

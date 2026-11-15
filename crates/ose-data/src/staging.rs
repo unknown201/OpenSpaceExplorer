@@ -347,6 +347,7 @@ mod tests {
         engine: Option<(f64, f64, &str)>,
     ) -> PartDef {
         PartDef {
+            water: Default::default(),
             flight_geometry: Default::default(),
             id: id.into(),
             title_key: id.into(),
@@ -401,6 +402,8 @@ mod tests {
             reaction_wheel_torque_knm: 0.0,
             reaction_wheel_axes_knm: None,
             electric: Default::default(),
+            deployable: None,
+            light: None,
             experiments: vec![],
             docking: None,
             parachute: None,

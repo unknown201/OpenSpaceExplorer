@@ -433,6 +433,8 @@ pub struct FlightView {
     walk_speed: f64,
     walk_phase: f64,
     deployments: HashMap<(u64, usize), crate::animation::Deployment>,
+    deployment_cursors: HashMap<(u64, usize), (usize, f32)>,
+    pub audio_events: Vec<String>,
     gimbals: HashMap<(u64, usize), crate::gimbal::Driver>,
     /// Craft axes and local horizon of the last frame, for the navball.
     /// Height above the ground under the vessel (the altimeter's terrain mode), once the body's map is loaded.
@@ -469,7 +471,7 @@ pub struct FlightInput<'a> {
     /// Vessel and body star-space positions, body star-space velocity, at `ut`.
     pub vessel_pos: DVec3,
     /// Other vessels' star-space positions and what they are, drawn when they are near.
-    pub nearby_vessels: &'a [(DVec3, Stand)],
+    pub nearby_vessels: &'a [NearbyVessel<'a>],
     /// What the flown vessel is when it has no craft: a Kerbal on EVA, a flag, or an unknown craft.
     pub stand: Stand,
     pub vessel_vel: DVec3,
@@ -495,11 +497,25 @@ pub struct FlightInput<'a> {
     pub star_radius: f64,
 }
 
+pub struct NearbyVessel<'a> {
+    pub position: DVec3,
+    pub stand: Stand,
+    pub state: &'a ose_net::VesselState,
+    pub craft: Option<&'a ose_data::craft::Craft>,
+}
+
 fn quat_from_basis(x: DVec3, y: DVec3, z: DVec3) -> DQuat {
     DQuat::from_mat3(&DMat3::from_cols(x, y, z)).normalize()
 }
 
 impl FlightView {
+    /// Restored snapshots start at their saved terminal state without replaying old cues.
+    pub fn reset_part_controls(&mut self) {
+        self.deployments.clear();
+        self.deployment_cursors.clear();
+        self.audio_events.clear();
+    }
+
     pub fn new() -> FlightView {
         FlightView {
             mode: CameraMode::Auto,
@@ -517,6 +533,8 @@ impl FlightView {
             walk_speed: 0.0,
             walk_phase: 0.0,
             deployments: HashMap::new(),
+            deployment_cursors: HashMap::new(),
+            audio_events: Vec::new(),
             gimbals: HashMap::new(),
             agl_m: None,
             pick_boxes: Vec::new(),
@@ -579,8 +597,8 @@ impl FlightView {
     }
 
     pub fn orbit(&mut self, dx: f64, dy: f64) {
-        self.yaw -= dx * 0.005;
-        self.pitch = (self.pitch + dy * 0.005).clamp(-1.45, 1.45);
+        self.yaw -= crate::interaction::orbit_radians(dx);
+        self.pitch = (self.pitch + crate::interaction::orbit_radians(dy)).clamp(-1.45, 1.45);
     }
 
     /// The craft part under a pixel of the last frame (nearest box along the camera ray).
@@ -950,6 +968,7 @@ impl FlightView {
         let planet = self
             .planet
             .get_or_insert_with(|| crate::planet::PlanetRenderer::new(gpu));
+        let mut frame_lamps = Vec::new();
         let planet_ready = planet.prepare(
             gpu,
             &crate::planet::PlanetView {
@@ -1065,6 +1084,7 @@ impl FlightView {
                                 f.gear
                                     .iter()
                                     .chain(&f.panels)
+                                    .chain(&f.antennas)
                                     .find(|(p, _)| *p as usize == i)
                                     .map(|(_, out)| *out)
                             })
@@ -1073,9 +1093,26 @@ impl FlightView {
                             .deployments
                             .entry((inp.vessel.id, i))
                             .or_insert_with(|| crate::animation::Deployment::new(deployed, inp.ut));
-                        let fraction =
-                            driver.update(deployed, inp.ut, model.rig.clips[clip].duration);
-                        animation = model.rig.deployment_sample(fraction);
+                        let selected = if deployed { clip } else { model.rig.deployment_close.unwrap_or(clip) };
+                        let duration = model.rig.clips[selected].duration;
+                        let fraction = driver.update(deployed, inp.ut, duration);
+                        animation = if !deployed && selected != clip {
+                            Some(crate::animation::ClipSample { clip: selected, time: duration * (1.0 - fraction), looping: false })
+                        } else { model.rig.deployment_sample(fraction) };
+                        if let Some(sample) = animation {
+                            let key = (inp.vessel.id, i);
+                            if let Some((old_clip, old_time)) = self.deployment_cursors.insert(key, (sample.clip, sample.time)) {
+                                let from = if old_clip == sample.clip { old_time } else {
+                                    let old_duration = model.rig.clips[old_clip].duration.max(0.001);
+                                    (1.0 - old_time / old_duration) * duration
+                                };
+                                if sample.time >= from {
+                                    for cue in &model.rig.clips[sample.clip].audio_events {
+                                        if cue.time > from && cue.time <= sample.time { self.audio_events.push(cue.sound.clone()); }
+                                    }
+                                }
+                            }
+                        }
                     } else if p.part_id.starts_with("cargobay_") {
                         // The bays' controllers have several clips (open, close, the "min" variants);
                         // the open clip runs from shut to open.
@@ -1587,6 +1624,7 @@ impl FlightView {
                     }
                 }
             }
+            self.deployment_cursors.retain(|(v, i), _| *v == inp.vessel.id && parts.iter().any(|p| p.0 == *i));
             self.deployments
                 .retain(|(v, i), _| *v == inp.vessel.id && parts.iter().any(|p| p.0 == *i));
             // The chute parts' own canopy meshes are skinned in their open pose; the canopy is drawn from the
@@ -1688,6 +1726,27 @@ impl FlightView {
                     items.push(it);
                 }
             }
+            let mut lamps = Vec::new();
+            for (i, name, lp, lq, animation) in &parts {
+                if !readout.is_some_and(|f| f.part_lights.iter().any(|l| l.0 as usize == *i && l.1)) { continue; }
+                if let Some(model) = gpu.model(name) {
+                    let world = model.rig.world_matrices(&model.rig.pose(*animation));
+                    let rotation = vessel_rot * *lq;
+                    for light in &model.rig.lights {
+                        if let Some(node) = world.get(light.node) {
+                            let at = pos - cam + vessel_rot * (*lp + origin) + rotation * node.w_axis.truncate().as_dvec3();
+                            // Mirroring Unity X preserves the light's forward +Z axis.
+                            let direction = rotation * node.transform_vector3(glam::Vec3::Z).normalize_or_zero().as_dvec3();
+                            lamps.push(crate::render::Lamp {
+                                position_range: at.as_vec3().extend(light.range).to_array(),
+                                direction_cone: direction.as_vec3().extend(light.spot_cos).to_array(),
+                                color_intensity: [1.0, 1.0, 1.0, light.intensity],
+                            });
+                        }
+                    }
+                }
+            }
+            frame_lamps = lamps.clone();
             for (i, name, lp, lq, animation) in parts {
                 if !gpu.has_model(&name) {
                     continue;
@@ -1713,6 +1772,8 @@ impl FlightView {
                 let pid = craft.parts[i].part_id.as_str();
                 let mut it = DrawItem::lit(name, wpos - cam, vessel_rot * lq, 1.0, sun);
                 it.animation = animation;
+                it.lamps = lamps.clone();
+                if readout.is_some_and(|f| f.part_lights.iter().any(|l| l.0 as usize == i && l.1)) { it.glow = gpu.model(&it.model).map_or(6.0, |m| m.rig.light_emission); }
                 let poses: Vec<_> = readout
                     .map(|f| {
                         f.gimbal_poses
@@ -1795,6 +1856,9 @@ impl FlightView {
             // keeps the vessel's attitude.
             let rot = match inp.stand {
                 Stand::Craft => vessel_rot,
+                // EVA +Z is the character's forward, also used by jetpack translation.
+                // The exported character faces +Z; craft meshes use a different axis convention.
+                Stand::Kerbal { .. } if readout.is_some_and(|f| f.situation != ose_net::FlightSituation::Landed) => vessel_rot,
                 Stand::Kerbal { .. } => {
                     let ahead = vessel_rot * DVec3::Y;
                     let level = (ahead - up * ahead.dot(up)).normalize_or_zero();
@@ -1823,7 +1887,9 @@ impl FlightView {
                     self.walk_phase += self.walk_speed * dt * 5.0;
                 }
                 self.walk_last = Some((pos, inp.now_ms));
-                kerbal_clip = Some(if !landed {
+                kerbal_clip = Some(if readout.is_some_and(|f| f.eva_attached) {
+                    "ladder"
+                } else if !landed {
                     "air"
                 } else if self.walk_speed > 1.6 {
                     "run"
@@ -1859,7 +1925,7 @@ impl FlightView {
                 let rotation = rot.inverse() * dir_to_model(r, g(f.rcs_rotate), spin, inp.ut);
                 if let Some(jets) = nozzles.get("eva_kerbal") {
                     for nozzle in jets {
-                        let throttle = if landed {
+                        let throttle = if landed || f.eva_attached || !f.rcs {
                             0.0
                         } else {
                             crate::particles::rcs_nozzle_throttle(
@@ -1908,19 +1974,41 @@ impl FlightView {
             }
         }
         // Other vessels within a few kilometres, as the original loads crafts around the active one.
-        for (o, stand) in inp.nearby_vessels {
-            let p = to_model(*o - inp.body_pos, spin, inp.ut);
+        for nearby in inp.nearby_vessels {
+            let p = to_model(nearby.position - inp.body_pos, spin, inp.ut);
             if (p - pos).length() > 5_000.0 {
                 continue;
             }
-            let rot = DQuat::from_rotation_arc(DVec3::Y, p.normalize_or_zero());
-            for (name, _, scale) in stand.models(gpu) {
+            let rot = nearby.state.flight.as_ref().and_then(|f| {
+                crate::orientation::from_axes(
+                    dir_to_model(r, g(f.facing), spin, inp.ut),
+                    dir_to_model(r, g(f.roll_ref), spin, inp.ut),
+                )
+            }).unwrap_or_else(|| DQuat::from_rotation_arc(DVec3::Y, p.normalize_or_zero()));
+            if let Some(craft) = nearby.craft {
+                let rot = rot * crate::orientation::mesh_to_vessel();
+                let readout = nearby.state.flight.as_ref();
+                let origin = readout.map(|f| crate::orientation::mesh_origin(f.centre_of_mass_m)).unwrap_or(DVec3::ZERO);
+                let gone = jettisoned(craft, readout.map(|f| f.stage as usize).unwrap_or(0), inp.is_decoupler);
+                for (i, (part, (pp, q))) in craft.parts.iter().zip(crate::thumb::poses(craft)).enumerate() {
+                    if gone.get(i).copied().unwrap_or(false) { continue; }
+                    let name = format!("part:{}", part.part_id);
+                    gpu.request_model(&name, &format!("assets/parts/{}.glb", part.part_id));
+                    let part_rotation = DQuat::from_xyzw(q.x, -q.y, -q.z, q.w).normalize();
+                    let mut item = DrawItem::lit(name, p - cam + rot * (DVec3::new(-pp.x, pp.y, pp.z) + origin), rot * part_rotation, 1.0, sun);
+                    item.ambient = part_ambient;
+                    item.sun = sun_share;
+                    items.push(item);
+                }
+                continue;
+            }
+            for (name, _, scale) in nearby.stand.models(gpu) {
                 let mut it = DrawItem::lit(name.to_string(), p - cam, rot, scale, sun);
 
                 it.ambient = part_ambient;
                 it.sun = sun_share;
                 it.animation = kerbal_sample(gpu, name, "idle", inp.now_ms);
-                if let Some(c) = stand.tint(name) {
+                if let Some(c) = nearby.stand.tint(name) {
                     it.color = c;
                 }
                 items.push(it);
@@ -1974,6 +2062,8 @@ impl FlightView {
         };
         let k = (1.0 - t).powf(2.5);
         let clear = [0.45 * k, 0.65 * k, 0.92 * k];
+        for item in &mut items { item.lamps = frame_lamps.clone(); }
+        if let Some(planet) = &self.planet { planet.set_lamps(gpu, &frame_lamps); }
         if planet_ready {
             // The planet's terrain replaces the hub scene's flat 60 km ground plane.
             gpu.hide_meshes("ksc", &["ground"]);

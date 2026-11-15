@@ -1,5 +1,8 @@
 # Flight control reference port
 
+For throttle, camera, VAB, time-warp and maneuver-handle interaction records
+and the strict numerical parity gate, see [interaction-parity.md](interaction-parity.md).
+
 The installed KSP2 `KSP.Sim/VesselSAS.cs`, `PIDclamp.cs`, and
 `KSP.Sim.impl/FlightInputHandler.cs` are the reference for this change.
 

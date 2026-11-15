@@ -138,8 +138,8 @@ impl VabView {
     }
 
     pub fn orbit(&mut self, dx_px: f64, dy_px: f64) {
-        self.yaw -= dx_px * 0.005;
-        self.pitch = (self.pitch + dy_px * 0.005).clamp(-1.2, 1.4);
+        self.yaw -= crate::interaction::orbit_radians(dx_px);
+        self.pitch = (self.pitch + crate::interaction::orbit_radians(dy_px)).clamp(-1.2, 1.4);
     }
 
     /// Move the camera up (positive) or down along the craft, in screen pixels of a drag.

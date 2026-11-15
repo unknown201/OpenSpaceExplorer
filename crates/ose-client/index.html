@@ -51,7 +51,7 @@
     #menu h1 { margin: 0 0 4px; font-size: 22px; font-weight: 600; color: #e6ecf7; letter-spacing: 0.5px; }
     #menu .sub { color: #6f7f9c; font-size: 12px; margin-bottom: 18px; }
     #menu label { display: block; font-size: 12px; color: #9fb0cc; margin: 10px 0 4px; }
-    #menu input[type=text] { width: 100%; box-sizing: border-box; padding: 6px 8px; font: inherit;
+    #menu input[type=text], #menu input[type=password] { width: 100%; box-sizing: border-box; padding: 6px 8px; font: inherit;
       background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; }
     #menu button { margin-top: 16px; width: 100%; padding: 8px; font: inherit; font-size: 15px;
       background: #1f3d6b; color: #fff; border: 1px solid #3b63a8; border-radius: 4px; cursor: pointer; }
@@ -65,7 +65,10 @@
       padding: 8px 10px; margin-bottom: 6px; border: 1px solid #2c3d63; border-radius: 6px; background: #06080f; }
     #sessions .name { color: #e6ecf7; font-size: 14px; }
     #sessions .meta { color: #6f7f9c; font-size: 12px; margin-top: 2px; }
-    #sessions .session-actions { display: flex; gap: 6px; }
+    #sessions .session-actions { display: flex; flex-wrap: wrap; gap: 6px; grid-column: 1 / -1; justify-content: flex-end; }
+    #sessions li > div { min-width: 0; overflow-wrap: anywhere; }
+    #sessions li.empty { display: block; }
+    #sessions li.empty::before { display: none; }
     #sessions button:disabled { opacity: 0.45; cursor: default; }
     #sessions button { margin: 0; width: auto; padding: 6px 14px; font-size: 13px; }
     #sessions .empty { color: #6f7f9c; font-size: 12px; padding: 8px 0; }
@@ -169,6 +172,9 @@
     #login-bar { position: absolute; right: 0; top: 0; height: calc(50 * var(--u)); min-width: calc(210 * var(--u)); display: flex; align-items: center; gap: calc(10 * var(--u));
       padding: 0 calc(16 * var(--u)); background: #000; color: #fff; font-size: calc(15 * var(--u)); }
     #login-bar label { margin: 0; color: #9fb0cc; font-size: calc(13 * var(--u)); white-space: nowrap; }
+    #login-bar input[type=password] { width: calc(210 * var(--u)); font-size: calc(13 * var(--u)); }
+    #session-share-code, #account-code, #join-code, #paused-share-code { box-sizing: border-box; width: 100%; font-family: monospace; }
+    #sessions .session-actions { flex-wrap: wrap; justify-content: flex-end; }
     #login-bar input[type=text] { width: calc(160 * var(--u)); padding: calc(4 * var(--u)) calc(8 * var(--u)); font-size: calc(15 * var(--u)); background: #111; border-color: #333; }
     #version { position: absolute; left: calc(80 * var(--u)); bottom: calc(24 * var(--u)); font-size: calc(13 * var(--u)); color: #ffffff80; }
     #extras { position: absolute; right: calc(80 * var(--u)); bottom: calc(24 * var(--u)); font-size: calc(13 * var(--u)); color: #ffffff80; }
@@ -194,12 +200,15 @@
     #campaign .list-title::before, #campaign .list-title::after { content: ""; height: calc(10 * var(--u)); background: #2e3340; flex: 1; }
     #campaign .list-title::before { flex: 0 0 calc(16 * var(--u)); }
     #sessions { margin: 0; padding: calc(10 * var(--u)) calc(24 * var(--u)) calc(10 * var(--u)) calc(10 * var(--u)); overflow: auto; flex: 1; min-height: 0; }
-    #sessions li { grid-template-columns: calc(75 * var(--u)) 1fr auto; min-height: calc(72 * var(--u)); margin-bottom: calc(5 * var(--u)); padding: calc(8 * var(--u)) calc(10 * var(--u)); background: #000; border: 0; border-bottom: calc(6 * var(--u)) solid transparent; border-radius: 0;
+    #sessions li { grid-template-columns: calc(75 * var(--u)) minmax(0, 1fr); min-height: calc(72 * var(--u)); margin-bottom: calc(5 * var(--u)); padding: calc(8 * var(--u)) calc(10 * var(--u)); background: #000; border: 0; border-bottom: calc(6 * var(--u)) solid transparent; border-radius: 0;
       border-image: repeating-linear-gradient(90deg, #f2f2f233 0 calc(4 * var(--u)), transparent calc(4 * var(--u)) calc(8 * var(--u))) 0 0 1 0 / 0 0 calc(6 * var(--u)) 0; }
     #sessions li::before { content: ""; width: calc(75 * var(--u)); height: calc(40 * var(--u)); background: url(assets/ui/ELE-Placeholder-Flag.png) center / contain no-repeat; }
     #sessions .name { font-size: calc(18 * var(--u)); font-weight: 600; color: #f2f2f2; }
     #sessions .meta { font-size: calc(12 * var(--u)); color: #ffffff99; }
-    #sessions .session-actions { display: flex; gap: 6px; }
+    #sessions .session-actions { display: flex; flex-wrap: wrap; gap: 6px; grid-column: 1 / -1; justify-content: flex-end; }
+    #sessions li > div { min-width: 0; overflow-wrap: anywhere; }
+    #sessions li.empty { display: block; }
+    #sessions li.empty::before { display: none; }
     #sessions button:disabled { opacity: 0.45; cursor: default; }
     #sessions button { padding: calc(6 * var(--u)) calc(14 * var(--u)); font-size: calc(14 * var(--u)); }
     #sessions .empty { color: #ffffff80; padding: calc(8 * var(--u)); }
@@ -315,6 +324,7 @@
     #flight-hud .fh-sas button i, #flight-hud .fh-actions button i { width: 70%; height: 70%; background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
     #flight-hud .fh-sas button.on, #flight-hud .fh-actions button.on { color: #7dff8a; border-color: #7dff8a99; background: #17321ce6; }
     #flight-hud .fh-sas button:disabled, #flight-hud .fh-actions button:disabled { opacity: 0.35; cursor: default; }
+    #flight-hud button.science-ready { color: #b2f4d2; border-color: #77dfad99; box-shadow: 0 0 calc(10 * var(--u)) #66dba04d, inset 0 0 calc(5 * var(--u)) #66dba026; }
     /* Crew portraits above the action bar, as the original's bottom-right Kerbal portraits. */
     .fh-crewbox { position: absolute; right: calc(16 * var(--u)); bottom: calc(138 * var(--u)); display: flex; gap: calc(6 * var(--u)); pointer-events: auto; }
     .fh-kerbal { width: calc(124 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); overflow: hidden; }
@@ -741,6 +751,7 @@
     #menu #screen-paused #resume { color: #4f8f1f; }
     body:not(:has(#flight-hud.open)) #screen-paused .pm-flight { display: none; }
     #flight-hud .fh-crew button.hidden { display: none; }
+    #fh-stages.hidden, #fh-stage.hidden, #fh-stage-btn.hidden, #fh-full.hidden, #fh-cut.hidden { display: none; }
     #flight-hud .fh-crew:not(:has(button:not(.hidden))) { display: none; }
     #menu #screen-paused #leave { color: #b03a2e; margin-top: calc(12 * var(--u)); }
   </style>
@@ -752,6 +763,7 @@
   <div id="hud">
     <span id="ut" data-ose="ut" title="Universal time">UT --</span>
     <span class="warp">
+      <label title="Local advances only your fleet; global changes the rate for everyone">Scope <select id="time-scope" data-ose="time-scope"><option value="local">Local player</option><option value="global">All players</option></select></label>
       <button id="warp-down" data-ose="warp-down" title="Slow down">&minus;</button>
       <button id="warp" data-ose="warp" title="Time warp; click to speed up">&times;--</button>
     </span>
@@ -780,6 +792,8 @@
         <div id="login-bar">
           <label for="player-name">Pilot</label>
           <input id="player-name" data-ose="player-name" type="text" maxlength="32" autocomplete="nickname" value="Pilot" />
+          <label for="login-code">Login code</label>
+          <input id="login-code" data-ose="login-code" type="password" maxlength="64" autocomplete="current-password" placeholder="Blank for a new account" title="Use your private login code from another machine to access the same account" />
         </div>
         <div id="version">OpenSpaceExplorer, a shared Kerbol system in the browser</div>
         <div id="extras"><a href="https://github.com/unknown201/OpenSpaceExplorer" target="_blank" rel="noopener">Source</a></div>
@@ -792,7 +806,9 @@
           <div class="subtitle"><b>##</b>Shared server</div>
           <div class="divider"></div>
           <div class="options">
-            <div class="list-title">all campaigns</div>
+            <div class="list-title">your campaigns</div>
+            <label for="session-share-code">Game share code</label>
+            <input id="session-share-code" data-ose="session-share-code" type="text" readonly placeholder="Choose Share on a game" />
             <ul id="sessions" data-ose="session-list"><li class="empty">asking the server...</li></ul>
           </div>
           <div class="row">
@@ -800,6 +816,25 @@
           </div>
         </div>
         <div id="campaign-right">
+        <details id="join-details" open>
+          <summary>Join with a share code</summary>
+          <div class="create">
+            <label for="join-code">Game share code</label>
+            <input id="join-code" data-ose="join-code" type="text" maxlength="64" autocomplete="off" spellcheck="false" />
+            <button id="join-code-submit" data-ose="join-code-submit">Join game</button>
+            <div class="info">A shared game stays in your account on every machine. Resume it from your campaigns.</div>
+          </div>
+        </details>
+        <details id="account-details">
+          <summary>Your account</summary>
+          <div class="create">
+            <label for="account-code">Private login code</label>
+            <input id="account-code" data-ose="account-code" type="password" readonly autocomplete="off" />
+            <button id="account-code-show" data-ose="account-code-show">Show login code</button>
+            <div class="info">Keep this code private. Enter it at the main menu on another machine to log in to this account. Use a game share code to invite friends.</div>
+            <button id="account-logout" data-ose="account-logout">Sign out</button>
+          </div>
+        </details>
         <details id="create-details" data-ose="create-session">
           <summary>Start a new campaign</summary>
           <div class="create">
@@ -948,12 +983,15 @@
         <button id="resume" data-ose="resume">Resume</button>
         <button id="to-ksc" class="secondary" data-ose="to-ksc">Kerbal Space Center</button>
         <button id="to-tracking" class="secondary" data-ose="to-tracking">Tracking Station</button>
+        <label class="pm-flight">Revert scope <select id="revert-scope" data-ose="revert-scope"><option value="local">Local player</option><option value="global">All players</option></select></label>
         <button id="to-revert-launch" class="secondary pm-flight" data-ose="to-revert-launch" data-save-action="RevertToLaunch">Revert to Launch</button>
         <button id="to-revert-editor" class="secondary pm-flight" data-ose="to-revert-editor" data-save-action="RevertToEditor">Revert to VAB</button>
         <button id="to-recover" class="secondary pm-flight" data-ose="to-recover" title="Recover the vessel (landed or splashed down on Kerbin)">Recover Vessel</button>
         <button id="to-quicksave" class="secondary" data-ose="to-quicksave" data-save-action="QuickSave" title="F5">Quicksave</button>
         <button id="to-quickload" class="secondary" data-ose="to-quickload" data-save-action="QuickLoad" title="F9">Quickload</button>
         <button id="to-settings" class="secondary" data-ose="to-settings" data-open-settings>Settings</button>
+        <button id="share-current" data-ose="share-current">Share game</button>
+        <input id="paused-share-code" data-ose="paused-share-code" type="text" readonly aria-label="Game share code" placeholder="Share code appears here" />
         <button id="to-sessions" class="secondary" data-ose="to-sessions">Exit to Main Menu</button>
         <button id="sound-toggle" class="secondary sound-toggle" data-ose="sound-toggle">Sound: on</button>
         <button id="leave" class="secondary" data-ose="leave">Leave session</button>
@@ -982,8 +1020,9 @@
           <label class="set-row"><span>Show key hints on screen</span><input id="settings-hints" data-ose="settings-hints" type="checkbox" checked /></label>
         </section>
         <section data-tab="graphics">
+          <label class="set-row"><span>Frame rate limit</span><select id="settings-frame-limit" data-ose="settings-frame-limit"><option value="30">30 FPS</option><option value="60" selected>60 FPS</option><option value="120">120 FPS</option><option value="0">Unlimited</option></select></label>
           <label class="set-row"><span>Render resolution</span><input id="settings-res" data-ose="settings-res" type="range" min="50" max="100" step="5" value="100" /><b id="settings-res-text">100%</b></label>
-          <label class="set-row"><span>Show FPS</span><input id="settings-fps" data-ose="settings-fps" type="checkbox" /></label>
+          <label class="set-row"><span>Show FPS and stalls</span><input id="settings-fps" data-ose="settings-fps" type="checkbox" /></label>
         </section>
         <section data-tab="audio">
           <div class="set-row"><span>Sound</span><button id="settings-sound" class="sound-toggle" data-ose="sound-toggle">Sound: on</button></div>
@@ -1013,7 +1052,7 @@
         <div class="fh-row fh-orbit" data-ose="flight-apsides"><span class="fh-label" title="Apoapsis: highest point of the orbit and the time to it">AP</span><b id="fh-ap">--</b><span id="fh-ap-t" class="fh-small">--</span><span class="fh-label" title="Periapsis: lowest point of the orbit and the time to it">PE</span><b id="fh-pe">--</b><span id="fh-pe-t" class="fh-small">--</span></div>
         <div class="fh-row"><span id="fh-attitude">--</span><span id="fh-twr" class="fh-small">--</span><span id="fh-target" class="fh-small" data-ose="flight-target" title="Target: distance and relative speed"></span><span id="fh-aero" class="fh-small" data-ose="flight-aero" title="Lift from wings; jets: thrust follows speed and air, and needs an intake"></span></div>
         <div class="fh-row"><button id="fh-science" data-ose="flight-science" title="run every experiment on board">Experiments</button><button id="fh-transmit" data-ose="flight-transmit" title="send the reports home">Transmit</button><button id="fh-recover" data-ose="flight-recover" title="recover the vessel (landed on Kerbin)">Recover</button></div>
-        <div class="fh-row fh-crew"><button id="fh-eva" data-ose="flight-eva" class="hidden" title="a Kerbal climbs out">EVA</button><button id="fh-board" data-ose="flight-board" class="hidden" title="climb into the craft within reach">Board</button><button id="fh-flag" data-ose="flight-flag" class="hidden" title="plant the agency flag">Plant flag</button><button id="fh-undock" data-ose="flight-undock" class="hidden" title="release the last docking">Undock</button></div>
+        <div class="fh-row fh-crew"><button id="fh-eva" data-ose="flight-eva" class="hidden" title="a Kerbal climbs out">EVA</button><button id="fh-board" data-ose="flight-board" class="hidden" title="climb into the craft within reach (B)">Board (B)</button><button id="fh-grab" data-ose="flight-grab" class="hidden" title="grab or release the hatch ladder (F)">Grab (F)</button><button id="fh-flag" data-ose="flight-flag" class="hidden" title="plant the agency flag">Plant flag</button><button id="fh-undock" data-ose="flight-undock" class="hidden" title="release the last docking">Undock</button></div>
         <div class="fh-row"><button id="fh-full" data-ose="flight-throttle-full" title="Full throttle (Z)">Full</button><button id="fh-cut" data-ose="flight-throttle-cut" title="Cut the throttle (X)">Cut</button><button id="fh-map" title="Map view (M)">Map</button><button id="fh-ksc" title="Leave the vessel and go to the Kerbal Space Center">KSC</button></div>
       </div>
     </div>
@@ -1042,7 +1081,7 @@
     <div class="fh-missions fh-res" id="fh-res" data-ose="flight-resources"><div class="fh-label">RESOURCES</div><div id="fh-res-list"></div></div>
     <div class="fh-missions" id="fh-missions" data-ose="flight-missions"><div class="fh-label">MISSIONS</div><ul id="fh-missions-list"></ul></div>
     <div class="fh-comm" id="fh-comm" data-ose="flight-comm" title="CommNet: transmitting science and controlling probes need a link to the KSC"><i style="--ico:url(assets/ui/hud/ICO-Flight-Cluster-Commnet.png)"></i><span id="fh-comm-text">--</span></div>
-    <div class="fh-help">W/S/A/D steer (hold, Caps Lock fine), Shift/Ctrl throttle, Z/X full/cut, Space stage, T SAS on/off, G gear, B brakes, M map, right-drag to look, Home resets the camera</div>
+    <div class="fh-help" id="fh-help">W/S/A/D steer (hold, Caps Lock fine), Shift/Ctrl throttle, Z/X full/cut, Space stage, T SAS on/off, G gear, B brakes, M map, right-drag to look, Home resets the camera</div>
   </div>
   <div id="node-panel" data-ose="node-panel">
     <label>time <input id="node-dt" type="range" min="60" max="600" step="1" value="120" /><span id="node-dt-text">T-2:00</span></label>

@@ -817,6 +817,10 @@ impl Editor {
 /// Symmetry counts the original offers (`BuilderSymmetryMode` X1..X8), in X-key order.
 pub const SYMMETRY: [u32; 6] = [1, 2, 3, 4, 6, 8];
 
+pub fn radial_angle_radians(copy: u32, count: u32) -> f64 {
+    std::f64::consts::TAU * copy as f64 / count.max(1) as f64
+}
+
 /// The part's surface attach node, if it can go on another part's side.
 pub fn surface_node(spec: &PartSpec) -> Option<&NodeSpec> {
     spec.attach_nodes
@@ -965,7 +969,7 @@ impl Editor {
         }
         (0..symmetry.max(1))
             .map(|k| {
-                let az = spot.azimuth + std::f64::consts::TAU * k as f64 / symmetry.max(1) as f64;
+                let az = spot.azimuth + radial_angle_radians(k, symmetry);
                 let out = DVec3::new(az.cos(), 0.0, az.sin());
                 let contact = DVec3::new(axis.x, spot.height, axis.z) + out * radius;
                 let q = quat_mul(quat_mul(facing_in(az), spot.turn), align);

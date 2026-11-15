@@ -22,7 +22,9 @@ pub mod sas;
 pub mod science;
 pub mod structure;
 pub mod surface;
+pub mod water;
 pub mod thermal;
+pub mod timelines;
 pub mod trajectory;
 pub mod vessels;
 
@@ -72,6 +74,8 @@ pub struct StageResult {
 pub struct Universe {
     pub world: World,
     params: trajectory::SolverParams,
+    pub timelines: std::collections::BTreeMap<u64, timelines::TimelineClock>,
+    active_timeline: Option<u64>,
     /// Pieces that broke off powered vessels since the last `take_broken_off`: (vessel, new debris).
     broken_off: Vec<(Entity, Entity)>,
 }
@@ -92,6 +96,8 @@ impl Universe {
             world,
             params: trajectory::SolverParams::default(),
             broken_off: Vec::new(),
+            timelines: Default::default(),
+            active_timeline: None,
         }
     }
 
@@ -202,7 +208,7 @@ impl Universe {
         self.dormant(e)?;
         let (_, body, orbit) = self.vessel(e)?;
         let radius = self.rails_clear_radius(body);
-        let ut = self.ut();
+        let ut = self.vessel_tick(e).seconds();
         if orbit.position_at(ut).length() <= radius + 1.0 {
             return Some(ut);
         }
@@ -436,7 +442,7 @@ impl Universe {
             let mut q = self
                 .world
                 .query_filtered::<Entity, (With<structure::Structure>, With<flight::Dormant>)>();
-            q.iter(&self.world).collect()
+            q.iter(&self.world).filter(|e| self.in_active_timeline(*e)).collect()
         };
         for e in on_rails {
             let (Some(body), Some(r)) = (self.body_of(e), self.position_of(e)) else {
@@ -467,7 +473,7 @@ impl Universe {
 
     /// Position and velocity of a vessel or body in the star's frame at the current time.
     pub fn star_state(&self, e: Entity) -> Option<(DVec3, DVec3)> {
-        let ut = self.ut();
+        let ut = self.vessel_tick(e).seconds();
         if self.world.get::<bodies::Body>(e).is_some() {
             return Some(bodies::star_space_state(&self.world, e, ut));
         }
@@ -507,7 +513,12 @@ impl Universe {
     pub fn target_relative(&self, e: Entity) -> Option<(DVec3, DVec3, f64)> {
         let t = self.target(e)?;
         let (p, v) = self.star_state(e)?;
-        let (tp, tv) = self.star_state(t)?;
+        let (tp, tv) = if self.world.get::<bodies::Body>(t).is_some() {
+            bodies::star_space_state(&self.world, t, self.vessel_tick(e).seconds())
+        } else {
+            if !self.same_time(e, t) { return None; }
+            self.star_state(t)?
+        };
         let d = tp - p;
         let surface = self
             .world
@@ -524,7 +535,7 @@ impl Universe {
         {
             return false;
         }
-        if input.length_squared() > 0. && self.warp() <= flight::MAX_PHYSICS_WARP {
+        if input.length_squared() > 0. && self.clock(self.timeline_of(e)).warp <= flight::MAX_PHYSICS_WARP {
             self.wake(e);
         }
         if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
@@ -605,7 +616,7 @@ impl Universe {
     /// Rotation input with SAS off (pitch, yaw, roll each -1..1, held until changed; see
     /// `Powered::rotation_input`); false without a powered vessel.
     pub fn set_rotation(&mut self, e: Entity, pitch: f64, yaw: f64, roll: f64) -> bool {
-        if (pitch != 0.0 || yaw != 0.0 || roll != 0.0) && self.warp() <= flight::MAX_PHYSICS_WARP {
+        if (pitch != 0.0 || yaw != 0.0 || roll != 0.0) && self.clock(self.timeline_of(e)).warp <= flight::MAX_PHYSICS_WARP {
             self.wake(e);
         }
         match self.world.get_mut::<flight::Powered>(e) {
@@ -620,6 +631,10 @@ impl Universe {
 
     /// A Kerbal on EVA runs (held) and jumps (once, from the ground); false for anything else.
     pub fn set_eva(&mut self, e: Entity, run: bool, jump: bool) -> bool {
+        if jump && self.eva_attachment(e).is_some() {
+            self.release_eva(e);
+            return true;
+        }
         match self.world.get_mut::<flight::Powered>(e) {
             Some(mut p) if p.walker => {
                 p.eva_run = run;
@@ -632,7 +647,7 @@ impl Universe {
 
     /// Roll input for a vessel (-1..1, held until changed); false without a powered vessel.
     pub fn set_roll(&mut self, e: Entity, input: f64) -> bool {
-        if input != 0.0 && self.warp() <= flight::MAX_PHYSICS_WARP {
+        if input != 0.0 && self.clock(self.timeline_of(e)).warp <= flight::MAX_PHYSICS_WARP {
             self.wake(e);
         }
         match self.world.get_mut::<flight::Powered>(e) {
@@ -653,7 +668,11 @@ impl Universe {
         group: ActionGroup,
         on: Option<bool>,
     ) -> Option<bool> {
-        let mut p = self.world.get_mut::<flight::Powered>(e)?;
+        let mut p = if self.world.get::<flight::Powered>(e).is_some() {
+            self.world.get_mut::<flight::Powered>(e)?
+        } else {
+            self.world.get_mut::<flight::Dormant>(e)?.map_unchanged(|d| &mut d.0)
+        };
         let g = &mut p.groups;
         let slot = match group {
             ActionGroup::Lights => &mut g.lights,
@@ -754,6 +773,8 @@ impl Universe {
         let n = st.deploy_gear(out);
         if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
             st.sync(&mut p);
+        } else if let Some(mut d) = self.world.get_mut::<flight::Dormant>(e) {
+            st.sync(&mut d.0);
         }
         self.world.entity_mut(e).insert(st);
         Some(n)
@@ -777,6 +798,20 @@ impl Universe {
         })
     }
 
+    pub fn deploy_part(&mut self, e: Entity, part: u16, out: bool) -> bool {
+        let Some(mut st) = self.world.get_mut::<structure::Structure>(e) else { return false; };
+        let i = part as usize;
+        if i >= st.deployed.len() || !st.rigid.present[i] || !st.can_deploy(i, out)
+            || !(st.deploy_defs[i].is_some_and(|d| d.antenna && d.extendable) || st.electric[i].solar_output > 0.0 && st.electric[i].solar_deployable)
+            || st.deployed[i] == out { return false; }
+        st.deployed[i] = out;
+        true
+    }
+
+    pub fn deploy_antennas(&mut self, e: Entity, out: bool) -> Option<usize> {
+        self.world.get_mut::<structure::Structure>(e).map(|mut st| st.deploy_antennas(out))
+    }
+
     /// Fold a vessel's deployable solar panels out or in; how many moved, `None` without a structure.
     pub fn deploy_panels(&mut self, e: Entity, out: bool) -> Option<usize> {
         self.world
@@ -787,9 +822,10 @@ impl Universe {
     /// Whether any vessel is flying under power (time warp is then capped at physics warp). Vessels standing
     /// on the ground with the throttle at zero, and wrecks, do not count.
     pub fn has_powered(&mut self) -> bool {
-        let mut q = self.world.query::<&flight::Powered>();
+        let mut q = self.world.query::<(Entity, &flight::Powered)>();
         q.iter(&self.world)
-            .any(|p| !p.crashed && (!p.landed || p.throttle > 0.0))
+            .filter(|(e, _)| self.in_active_timeline(*e))
+            .any(|(_, p)| !p.crashed && (!p.landed || p.throttle > 0.0))
     }
 
     /// Give a vessel a part structure so flight loads its joints and pieces can break off.
@@ -812,7 +848,7 @@ impl Universe {
 
     /// Put a landed vessel on the ground at its clearance right away (before its first step).
     fn stand_on_ground(&mut self, e: Entity) {
-        let ut = self.ut();
+        let ut = self.vessel_tick(e).seconds();
         let body = self.world.get::<bodies::ReferenceBody>(e).map(|b| b.0);
         let Some(b) = body
             .and_then(|b| self.world.get::<bodies::Body>(b))
@@ -862,7 +898,7 @@ impl Universe {
         let Some(orbit) = self.world.get::<bodies::OnRails>(e).map(|o| o.0) else {
             return false;
         };
-        let (r, v) = orbit.state_at(self.ut());
+        let (r, v) = orbit.state_at(self.vessel_tick(e).seconds());
         let top = flight::vessel_top(&p);
         p.r = r;
         p.v = v;
@@ -884,7 +920,7 @@ impl Universe {
             if self.world.get::<flight::Dormant>(e).is_none() {
                 return false;
             }
-            let turning = self.warp() <= flight::MAX_PHYSICS_WARP
+            let turning = self.clock(self.timeline_of(e)).warp <= flight::MAX_PHYSICS_WARP
                 && self.dormant(e).is_some_and(|p| p.attitude != attitude);
             if throttle <= 0.0 && !turning {
                 // nothing to do on rails; remember the attitude for the next wake
@@ -925,7 +961,7 @@ impl Universe {
     /// Fire the next stage of a vessel (powered or dormant on rails). Separated structure becomes a debris
     /// vessel that keeps the vessel's position and velocity, pushed 3 m back along the thrust axis at 1.5 m/s.
     pub fn stage(&mut self, e: Entity) -> StageResult {
-        let ut = self.ut();
+        let ut = self.vessel_tick(e).seconds();
         // The first stage press lights the first stage of a craft that has not fired yet: nothing is dropped.
         let ignite = |p: &mut flight::Powered| !std::mem::replace(&mut p.ignited, true);
         let first = match self.world.get_mut::<flight::Powered>(e) {
@@ -1045,7 +1081,7 @@ impl Universe {
                 .map(|v| v.name.as_str())
                 .unwrap_or("vessel")
         );
-        let ut = self.ut();
+        let ut = self.vessel_tick(parent).seconds();
         let (r2, v2) = (r, v);
         let spec = flight::FlightSpec {
             stages: vec![flight::StageSpec {
@@ -1066,6 +1102,7 @@ impl Universe {
                     bodies::OnRails(orbit),
                     p,
                     vessels::Debris,
+                    timelines::Timeline(self.timeline_of(parent)),
                 ))
                 .id(),
         )
@@ -1092,7 +1129,7 @@ impl Universe {
 
     pub fn vessels(&mut self) -> Vec<Entity> {
         let mut q = self.world.query_filtered::<Entity, With<vessels::Vessel>>();
-        q.iter(&self.world).collect()
+        q.iter(&self.world).filter(|e| self.in_active_timeline(*e)).collect()
     }
 
     pub fn vessel(&self, e: Entity) -> Option<(&vessels::Vessel, Entity, Orbit)> {
@@ -1105,7 +1142,7 @@ impl Universe {
 
     /// Schedule an impulsive burn for a vessel at universal time `ut` (seconds, must be in the future).
     pub fn schedule_burn(&mut self, e: Entity, burn: vessels::ScheduledBurn) -> bool {
-        if burn.ut < self.ut() || self.vessel(e).is_none() {
+        if burn.ut < self.vessel_tick(e).seconds() || self.vessel(e).is_none() {
             return false;
         }
         self.world.entity_mut(e).insert(burn);
@@ -1123,7 +1160,7 @@ impl Universe {
             return Vec::new();
         };
         let index = self.world.resource::<bodies::BodyIndex>();
-        let ut = self.ut();
+        let ut = self.vessel_tick(e).seconds();
         let Some(burn) = self.scheduled_burn(e) else {
             return trajectory::predict(&self.world, index, body, orbit, ut, &self.params);
         };
@@ -1165,6 +1202,10 @@ impl Universe {
     /// vessel skips over its next SOI transition (the original's timescale override at SOI crossings); the
     /// crossing then lands on the step boundary and the handoff happens exactly there.
     pub fn step(&mut self) {
+        self.step_timelines();
+    }
+
+    fn step_active(&mut self) {
         for e in self.vessels() {
             if self.rails_reentry(e).is_some_and(|t| t <= self.ut()) {
                 self.wake(e);
@@ -1202,15 +1243,20 @@ impl Universe {
         let start_ut = now as f64 * dt;
         let mut powered_vessels: Vec<Entity> = {
             let mut q = self.world.query_filtered::<Entity, With<flight::Powered>>();
-            q.iter(&self.world).collect()
+            q.iter(&self.world).filter(|e| self.in_active_timeline(*e)).collect()
         };
         let mut to_rails = Vec::new();
+        let attached_vessels: std::collections::HashSet<Entity> = {
+            let mut q = self.world.query::<&crew::EvaAttachment>();
+            q.iter(&self.world).map(|a| a.vessel).collect()
+        };
         let heat = self
             .world
             .get_resource::<thermal::HeatSettings>()
             .copied()
             .unwrap_or_default();
         for e in powered_vessels.drain(..) {
+            if self.eva_attachment(e).is_some() { continue; }
             let Some(body_e) = self.world.get::<bodies::ReferenceBody>(e).map(|r| r.0) else {
                 continue;
             };
@@ -1489,7 +1535,7 @@ impl Universe {
                     .unwrap_or(0.0)
                     .max(terrain.as_ref().map(|t| t.max_m.max(0.0)).unwrap_or(0.0));
             let safe_coast = orbit.eccentricity() >= 1.0 || orbit.periapsis() > clear_top;
-            let hand_off = p.coasting_since.is_some_and(|t| ut - t >= 10.0)
+            let hand_off = !p.walker && !attached_vessels.contains(&e) && p.coasting_since.is_some_and(|t| ut - t >= 10.0)
                 && !p.landed
                 && !p.crashed
                 && safe_coast
@@ -1533,20 +1579,22 @@ impl Universe {
             }
             vessels::refresh_next_transition(&mut self.world, &index, e, ut, &self.params);
         }
+        self.sync_eva_attachments();
         self.advance_experiments(ticks.max(1) as f64 * dt);
         // the network once a simulated second
         if now / TICKS_PER_SECOND != (now + ticks.max(1)) / TICKS_PER_SECOND {
             self.update_commnet();
         }
         self.charge_on_rails(ticks.max(1) as f64 * dt, ut);
-        // crashed debris is gone
+        // Debris stops being tracked as soon as it reaches the surface, even after a soft landing.
         let wrecks: Vec<Entity> = {
             let mut q = self
                 .world
-                .query_filtered::<(Entity, &flight::Powered), With<vessels::Debris>>();
+                .query_filtered::<(Entity, Option<&flight::Powered>, Option<&flight::Dormant>), With<vessels::Debris>>();
             q.iter(&self.world)
-                .filter(|(_, p)| p.crashed)
-                .map(|(e, _)| e)
+                .filter(|(e, p, d)| self.in_active_timeline(*e)
+                    && p.or(d.map(|d| &d.0)).is_some_and(|p| p.crashed || p.landed))
+                .map(|(e, _, _)| e)
                 .collect()
         };
         for e in wrecks {
@@ -1804,6 +1852,29 @@ mod tests {
         }
         assert!(u.vessel(d).is_none(), "debris still there");
         assert!(u.vessel(v).is_some());
+    }
+
+    #[test]
+    fn landed_and_crashed_debris_are_removed_but_landed_craft_remain() {
+        let mut u = Universe::with_bodies(&[kerbin_def()]);
+        let body = u.body_entity("Kerbin").unwrap();
+        let craft = u.spawn_powered_on_surface("craft", body, upper_stage(), 0.0, 0.0);
+        let landed = u.spawn_powered_on_surface("soft landing", body, upper_stage(), 0.0, 1.0);
+        u.world.entity_mut(landed).insert(vessels::Debris);
+        let crashed = u.spawn_powered_on_surface("wreck", body, upper_stage(), 0.0, 2.0);
+        u.world.entity_mut(crashed).insert(vessels::Debris);
+        let mut p = u.powered(crashed).unwrap().clone();
+        p.crashed = true;
+        u.set_powered(crashed, p);
+        let dormant = u.spawn_powered_on_surface("dormant debris", body, upper_stage(), 0.0, 3.0);
+        let p = u.powered(dormant).unwrap().clone();
+        u.set_dormant(dormant, p);
+        u.world.entity_mut(dormant).insert(vessels::Debris);
+        u.step();
+        assert!(u.vessel(landed).is_none());
+        assert!(u.vessel(crashed).is_none());
+        assert!(u.vessel(dormant).is_none());
+        assert!(u.vessel(craft).is_some());
     }
 
     fn k1_on_real_kerbin() -> (Universe, Entity, flight::FlightSpec, structure::Structure) {

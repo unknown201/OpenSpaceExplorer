@@ -21,6 +21,8 @@ pub struct Scene {
     pub spin_omega: Vec<f64>,
     /// Predicted patched-conic trajectory per vessel id, from the last `Trajectory` message.
     pub trajectories: HashMap<u64, Vec<TrajectoryPatch>>,
+    trajectory_versions: HashMap<u64, u64>,
+    trajectory_serial: u64,
     attitudes: HashMap<u64, crate::orientation::Track>,
 }
 
@@ -58,6 +60,8 @@ impl Scene {
             vessels_ut: 0.0,
             spin_omega: Vec::new(),
             trajectories: HashMap::new(),
+            trajectory_versions: HashMap::new(),
+            trajectory_serial: 0,
             attitudes: HashMap::new(),
         }
     }
@@ -69,6 +73,9 @@ impl Scene {
     /// Ingest authoritative state once; drawing samples the small attitude tracks without cloning craft.
     pub fn update_vessels(&mut self, vessels: Vec<VesselState>, ut: f64, now_ms: f64, warp: u32) {
         use crate::orientation::{from_axes, Context, Track};
+        let ids: std::collections::HashSet<_> = vessels.iter().map(|v| v.id).collect();
+        self.trajectories.retain(|id, _| ids.contains(id));
+        self.trajectory_versions.retain(|id, _| ids.contains(id));
         let live: std::collections::HashSet<_> = vessels
             .iter()
             .filter(|v| v.flight.is_some())
@@ -104,6 +111,20 @@ impl Scene {
         }
         self.vessels_ut = ut;
         self.vessels = vessels;
+    }
+
+    pub fn update_trajectory(&mut self, vessel: u64, patches: Vec<TrajectoryPatch>) {
+        if self.trajectories.get(&vessel) == Some(&patches) {
+            return;
+        }
+        self.trajectory_serial = self.trajectory_serial.wrapping_add(1);
+        self.trajectory_versions
+            .insert(vessel, self.trajectory_serial);
+        self.trajectories.insert(vessel, patches);
+    }
+
+    pub fn trajectory_version(&self, vessel: u64) -> u64 {
+        self.trajectory_versions.get(&vessel).copied().unwrap_or(0)
     }
 
     pub fn vessel_attitude(&self, id: u64, now_ms: f64) -> Option<(glam::DVec3, glam::DVec3)> {
@@ -356,6 +377,7 @@ mod tests {
             id: 7,
             name: "probe".into(),
             owner: Some(1),
+            science_available: false,
             reference_body: 1,
             position_m: DVec3::ZERO,
             velocity_mps: DVec3::ZERO,
@@ -383,6 +405,57 @@ mod tests {
         assert_eq!(t.ut_at(5100.0), 200.0);
         assert_eq!(t.ut_at(9000.0), 600.0);
         assert_eq!(t.ut_at(4000.0), 100.0);
+    }
+
+    #[test]
+    fn trajectories_invalidate_only_changed_vessels_and_discard_removed_ones() {
+        let bodies = kerbol_kerbin_mun();
+        let orbit = bodies[1].orbit.unwrap();
+        let patch = TrajectoryPatch {
+            body: 1,
+            orbit,
+            start_ut: 0.0,
+            end_ut: f64::INFINITY,
+            end: ose_net::PatchEnd::Final,
+        };
+        let vessel = |id| VesselState {
+            id,
+            name: "probe".into(),
+            owner: Some(1),
+            science_available: false,
+            reference_body: 1,
+            position_m: DVec3::ZERO,
+            velocity_mps: DVec3::ZERO,
+            orbit,
+            target: None,
+            flight: None,
+        };
+        let mut scene = Scene::new(bodies);
+        scene.update_vessels(vec![vessel(1), vessel(2)], 0.0, 0.0, 1);
+        scene.update_trajectory(1, vec![patch.clone()]);
+        let first = scene.trajectory_version(1);
+        scene.update_trajectory(2, vec![patch.clone()]);
+        assert_eq!(scene.trajectory_version(1), first);
+        scene.update_trajectory(1, vec![patch.clone()]);
+        assert_eq!(
+            scene.trajectory_version(1),
+            first,
+            "identical predictions keep their GPU lines"
+        );
+        let mut changed = patch.clone();
+        changed.end = ose_net::PatchEnd::Collision;
+        scene.update_trajectory(1, vec![changed]);
+        assert_ne!(scene.trajectory_version(1), first);
+        let old_second = scene.trajectory_version(2);
+        scene.update_vessels(vec![vessel(1)], 0.1, 100.0, 1);
+        assert!(!scene.trajectories.contains_key(&2));
+        assert_eq!(scene.trajectory_version(2), 0);
+        scene.update_trajectory(2, vec![patch]);
+        assert_ne!(
+            scene.trajectory_version(2),
+            old_second,
+            "reused ids must not alias old buffers"
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Bounds-based part contacts, displacement buoyancy and provisional spring/damper suspension.
+//! Bounds-based part contacts, reference-derived water forces and provisional spring/damper suspension.
 //! This is a sampled height-field solver; imported collider meshes/materials remain future work.
 use crate::{
     bodies::Body,
@@ -207,43 +207,109 @@ impl Structure {
             let (centre, half) = self.part_box(i);
             let offset = centre - mass.centre_m;
             let at = p.r + world(frame, offset);
+            let mut wet = false;
             if let Some(ocean) = &body.ocean {
-                let water = body.radius_m;
-                // Land and built facilities displace the water, too.
-                if solid_radius(body, terrain, at, ut) < water - 1e-5 {
-                    let (volume, centroid) =
-                        submerged_box(half, local(frame, up), water - at.length());
-                    if volume > 0.0 {
-                        p.landed = false;
-                        let r = offset + centroid;
-                        let arm = world(frame, r);
-                        let v = p.v + omega.cross(arm) - spin(body).cross(p.r + arm);
-                        let density = ocean.density.max(0.0);
-                        let buoyancy = up * (density * volume * gravity);
-                        // Share an implicit generalized-mass drag cap across the parts. This bounds
-                        // both translation and spin damping when the water centroid is off-centre.
-                        let area = volume.powf(2.0 / 3.0);
-                        let rate = 0.5 * density * area * v.length();
-                        let part_mass = self.net.mass_of(&[i]).max(1e-6);
-                        let damping_inverse = if v.length_squared() > 1e-16 {
-                            inverse_effective_mass(mass, r, local(frame, v).normalized())
-                                * mass.mass_t
-                                / part_mass
+                // Preserve each part's rotated local bounds; a craft-axis AABB changes its righting moment.
+                let water = &self.water[i];
+                let origin = self.rigid.rest_position(i);
+                let origin_at = p.r + world(frame, origin - mass.centre_m);
+                let points = corners(water.bounds.size_m * 0.5).map(|c| {
+                    crate::rigid::to_vessel(crate::aero::rotate(
+                        self.part_rot[i],
+                        c + water.bounds.center_m,
+                    ))
+                });
+                let cob = crate::rigid::to_vessel(crate::aero::rotate(
+                    self.part_rot[i],
+                    water.properties.centre_m,
+                ));
+                let (fraction, force_point) = crate::water::immersion(
+                    points,
+                    local(frame, up),
+                    body.radius_m - origin_at.length(),
+                    cob,
+                );
+                if fraction > 0.0
+                    && solid_radius(body, terrain, origin_at, ut) < body.radius_m - 1e-5
+                {
+                    wet = true;
+                    p.landed = false;
+                    // The reference's entry damage uses vessel surface speed, once per part entry.
+                    let vessel_v = p.v - spin(body).cross(p.r);
+                    if !self.water[i].wet
+                        && crate::water::destroys_on_entry(vessel_v, up, self.crash_tolerance[i])
+                    {
+                        if !self.water_damage.contains(&i) {
+                            self.water_damage.push(i);
+                        }
+                    } else {
+                        let speed = vessel_v.length();
+                        let dot = if speed > 1e-12 {
+                            vessel_v.dot(up).abs() / speed
                         } else {
-                            0.0
+                            1.
                         };
-                        let drag = v * (-rate / (1.0 + rate * dt * damping_inverse));
+                        let scalar = self.water[i].drag(speed, dot, dt);
+                        let buoyancy = up
+                            * (ocean.density.max(0.)
+                                * self.water[i].volume_m3
+                                * 1.2
+                                * self.water[i].properties.buoyancy
+                                * fraction
+                                * gravity);
+                        let r = origin - mass.centre_m + force_point;
+                        let arm = world(frame, r);
+                        let part_centre =
+                            self.part_point(i, self.geometry[i].mass_offset_m) - mass.centre_m;
+                        let centre_arm = world(frame, part_centre);
+                        let v = vessel_v + (omega - spin(body)).cross(centre_arm);
+                        let part_mass = self.net.mass_of(&[i]).max(1e-6);
+                        let horizontal = (vessel_v - up * vessel_v.dot(up)).length();
+                        let slow = speed < 0.4 || speed > horizontal * 1.5;
+                        let drag_rate = if slow {
+                            2.
+                        } else {
+                            let area_drag = self.water_area_drag(i, local(frame, vessel_v));
+                            0.5 * ocean.density.max(0.)
+                                * speed
+                                * area_drag
+                                * 0.8
+                                * scalar
+                                * fraction
+                                / part_mass
+                        };
+                        // PhysX linear damping acts at the rigidbody CoM, not at the buoyancy point.
+                        let drag = v * (-part_mass * drag_rate.min(1. / dt.max(1e-9)));
                         let force = buoyancy + drag;
                         propulsion.environment_force_kn = propulsion.environment_force_kn + force;
-                        propulsion.environment_torque_knm =
-                            propulsion.environment_torque_knm + arm.cross(force);
+                        propulsion.environment_torque_knm = propulsion.environment_torque_knm
+                            + arm.cross(buoyancy)
+                            + centre_arm.cross(drag);
                         self.surface_loads.push(PartForce {
                             part: i,
-                            force_kn: force,
-                            offset_m: centre + centroid - self.rigid.rest_position(i),
+                            force_kn: buoyancy,
+                            offset_m: force_point,
                         });
+                        self.surface_loads.push(PartForce {
+                            part: i,
+                            force_kn: drag,
+                            offset_m: part_centre + mass.centre_m - origin,
+                        });
+                        if slow
+                            && p.rotation_input.length_squared() + p.roll_input * p.roll_input
+                                < 1. / 32.
+                        {
+                            let torque =
+                                world(frame, mass.inertia.apply(local(frame, omega - spin(body))))
+                                    * (-4_f64.min(1. / dt.max(1e-9)) * part_mass / mass.mass_t);
+                            propulsion.environment_torque_knm =
+                                propulsion.environment_torque_knm + torque;
+                        }
                     }
                 }
+            }
+            if !wet {
+                self.water[i].reset_contact();
             }
             if self.gear_out[i] {
                 if let Some(gear) = &self.gear_defs[i] {
@@ -296,6 +362,12 @@ impl Structure {
         dt: f64,
         out: &mut StepOutcome,
     ) {
+        if !self.water_damage.is_empty() {
+            out.crashed = true;
+            p.crashed = true;
+            out.impact_mps = (before.v - spin(body).cross(before.r)).length();
+        }
+        out.contact_damage.append(&mut self.water_damage);
         if p.crashed || dt <= 0.0 {
             return;
         }
@@ -572,6 +644,8 @@ mod tests {
         });
         def.drag_cubes[0].size = DVec3::new(2.0, 2.0, 2.0);
         def.drag_cubes[0].center = DVec3::ZERO;
+        def.drag_cubes[0].area = [4.0; 6];
+        def.water = Default::default();
         if two_parts {
             let mut child = craft.parts[0].clone();
             child.parent = Some(0);
@@ -764,8 +838,9 @@ mod tests {
             max_m: -100.0,
             detail: None,
         };
-        // A 2t, 8m³ hull displaces 2m³ at its analytical quarter-submerged equilibrium.
-        p.r.y = body.radius_m + 0.5;
+        // The native 1.2 scalar gives a 2t, 8m³ hull an immersion of 2/(8*1.2).
+        let equilibrium = 1.0 - 2.0 / 4.8;
+        p.r.y = body.radius_m + equilibrium;
         let mut engine = st.propulsion(&p, Default::default(), 0.02);
         st.configure_surface(&mut p, &body, Some(&terrain), 0.0, 0.02, &mut engine);
         assert!((engine.environment_force_kn.y - 20.0).abs() < 0.001);
@@ -773,7 +848,7 @@ mod tests {
         for _ in 0..1500 {
             step(&mut st, &mut p, &body, Some(&terrain), 0.02);
         }
-        assert!((p.r.y - body.radius_m - 0.5).abs() < 0.02, "{p:?}");
+        assert!((p.r.y - body.radius_m - equilibrium).abs() < 0.02, "{p:?}");
         assert!(!p.landed && !p.crashed, "water is not solid ground");
         body.ocean.as_mut().unwrap().density = 0.1;
         for _ in 0..250 {
@@ -784,6 +859,71 @@ mod tests {
             "an over-dense hull sinks"
         );
         assert!(!p.landed);
+    }
+
+    #[test]
+    fn water_entry_destroys_the_struck_part_once_and_keeps_survivor_motion() {
+        let (mut st, mut p, mut body) = fixture(true);
+        body.ocean = Some(ose_data::Ocean {
+            altitude_m: 0.,
+            density: 1.,
+        });
+        let terrain = ose_data::terrain::TerrainMap {
+            width: 2,
+            height: 2,
+            scale_m: 0.,
+            offset_m: -100.,
+            has_ocean: true,
+            body_radius_m: body.radius_m,
+            data: vec![0; 4],
+            flats: vec![],
+            max_m: -100.,
+            detail: None,
+        };
+        st.crash_tolerance[1] = 15.;
+        p.r.y = body.radius_m + 0.1;
+        p.v = DVec3::new(0., -22., 0.);
+        let out = step(&mut st, &mut p, &body, Some(&terrain), 0.02);
+        assert!(out.crashed);
+        assert_eq!(out.contact_damage, vec![1]);
+        assert!(st.contact_damage(&out.contact_damage, &p).is_some());
+        assert!(!st.rigid.present[1] && st.rigid.present[0]);
+        assert!(p.v.y < -20., "failed part cannot arrest the surviving hull");
+        assert!(st.water_damage.is_empty(), "entry damage is consumed once");
+    }
+
+    #[test]
+    fn surviving_water_entry_is_not_rechecked_until_the_part_leaves_water() {
+        let (mut st, mut p, mut body) = fixture(false);
+        body.ocean = Some(ose_data::Ocean {
+            altitude_m: 0.,
+            density: 1.,
+        });
+        let terrain = ose_data::terrain::TerrainMap {
+            width: 2,
+            height: 2,
+            scale_m: 0.,
+            offset_m: -100.,
+            has_ocean: true,
+            body_radius_m: body.radius_m,
+            data: vec![0; 4],
+            flats: vec![],
+            max_m: -100.,
+            detail: None,
+        };
+        st.crash_tolerance[0] = 15.;
+        p.r.y = body.radius_m;
+        assert!(!step(&mut st, &mut p, &body, Some(&terrain), 0.02).crashed);
+        p.v = DVec3::new(0., -22., 0.);
+        assert!(!step(&mut st, &mut p, &body, Some(&terrain), 0.02).crashed);
+        p.r.y = body.radius_m + 10.;
+        p.v = DVec3::ZERO;
+        step(&mut st, &mut p, &body, Some(&terrain), 0.02);
+        assert!(!st.water[0].wet);
+        p.r.y = body.radius_m;
+        p.v = DVec3::new(0., -22., 0.);
+        let out = step(&mut st, &mut p, &body, Some(&terrain), 0.02);
+        assert!(out.crashed && st.contact_damage(&out.contact_damage, &p).is_none());
     }
 
     #[test]

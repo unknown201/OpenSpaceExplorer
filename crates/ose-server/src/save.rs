@@ -17,6 +17,9 @@ pub struct SavedVessel {
     pub id: u64,
     pub name: String,
     pub owner: Option<u64>,
+    /// Keep debris cleanup working after a server restart.
+    #[serde(default)]
+    pub debris: bool,
     pub body: String,
     pub elements: Elements,
     pub burn: Option<SavedBurn>,
@@ -36,12 +39,17 @@ pub struct SavedVessel {
     #[serde(default)]
     pub craft: Option<ose_data::craft::Craft>,
     #[serde(default)]
+    pub deployed_part_controls: Vec<(String, bool, bool)>,
+    #[serde(default)]
     pub crew: Vec<(usize, String)>,
     #[serde(default)]
     pub docked: Vec<(usize, usize)>,
     /// A Kerbal on EVA (their name) or a planted flag (who planted it).
     #[serde(default)]
     pub eva: Option<String>,
+    /// Stable registry id of a supporting hatch vessel, and its saved craft part index.
+    #[serde(default)]
+    pub eva_attachment: Option<(u64, usize)>,
     #[serde(default)]
     pub flag: Option<String>,
 }
@@ -73,6 +81,9 @@ pub struct Campaign {
     pub members: Vec<CampaignMember>,
     #[serde(default)]
     pub owner: Option<u64>,
+    /// Invitation credential, independent of the private account login code.
+    #[serde(default)]
+    pub share_code: Option<String>,
     #[serde(default = "default_mode")]
     pub mode: ose_net::SessionMode,
     #[serde(default)]
@@ -106,6 +117,7 @@ impl Default for Campaign {
             started_tick: Tick(0),
             members: Vec::new(),
             owner: None,
+            share_code: None,
             mode: default_mode(),
             difficulty: Vec::new(),
             last_played_unix: 0,
@@ -128,6 +140,8 @@ pub struct SaveFile {
     pub version: u32,
     pub tick: Tick,
     pub warp: u32,
+    #[serde(default)]
+    pub timelines: std::collections::BTreeMap<u64, ose_sim::timelines::TimelineClock>,
     pub vessels: Vec<SavedVessel>,
     #[serde(default)]
     pub campaign: Campaign,
@@ -161,6 +175,7 @@ pub fn capture(
                 id,
                 name: v.name.clone(),
                 owner,
+                debris: u.world.get::<ose_sim::vessels::Debris>(e).is_some(),
                 body: u.body_id(body)?.to_string(),
                 elements: orbit.elements,
                 flight: u.powered(e).cloned(),
@@ -168,9 +183,17 @@ pub fn capture(
                 science: u.science_carried(e),
                 experiments: u.running_experiments(e),
                 craft: u.current_craft(e),
+                deployed_part_controls: u.deployed_part_controls(e),
                 crew: u.crew(e),
                 docked: u.docked_links(e),
                 eva: u.eva_kerbal(e).map(|k| k.name.clone()),
+                eva_attachment: u.eva_attachment(e).and_then(|a| {
+                    let id = vessels.iter().find(|v| v.0 == a.vessel)?.1;
+                    // current_craft compacts lost parts on save.
+                    let st = u.structure(a.vessel)?;
+                    let part = st.rigid.present.iter().take(a.part).filter(|p| **p).count();
+                    Some((id, part))
+                }),
                 flag: u.flag_planter(e),
                 burn: u.scheduled_burn(e).map(|b| SavedBurn {
                     ut: b.ut,
@@ -185,6 +208,7 @@ pub fn capture(
         version: SAVE_VERSION,
         tick: u.tick(),
         warp: u.warp(),
+        timelines: u.timelines.clone(),
         vessels: saved,
         campaign: campaign.clone(),
         crafts: crafts.to_vec(),
@@ -201,13 +225,28 @@ pub fn restore(
 ) -> Vec<VesselEntry> {
     u.set_tick(save.tick);
     u.set_warp(save.warp);
+    u.timelines = save.timelines.clone();
+    u.set_science_credited(save.campaign.science.submitted.iter().map(|s| s.report.clone()));
+    restore_vessels(u, &save.vessels, parts, resources)
+}
+
+pub fn restore_vessels(u: &mut Universe, vessels: &[SavedVessel], parts: &[ose_data::PartDef], resources: &[ose_data::ResourceDef]) -> Vec<VesselEntry> {
     let mut registry = Vec::new();
-    for v in &save.vessels {
+    for v in vessels {
+        // Legacy saves did not persist the marker; detached point masses used this name.
+        let debris = v.debris || (v.craft.is_none() && v.name.ends_with(" debris"));
+        if debris && v.flight.as_ref().or(v.dormant.as_ref()).is_some_and(|p| p.crashed || p.landed) {
+            continue;
+        }
         let Some(body) = u.body_entity(&v.body) else {
             tracing::warn!(vessel = v.id, body = %v.body, "saved vessel's body is unknown; dropped");
             continue;
         };
         let e = u.spawn_vessel_with_elements(&v.name, body, v.elements);
+        if debris {
+            u.world.entity_mut(e).insert(ose_sim::vessels::Debris);
+        }
+        if let Some(owner) = v.owner { u.assign_timeline(e, owner); }
         if let Some(f) = &v.flight {
             u.set_powered(e, f.clone());
         } else if let Some(d) = &v.dormant {
@@ -226,6 +265,7 @@ pub fn restore(
                 e,
                 ose_sim::structure::Structure::build(craft, parts, resources),
             );
+            u.restore_deployed_part_controls(e, &v.deployed_part_controls);
             u.set_docked(e, v.docked.clone());
         }
         if let Some(name) = &v.eva {
@@ -246,6 +286,13 @@ pub fn restore(
             );
         }
         registry.push((e, v.id, v.owner));
+    }
+    for v in vessels {
+        if let Some((target, part)) = v.eva_attachment {
+            let e = registry.iter().find(|r| r.1 == v.id).map(|r| r.0);
+            let parent = registry.iter().find(|r| r.1 == target).map(|r| r.0);
+            if let (Some(e), Some(parent)) = (e, parent) { u.restore_eva_attachment(e, parent, part); }
+        }
     }
     registry
 }
@@ -274,6 +321,103 @@ pub fn read(path: &Path) -> anyhow::Result<Option<SaveFile>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debris_marker_survives_save_and_surface_debris_is_dropped_on_restore() {
+        let bodies: Vec<ose_data::CelestialBody> = serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let mut u = Universe::with_bodies(&bodies);
+        let body = u.body_entity("Kerbin").unwrap();
+        let e = u.spawn_vessel_in_circular_orbit("stage debris", body, 100_000.0);
+        u.world.entity_mut(e).insert(ose_sim::vessels::Debris);
+        let (r, v) = u.vessel(e).unwrap().2.state_at(u.ut());
+        let p = ose_sim::flight::Powered::new(ose_sim::flight::FlightSpec {
+            stages: vec![], drag_area_m2: 1.0, drag_cd: 0.2,
+        }, r, v, false);
+        u.set_powered(e, p.clone());
+        let file = capture(&u, &[(e, 7, Some(1))], &Campaign::default(), &[]);
+        let mut file: SaveFile = serde_json::from_str(&serde_json::to_string(&file).unwrap()).unwrap();
+        let mut restored = Universe::with_bodies(&bodies);
+        let entries = restore(&mut restored, &file, &[], &[]);
+        assert_eq!(entries.len(), 1);
+        assert!(restored.world.get::<ose_sim::vessels::Debris>(entries[0].0).is_some());
+        file.vessels[0].flight.as_mut().unwrap().landed = true;
+        let mut restored = Universe::with_bodies(&bodies);
+        assert!(restore(&mut restored, &file, &[], &[]).is_empty());
+        // A pre-change save has no debris field; recover its legacy point-mass marker too.
+        let mut legacy = serde_json::to_value(&file).unwrap();
+        legacy["vessels"][0].as_object_mut().unwrap().remove("debris");
+        let legacy: SaveFile = serde_json::from_value(legacy).unwrap();
+        assert!(restore(&mut restored, &legacy, &[], &[]).is_empty());
+        // Ordinary landed craft still restore.
+        file.vessels[0].debris = false;
+        file.vessels[0].name = "lander".into();
+        assert_eq!(restore(&mut restored, &file, &[], &[]).len(), 1);
+    }
+
+    #[test]
+    fn deployment_and_light_switch_survive_json_save_restore() {
+        let bodies = serde_json::from_str::<Vec<ose_data::CelestialBody>>(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let defs = serde_json::from_str::<Vec<ose_data::PartDef>>(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res = serde_json::from_str::<Vec<ose_data::ResourceDef>>(include_str!("../../../assets/own/resources.json")).unwrap();
+        let crafts = serde_json::from_str::<Vec<ose_data::craft::Craft>>(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let mut craft = crafts.iter().find(|c| c.name == "Kerbal K2").unwrap().clone();
+        for id in ["antenna_0v_16", "landingleg_0v", "light_0v_spot"] {
+            let mut part = craft.parts[0].clone();
+            part.guid = format!("saved-{id}"); part.part_id = id.into(); part.parent = Some(0);
+            part.resources.clear(); craft.parts.push(part);
+        }
+        let mut u = Universe::with_bodies(&bodies);
+        let e = u.spawn_vessel_in_circular_orbit("saved controls", u.body_entity("Kerbin").unwrap(), 100_000.);
+        let (r, v) = u.vessel(e).unwrap().2.state_at(u.ut());
+        let report = ose_data::staging::delta_v_by_stage(&craft, &defs, &res);
+        u.set_dormant(e, ose_sim::flight::Powered::new(ose_sim::flight::FlightSpec::from_report(&report, &[], &[], 1.), r, v, false));
+        u.set_craft(e, craft.clone());
+        u.set_structure(e, ose_sim::structure::Structure::build(&craft, &defs, &res));
+        assert!(u.deploy_panels(e, true).unwrap() > 0);
+        assert!(u.deploy_antennas(e, true).unwrap() > 0);
+        assert!(u.deploy_gear(e, true).unwrap() > 0);
+        assert_eq!(u.action_group(e, ose_sim::ActionGroup::Lights, Some(true)), Some(true));
+        let controls = u.deployed_part_controls(e);
+        let saved = capture(&u, &[(e, 42, Some(1))], &Campaign::default(), &[]);
+        let saved: SaveFile = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let mut restored = Universe::with_bodies(&bodies);
+        let entry = restore(&mut restored, &saved, &defs, &res)[0];
+        assert_eq!(restored.deployed_part_controls(entry.0), controls);
+        assert!(restored.dormant(entry.0).unwrap().groups.lights);
+        assert!(restored.panels_deployed(entry.0));
+        assert_eq!(restored.deploy_panels(entry.0, true), Some(0));
+        assert_eq!(restored.deploy_antennas(entry.0, true), Some(0));
+        assert_eq!(restored.deploy_gear(entry.0, true), Some(0));
+    }
+
+    #[test]
+    fn an_eva_handhold_survives_save_restore_with_new_entity_ids() {
+        let bodies = serde_json::from_str::<Vec<ose_data::CelestialBody>>(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let defs = serde_json::from_str::<Vec<ose_data::PartDef>>(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res = serde_json::from_str::<Vec<ose_data::ResourceDef>>(include_str!("../../../assets/own/resources.json")).unwrap();
+        let crafts = serde_json::from_str::<Vec<ose_data::craft::Craft>>(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let craft = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let mut u = Universe::with_bodies(&bodies);
+        let e = u.spawn_vessel_in_circular_orbit("EVA pod", u.body_entity("Kerbin").unwrap(), 100_000.0);
+        let (r, v) = u.vessel(e).unwrap().2.state_at(u.ut());
+        let report = ose_data::staging::delta_v_by_stage(craft, &defs, &res);
+        u.set_powered(e, ose_sim::flight::Powered::new(ose_sim::flight::FlightSpec::from_report(&report, &[], &[], 1.0), r, v, false));
+        u.set_craft(e, craft.clone());
+        u.set_structure(e, ose_sim::structure::Structure::build(craft, &defs, &res));
+        let jeb = u.go_eva(e, None).unwrap();
+        // Put the Kerbal first so restoration must resolve a forward vessel reference.
+        let saved = capture(&u, &[(jeb, 71, Some(1)), (e, 42, Some(1))], &Campaign::default(), &[]);
+        let saved: SaveFile = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert_eq!(saved.vessels[0].eva_attachment, Some((42, 0)));
+        let mut restored = Universe::with_bodies(&bodies);
+        let entries = restore(&mut restored, &saved, &defs, &res);
+        let jeb = entries.iter().find(|v| v.1 == 71).unwrap().0;
+        let pod = entries.iter().find(|v| v.1 == 42).unwrap().0;
+        assert_eq!(restored.eva_attachment(jeb).unwrap().vessel, pod);
+        for _ in 0..100 { restored.step(); }
+        assert!(restored.eva_attachment(jeb).is_some());
+        restored.board(jeb, pod).unwrap();
+    }
 
     #[test]
     fn part_settings_and_control_point_survive_json_save_restore() {

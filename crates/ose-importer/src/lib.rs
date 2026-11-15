@@ -349,6 +349,8 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut wheel_torque: f64 = 0.0;
     let mut wheel_axes = None;
     let mut electric = ose_data::Electric::default();
+    let mut deployment = None;
+    let mut light = None;
     let mut experiments = Vec::new();
     let mut docking = None;
     let mut chute: Option<ose_data::Parachute> = None;
@@ -372,6 +374,32 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
             if let Some(entries) = m["ModuleData"].as_array() {
                 for entry in entries.iter() {
                     let o = &entry["DataObject"];
+                    if entry["Name"] == "Data_Deployable" {
+                        deployment = Some(ose_data::Deployable {
+                            extendable: b(o, "extendable"),
+                            retractable: b(o, "retractable"),
+                            starts_extended: b(o, "IsExtended"),
+                            antenna: false,
+                            shielded_extension: b(o, "applyShieldingExtend"),
+                        });
+                    }
+                    if entry["Name"] == "Data_Light" {
+                        light = Some(ose_data::PartLight {
+                            use_per_s: if b(o, "useResources") {
+                                ec_rate(&o["requiredResource"])
+                            } else {
+                                0.0
+                            },
+                            color: [
+                                f(o, "LightR") as f32,
+                                f(o, "LightG") as f32,
+                                f(o, "LightB") as f32,
+                            ],
+                            smooth: b(o, "isSmoothTransitionEnabled"),
+                            brighten_s: f(o, "lightBrightenDuration") as f32,
+                            dim_s: f(o, "lightDimDuration") as f32,
+                        });
+                    }
                     if entry["Name"] == "Data_LiftingSurface" {
                         let sign = match f(o, "transformSign") {
                             0.0 => 1.0,
@@ -661,6 +689,9 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
             steerable,
         }
     });
+    if let Some(d) = &mut deployment {
+        d.antenna = electric.comm_range_m > 0.0;
+    }
     let bounds = part_bounds(&drag_cubes, &attach_nodes);
     // Data_Deployable is shared by legs, antennae and bays too. Its settings describe solar
     // behavior only when this part actually contains a solar producer.
@@ -686,6 +717,11 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         crew_capacity: d["crewCapacity"].as_u64().unwrap_or(0) as u32,
         max_temp_k: f(d, "maxTemp"),
         crash_tolerance: f(d, "crashTolerance"),
+        water: ose_data::WaterProperties {
+            buoyancy: d["buoyancy"].as_f64().unwrap_or(1.0),
+            centre_m: vec3(&d["coBuoyancy"]),
+            cube_name: s(d, "buoyancyUseCubeNamed"),
+        },
         breaking_force: f(d, "breakingForce"),
         breaking_torque: f(d, "breakingTorque"),
         fuel_cross_feed: b(d, "fuelCrossFeed"),
@@ -698,6 +734,8 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         reaction_wheel_torque_knm: wheel_torque,
         reaction_wheel_axes_knm: wheel_axes,
         electric,
+        deployable: deployment,
+        light,
         experiments,
         docking,
         parachute,
@@ -1114,6 +1152,20 @@ mod tests {
             .remove("use_internal_drag");
         let old: ose_data::LiftingSurface = serde_json::from_value(old_catalog).unwrap();
         assert!(!old.perpendicular_only && old.use_internal_drag);
+    }
+
+    #[test]
+    fn water_properties_import_and_old_catalog_defaults() {
+        let source = json!({"data":{"partName":"hull","buoyancy":3.0,"coBuoyancy":{"x":0.2,"y":0.5,"z":-0.1},"buoyancyUseCubeNamed":"STOWED"}});
+        let imported = part(&source, &mut Coverage::default());
+        assert_eq!(imported.water.buoyancy, 3.0);
+        assert_eq!(imported.water.centre_m, DVec3::new(0.2, 0.5, -0.1));
+        assert_eq!(imported.water.cube_name, "STOWED");
+        let mut legacy = serde_json::to_value(imported).unwrap();
+        legacy.as_object_mut().unwrap().remove("water");
+        let legacy: ose_data::PartDef = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.water, Default::default());
+        assert_eq!(legacy.water.buoyancy, 1.0);
     }
 
     #[test]

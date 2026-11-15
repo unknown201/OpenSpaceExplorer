@@ -120,7 +120,7 @@ impl Universe {
     pub fn mission_facts(&self, e: Entity, since_tick: u64) -> Option<VesselFacts> {
         let (_, body_e, orbit) = self.vessel(e)?;
         let body = self.world.get::<bodies::Body>(body_e)?;
-        let ut = self.ut();
+        let ut = self.vessel_tick(e).seconds();
         let terrain = self
             .world
             .get::<flight::Terrain>(body_e)

@@ -276,6 +276,9 @@ struct Shared {
     parts: Vec<ose_data::PartDef>,
     resources: Vec<ose_data::ResourceDef>,
     accounts: Mutex<accounts::Accounts>,
+    save_path: Option<PathBuf>,
+    save_lock: Mutex<()>,
+    world_changed_at: Mutex<std::time::Instant>,
     /// Vessel entity -> (vessel id, owner player id).
     vessels: Mutex<Vec<(bevy_ecs::entity::Entity, u64, Option<u64>)>>,
     campaign: Mutex<save::Campaign>,
@@ -293,7 +296,7 @@ struct Shared {
     shelf: Mutex<Vec<save::ShelvedCampaign>>,
     playing: Mutex<std::collections::HashSet<u64>>,
     /// The last pad launch, for revert.
-    revert: Mutex<Option<campaigns::RevertPoint>>,
+    revert: Mutex<std::collections::HashMap<u64, campaigns::RevertPoint>>,
     /// The original's Kerbals (veterans first), and the roster last pushed to the players.
     kerbals: Vec<ose_data::KerbalDef>,
     last_roster: Mutex<Option<ServerMessage>>,
@@ -301,29 +304,31 @@ struct Shared {
 
 /// Apply lowest-wins warp arbitration. Returns (effective warp, the player holding it down, if any).
 fn apply_warp(s: &Shared) -> (u32, Option<u64>) {
-    let playing = s.playing.lock().expect("playing lock").clone();
-    let reqs = s.warp_requests.lock().expect("warp lock");
-    let (warp, holder) = match reqs
-        .iter()
-        .filter(|(p, _)| playing.contains(p))
-        .min_by_key(|(_, &w)| w)
-    {
-        Some((&p, &w)) => (w, Some(p)),
-        None => (1, None),
-    };
-    let max = reqs
-        .iter()
-        .filter(|(p, _)| playing.contains(p))
-        .map(|(_, &w)| w)
-        .max()
-        .unwrap_or(1);
-    drop(reqs);
-    let requested = warp;
+    let requests = s.warp_requests.lock().expect("warp lock").clone();
     let mut u = s.universe.lock().expect("sim lock");
-    u.set_warp(warp);
-    let warp = u.warp();
-    // only another player's lower request counts as "holding warp down"; the physics cap does not
-    (warp, if max > requested { holder } else { None })
+    let list = s.vessels.lock().expect("vessels lock");
+    for &(e, _, owner) in list.iter() {
+        if let Some(owner) = owner { u.assign_timeline(e, owner); }
+    }
+    for (id, factor) in requests { u.set_timeline_warp(id, factor); }
+    (u.warp(), None)
+}
+
+fn request_scoped_warp(s: &Shared, player: u64, factor: u32, scope: ose_net::TimeScope) {
+    let factor = factor.clamp(1, 10_000_000);
+    if scope == ose_net::TimeScope::Global {
+        let mut requests = s.warp_requests.lock().expect("warp lock");
+        for value in requests.values_mut() { *value = factor; }
+        requests.insert(player, factor);
+        drop(requests);
+        let mut u = s.universe.lock().expect("sim lock");
+        let ids: Vec<_> = u.timelines.keys().copied().collect();
+        for id in ids { u.set_timeline_warp(id, factor); }
+        u.world.resource_mut::<ose_sim::WarpFactor>().0 = factor;
+    } else {
+        s.warp_requests.lock().expect("warp lock").insert(player, factor);
+    }
+    apply_warp(s);
 }
 
 fn elements(o: &ose_math::Orbit) -> OrbitElements {
@@ -474,6 +479,9 @@ async fn main() -> anyhow::Result<()> {
         spins,
         parts: serde_json::from_str(EMBEDDED_PARTS)?,
         resources: serde_json::from_str(EMBEDDED_RESOURCES)?,
+        save_path: save_path.clone(),
+        save_lock: Mutex::new(()),
+        world_changed_at: Mutex::new(std::time::Instant::now()),
         accounts: Mutex::new({
             let acc = accounts::Accounts::open(&args.db)?;
             tracing::info!(db = %args.db.display(), players = acc.count()?, "accounts opened");
@@ -490,7 +498,7 @@ async fn main() -> anyhow::Result<()> {
         setup,
         shelf: Mutex::new(shelf),
         playing: Mutex::new(std::collections::HashSet::new()),
-        revert: Mutex::new(None),
+        revert: Mutex::new(Default::default()),
         kerbals: serde_json::from_str(EMBEDDED_KERBALS)?,
         last_roster: Mutex::new(None),
     });
@@ -543,7 +551,7 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    if let Some(p) = save_path.clone() {
+    if save_path.is_some() {
         let saver = shared.clone();
         let every = std::time::Duration::from_secs_f64(args.save_interval_s.max(0.2));
         tokio::spawn(async move {
@@ -551,20 +559,8 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
             loop {
                 interval.tick().await;
-                let file = {
-                    let u = saver.universe.lock().expect("sim lock");
-                    let v = saver.vessels.lock().expect("vessels lock");
-                    let c = saver.campaign.lock().expect("campaign lock");
-                    let k = saver.crafts.lock().expect("crafts lock");
-                    let mut file = save::capture(&u, &v, &c, &k);
-                    file.shelf = saver.shelf.lock().expect("shelf lock").clone();
-                    file
-                };
-                match save::write(&p, &file) {
-                    Ok(()) => {
-                        tracing::debug!(tick = file.tick.0, vessels = file.vessels.len(), "saved")
-                    }
-                    Err(e) => tracing::error!(error = %e, "save failed"),
+                if let Err(e) = persist(&saver) {
+                    tracing::error!(error = %e, "save failed");
                 }
             }
         });
@@ -676,6 +672,7 @@ fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
     let vessels = list
         .iter()
         .filter_map(|&(e, id, owner)| {
+            if u.vessel_tick(e) != tick { return None; }
             let (v, body, orbit) = u.vessel(e)?;
             let (bp, bv) = ose_sim::bodies::star_space_state(&u.world, body, ut);
             let (rp, rv) = orbit.state_at(ut);
@@ -683,6 +680,7 @@ fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
                 id,
                 name: v.name.clone(),
                 owner,
+                science_available: u.experiments_available(e),
                 reference_body: catalog_index(s, u, body),
                 position_m: bp + rp,
                 velocity_mps: bv + rv,
@@ -784,7 +782,7 @@ fn flight_readout(
         dormant = u.dormant(e)?.clone();
         let top = ose_sim::flight::vessel_top(&dormant);
         let (_, _, orbit) = u.vessel(e)?;
-        (dormant.r, dormant.v) = orbit.state_at(u.ut());
+        (dormant.r, dormant.v) = orbit.state_at(u.vessel_tick(e).seconds());
         ose_sim::flight::set_vessel_top(&mut dormant, top);
         &dormant
     };
@@ -958,7 +956,7 @@ fn flight_readout(
         },
         rcs_thrust_kn: p.rcs.thrust_kn as f32,
         rcs_firing: (p.rcs.usage * p.rcs.powered.clamp(0.0, 1.0)) as f32,
-        rcs_translate: if p.groups.rcs && p.controlled && !p.crashed {
+        rcs_translate: if p.groups.rcs && p.controlled && !p.crashed && u.eva_attachment(e).is_none() {
             let top = ose_sim::flight::vessel_top(p);
             let right = p.facing.cross(top);
             (right * p.rcs.translate.x + p.facing * p.rcs.translate.y + top * p.rcs.translate.z)
@@ -966,7 +964,7 @@ fn flight_readout(
         } else {
             ose_math::DVec3::ZERO
         },
-        rcs_rotate: if p.groups.rcs && p.controlled && !p.crashed && p.rcs.torque_knm > 0.0 {
+        rcs_rotate: if p.groups.rcs && p.controlled && !p.crashed && p.rcs.torque_knm > 0.0 && u.eva_attachment(e).is_none() {
             p.steer_cmd * p.rcs.powered.clamp(0.0, 1.0)
         } else {
             ose_math::DVec3::ZERO
@@ -1070,6 +1068,8 @@ fn flight_readout(
             .unwrap_or_default(),
         crew: u.crew(e).into_iter().map(|(i, n)| (i as u16, n)).collect(),
         eva: u.eva_kerbal(e).is_some(),
+        eva_attached: u.eva_attachment(e).is_some(),
+        eva_hatches: u.eva_hatch_offsets(e),
         docking_ports: u
             .current_craft(e)
             .map(|c| {
@@ -1087,6 +1087,9 @@ fn flight_readout(
         comm_connected: u.comm_link(e).connected,
         comm_hops: u.comm_link(e).hops,
         comm_range_m: u.comm_link(e).range_m,
+        antennas: u.structure(e).map(|st| (0..st.deployed.len()).filter(|&i| st.rigid.present[i] && st.deploy_defs[i].is_some_and(|d| d.antenna && d.extendable)).map(|i| (i as u16, st.deployed[i])).collect()).unwrap_or_default(),
+        non_retractable: u.structure(e).map(|st| (0..st.deployed.len()).filter(|&i| st.rigid.present[i] && st.deploy_defs[i].is_some_and(|d| !d.retractable)).map(|i| i as u16).collect()).unwrap_or_default(),
+        part_lights: u.structure(e).map(|st| (0..st.light_defs.len()).filter(|&i| st.rigid.present[i] && st.light_defs[i].is_some()).map(|i| (i as u16, st.light_powered[i])).collect()).unwrap_or_default(),
         panels_deployed: u.panels_deployed(e),
         panels: u
             .structure(e)
@@ -1284,12 +1287,13 @@ fn launch_sites(_home: &str) -> Vec<ose_net::LaunchSite> {
 }
 
 /// Read occupancy under the same universe lock used to spawn, preventing concurrent rollouts.
-fn launch_site_occupant(s: &Shared, u: &Universe, site: &ose_net::LaunchSite) -> Option<String> {
+fn launch_site_occupant(s: &Shared, u: &Universe, site: &ose_net::LaunchSite, tick: Tick) -> Option<String> {
     let home = u.body_entity("Kerbin")?;
     let body = u.world.get::<ose_sim::bodies::Body>(home)?;
-    let ut = u.tick().seconds();
+    let ut = tick.seconds();
     let list = s.vessels.lock().expect("vessels lock");
     for &(entity, _, owner) in list.iter() {
+        if u.vessel_tick(entity) != tick { continue; }
         let Some((_, reference, _)) = u.vessel(entity) else {
             continue;
         };
@@ -1318,7 +1322,7 @@ fn launch_sites_message(s: &Shared) -> ServerMessage {
     let u = s.universe.lock().expect("sim lock");
     let mut sites = launch_sites("Kerbin");
     for site in &mut sites {
-        site.occupied_by = launch_site_occupant(s, &u, site);
+        site.occupied_by = launch_site_occupant(s, &u, site, u.tick());
     }
     ServerMessage::LaunchSites { sites }
 }
@@ -1457,9 +1461,9 @@ fn launch_at(
             ..
         }
     ) {
-        *s.revert.lock().expect("revert lock") = Some(campaigns::RevertPoint {
-            player: player_id,
+        s.revert.lock().expect("revert lock").insert(player_id, campaigns::RevertPoint {
             editor,
+            local_valid: true,
             launch: campaigns::snapshot(s),
             craft: craft.clone(),
         });
@@ -1541,11 +1545,16 @@ fn launch_on_pad_now(
     let Some(at) = at.cloned() else {
         return fail(format!("no launch site {}", site.unwrap_or("")));
     };
-    if let Some(owner) = launch_site_occupant(s, &u, &at) {
+    if let Some(owner) = launch_site_occupant(s, &u, &at, u.clock(player_id).tick) {
         return fail(format!("{} is in use by {}", at.name, owner));
     }
     let (pad_lat, pad_lon) = (at.lat_deg, at.lon_deg);
+    let shared_tick = u.tick();
+    let player_tick = u.clock(player_id).tick;
+    u.set_tick(player_tick);
     let e = u.spawn_powered_on_surface(&name, body, spec, pad_lat, pad_lon);
+    u.assign_timeline(e, player_id);
+    u.set_tick(shared_tick);
     u.set_craft(e, craft.clone());
     u.set_structure(
         e,
@@ -1576,10 +1585,10 @@ fn launch_on_pad_now(
 
 fn trajectories(s: &Shared) -> Vec<ServerMessage> {
     let u = s.universe.lock().expect("sim lock");
-    let tick = u.tick();
     let list = s.vessels.lock().expect("vessels lock");
     list.iter()
         .map(|&(e, id, _)| {
+            let tick = u.vessel_tick(e);
             let patches = u
                 .predict(e)
                 .iter()
@@ -1606,10 +1615,11 @@ fn trajectories(s: &Shared) -> Vec<ServerMessage> {
         .collect()
 }
 
-fn snapshot(s: &Shared) -> (ServerMessage, ServerMessage, ServerMessage) {
-    let (warp, warp_limited_by) = apply_warp(s);
+fn snapshot(s: &Shared, player: u64) -> (ServerMessage, ServerMessage, ServerMessage) {
     let u = s.universe.lock().expect("sim lock");
-    let tick = u.tick();
+    let clock = u.clock(player);
+    let (warp, warp_limited_by) = (clock.warp, None);
+    let tick = clock.tick;
     let ut = tick.seconds();
     let bodies = s
         .catalog
@@ -1681,6 +1691,13 @@ fn crew_request(s: &Shared, player_id: u64, msg: ClientMessage) -> ServerMessage
             };
             let r = s.universe.lock().expect("sim lock").board(e, t);
             if r.is_ok() {
+                let owner = s.vessels.lock().expect("vessels lock").iter().find(|v| v.0 == t).and_then(|v| v.2);
+                if owner != Some(player_id) {
+                    let mut points = s.revert.lock().expect("revert lock");
+                    for player in [Some(player_id), owner].into_iter().flatten() {
+                        if let Some(point) = points.get_mut(&player) { point.local_valid = false; }
+                    }
+                }
                 s.vessels.lock().expect("vessels lock").retain(|v| v.0 != e);
             }
             ack(vessel, r.map(|_| None))
@@ -1824,8 +1841,11 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
                     .retain(|&(v, _, _)| v != e);
             }
             let (reports, earned) = {
+                let mut u = s.universe.lock().expect("sim lock");
                 let mut c = s.campaign.lock().expect("campaign lock");
-                science::submit(&mut c, reports, player_id, tick)
+                let result = science::submit(&mut c, reports, player_id, tick);
+                u.set_science_credited(c.science.submitted.iter().map(|s| s.report.clone()));
+                result
             };
             tracing::info!(
                 player = player_id,
@@ -1985,6 +2005,9 @@ fn campaign_state(s: &Shared, player_id: u64, join: Option<&String>) -> ServerMe
     let tick = s.universe.lock().expect("sim lock").tick();
     let vessels = s.vessels.lock().expect("vessels lock").len() as u32;
     let mut c = s.campaign.lock().expect("campaign lock");
+    if !campaigns::can_access(&c, player_id) {
+        return ServerMessage::Rejected { reason: "join this campaign with a share code first".into() };
+    }
     if let Some(name) = join {
         if !c.members.iter().any(|m| m.player_id == player_id) {
             c.members.push(save::CampaignMember {
@@ -2036,7 +2059,7 @@ fn save_request(s: &Shared, player_id: u64, msg: &ClientMessage) -> ServerMessag
     let action = match msg {
         ClientMessage::QuickSave => A::QuickSave,
         ClientMessage::QuickLoad => A::QuickLoad,
-        ClientMessage::RevertToLaunch => A::RevertToLaunch,
+        ClientMessage::RevertToLaunch | ClientMessage::RevertScoped { editor: false, .. } => A::RevertToLaunch,
         _ => A::RevertToEditor,
     };
     let mut craft = None;
@@ -2054,7 +2077,7 @@ fn save_request(s: &Shared, player_id: u64, msg: &ClientMessage) -> ServerMessag
                 }
                 None => Err("no quicksave yet".into()),
                 Some(f) => campaigns::reload(s, player_id, &f).map(|_| {
-                    *s.revert.lock().expect("revert lock") = None;
+                    s.revert.lock().expect("revert lock").clear();
                 }),
             }
         }
@@ -2063,25 +2086,25 @@ fn save_request(s: &Shared, player_id: u64, msg: &ClientMessage) -> ServerMessag
                 .revert
                 .lock()
                 .expect("revert lock")
-                .as_ref()
-                .filter(|r| r.player == player_id)
+                .get(&player_id)
                 .map(|r| {
                     let file = if action == A::RevertToLaunch {
                         r.launch.clone()
                     } else {
                         r.editor.clone()
                     };
-                    (file, r.craft.clone())
+                    (file, r.craft.clone(), r.local_valid)
                 });
             match point {
                 _ if !campaigns::allowed(s, "AllowRevert") => {
                     Err("revert is off for this campaign".into())
                 }
                 None => Err("nothing to revert to".into()),
-                Some((file, c)) => campaigns::reload(s, player_id, &file).map(|_| {
+                Some((_, _, false)) if !matches!(msg, ClientMessage::RevertScoped { scope: ose_net::TimeScope::Global, .. }) => Err("vessels interacted with another player after launch; use global revert".into()),
+                Some((file, c, _)) => campaigns::revert(s, player_id, &file, matches!(msg, ClientMessage::RevertScoped { scope: ose_net::TimeScope::Global, .. })).map(|_| {
                     if action == A::RevertToEditor {
                         craft = Some(c);
-                        *s.revert.lock().expect("revert lock") = None;
+                        s.revert.lock().expect("revert lock").remove(&player_id);
                     }
                 }),
             }
@@ -2398,8 +2421,26 @@ fn push_roster(s: &Shared) {
     }
 }
 
-fn session_list(s: &Shared) -> ServerMessage {
-    campaigns::list(s)
+/// Serialize writes with the periodic saver so acknowledged invitations survive a restart.
+fn persist(s: &Shared) -> Result<(), String> {
+    let Some(path) = &s.save_path else { return Ok(()) };
+    let _write = s.save_lock.lock().expect("save write lock");
+    let file = {
+        let u = s.universe.lock().expect("sim lock");
+        let v = s.vessels.lock().expect("vessels lock");
+        let c = s.campaign.lock().expect("campaign lock");
+        let k = s.crafts.lock().expect("crafts lock");
+        let mut file = save::capture(&u, &v, &c, &k);
+        file.shelf = s.shelf.lock().expect("shelf lock").clone();
+        file
+    };
+    // Keep saves serialized, but let physics, controls and snapshots proceed during JSON encoding
+    // and disk I/O. A slow write must not freeze vessels while the browser continues rendering.
+    save::write(path, &file).map_err(|e| format!("could not save campaign: {e}"))
+}
+
+fn session_list(s: &Shared, player: u64) -> ServerMessage {
+    campaigns::list(s, player)
 }
 
 fn craft_summary(
@@ -2614,11 +2655,16 @@ fn launch_craft(
     let Some(body) = u.body_entity(&home.id) else {
         return fail("home body missing".into());
     };
+    let base = u.tick();
+    let local = u.clock(player_id).tick;
+    u.set_tick(local);
     let e = u.spawn_vessel_in_circular_orbit(&name, body, altitude_m);
+    u.assign_timeline(e, player_id);
+    u.set_tick(base);
     let spec = flight_spec_for(s, craft);
     if !spec.stages.is_empty() {
         if let Some((_, _, orbit)) = u.vessel(e) {
-            let (r, v) = orbit.state_at(u.ut());
+            let (r, v) = orbit.state_at(u.vessel_tick(e).seconds());
             u.set_dormant(e, ose_sim::flight::Powered::new(spec, r, v, false));
             u.set_craft(e, craft.clone());
             u.set_structure(
@@ -2653,7 +2699,12 @@ fn spawn_player_probe(s: &Shared, player_id: u64, name: &str) -> Option<u64> {
         .find(|b| b.id == "Kerbin")
         .or_else(|| s.catalog.first())?;
     let body = u.body_entity(&home.id)?;
+    let base = u.tick();
+    let local = u.clock(player_id).tick;
+    u.set_tick(local);
     let e = u.spawn_vessel_in_circular_orbit(&format!("{name} probe"), body, 100_000.0);
+    u.assign_timeline(e, player_id);
+    u.set_tick(base);
     let mut list = s.vessels.lock().expect("vessels lock");
     let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
     list.push((e, id, Some(player_id)));
@@ -2678,14 +2729,13 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         }
                         let outcome: Result<(u64, String, bool), String> = {
                             let mut acc = s.accounts.lock().expect("accounts lock");
-                            let resumed = match token.as_deref() {
-                                Some(t) => acc.resume(t, &display_name).ok().flatten(),
-                                None => None,
-                            };
-                            match resumed {
-                                Some(p) => Ok((p.id, token.clone().unwrap_or_default(), true)),
-                                None => acc
-                                    .create(&display_name)
+                            match token.as_deref() {
+                                Some(t) => match acc.resume(t, &display_name) {
+                                    Ok(Some(p)) => Ok((p.id, t.to_string(), true)),
+                                    Ok(None) => Err("invalid login code; enter your private login code or clear it to create an account".into()),
+                                    Err(e) => Err(format!("account error: {e}")),
+                                },
+                                None => acc.create(&display_name)
                                     .map(|(p, t)| (p.id, t, false))
                                     .map_err(|e| format!("account error: {e}")),
                             }
@@ -2741,9 +2791,6 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         {
                             return;
                         }
-                        if !has_vessel(&s, id) {
-                            spawn_player_probe(&s, id, &display_name);
-                        }
                         *s.connections
                             .lock()
                             .expect("connections lock")
@@ -2798,8 +2845,13 @@ async fn session(mut socket: WebSocket, s: AppState) {
     'session: loop {
         tokio::select! {
             _ = presence_tick.tick() => {
-                let ServerMessage::SessionList { sessions } = session_list(&s) else { unreachable!() };
-                let ServerMessage::CampaignState { id, members, .. } = campaign_state(&s, player_id, None) else { unreachable!() };
+                let ServerMessage::SessionList { sessions } = session_list(&s, player_id) else { unreachable!() };
+                let (id, members) = if campaigns::live_access(&s, player_id) {
+                    match campaign_state(&s, player_id, None) {
+                        ServerMessage::CampaignState { id, members, .. } => (id, members),
+                        _ => (String::new(), Vec::new()),
+                    }
+                } else { (String::new(), Vec::new()) };
                 let presence = ServerMessage::SessionPresence { sessions, campaign_id: id, members };
                 // Clock movement alone does not rebuild the session browser.
                 let mut signature = presence.clone();
@@ -2813,7 +2865,9 @@ async fn session(mut socket: WebSocket, s: AppState) {
             }
             frames = streaming::next_batch(&mut snapshots, subscribed_at) => {
                 let Some(frames) = frames else { break; };
-                if !streaming::send_batch(&mut socket, &frames).await {
+                if !campaigns::live_access(&s, player_id) { continue; }
+                if frames.started < *s.world_changed_at.lock().expect("world change lock") { continue; }
+                if !streaming::send_batch_for(&mut socket, &frames, player_id).await {
                     break;
                 }
                 let mine: Vec<ServerMessage> = {
@@ -2842,16 +2896,44 @@ async fn session(mut socket: WebSocket, s: AppState) {
             }
             frames = streaming::next_batch(&mut predictions, subscribed_at) => {
                 let Some(frames) = frames else { break; };
-                if !streaming::send_batch(&mut socket, &frames).await { break; }
+                if !campaigns::live_access(&s, player_id) { continue; }
+                if frames.started < *s.world_changed_at.lock().expect("world change lock") { continue; }
+                if !streaming::send_batch_for(&mut socket, &frames, player_id).await { break; }
             }
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Binary(b))) => match ose_net::decode::<ClientMessage>(&b) {
+                        Ok(ref msg) if !matches!(msg,
+                            ClientMessage::Hello { .. } | ClientMessage::Ping { .. }
+                            | ClientMessage::ListSessions | ClientMessage::CreateSession { .. }
+                            | ClientMessage::SelectSession { .. } | ClientMessage::LeaveSession
+                            | ClientMessage::ShareSession { .. } | ClientMessage::JoinSessionCode { .. }
+                            | ClientMessage::ClaimSession { .. } | ClientMessage::DeleteSession { .. })
+                            && !campaigns::live_access(&s, player_id) => {
+                            if !send(&mut socket, &ServerMessage::Rejected {
+                                reason: "join this campaign with a share code first".into(),
+                            }).await { break; }
+                        }
+                        Ok(ClientMessage::ShareSession { id }) => {
+                            let reply = match campaigns::share(&s, player_id, &id)
+                                .and_then(|reply| persist(&s).map(|_| reply)) {
+                                Ok(reply) => reply, Err(reason) => ServerMessage::Rejected { reason },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::JoinSessionCode { code }) => {
+                            let reply = match campaigns::join_code(&s, player_id, &code)
+                                .and_then(|reply| persist(&s).map(|_| reply)) {
+                                Ok(reply) => reply, Err(reason) => ServerMessage::Rejected { reason },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                            if !send(&mut socket, &session_list(&s, player_id)).await { break; }
+                        }
                         Ok(ClientMessage::RequestWarp { factor }) => {
-                            let f = factor.clamp(1, 10_000_000);
-                            s.warp_requests.lock().expect("warp lock").insert(player_id, f);
-                            let (eff, _) = apply_warp(&s);
-                            tracing::info!(player = player_id, requested = f, effective = eff, "warp request");
+                            request_scoped_warp(&s, player_id, factor, ose_net::TimeScope::Local);
+                        }
+                        Ok(ClientMessage::RequestScopedWarp { factor, scope }) => {
+                            request_scoped_warp(&s, player_id, factor, scope);
                         }
                         Ok(ClientMessage::Ping { sent_tick }) => {
                             if !send(&mut socket, &ServerMessage::Pong { sent_tick }).await { break; }
@@ -2882,6 +2964,7 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         }
                         Ok(ClientMessage::JoinCampaign) => {
                             let name = display_name_for(&s, player_id);
+                            if !has_vessel(&s, player_id) { spawn_player_probe(&s, player_id, &name); }
                             let reply = campaign_state(&s, player_id, Some(&name));
                             if !send(&mut socket, &reply).await { break; }
                         }
@@ -2890,12 +2973,14 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::ListSessions) => {
-                            let reply = session_list(&s);
+                            let reply = session_list(&s, player_id);
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::SelectSession { id }) => {
                             let live = s.campaign.lock().expect("campaign lock").id.clone();
-                            let switched = if id == live {
+                            let switched = if !campaigns::access(&s, player_id, &id) {
+                                Err("join this campaign with a share code first".into())
+                            } else if id == live {
                                 Ok(())
                             } else {
                                 campaigns::switch(&s, player_id, campaigns::Target::Shelved(id.clone()))
@@ -2930,24 +3015,27 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 }
                                 Err(reason) => ServerMessage::Rejected { reason },
                             };
+                            let reply = match persist(&s) { Ok(()) => reply, Err(reason) => ServerMessage::Rejected { reason } };
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::LeaveSession) => {
                             s.playing.lock().expect("playing lock").remove(&player_id);
+            s.universe.lock().expect("sim lock").set_timeline_warp(player_id, 1);
+                            s.warp_requests.lock().expect("warp lock").insert(player_id, 1);
                             apply_warp(&s);
-                            let reply = session_list(&s);
+                            let reply = session_list(&s, player_id);
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::ClaimSession { id }) => {
-                            let reply = match campaigns::manage(&s, player_id, &id, false) {
-                                Ok(()) => session_list(&s),
+                            let reply = match campaigns::manage(&s, player_id, &id, false).and_then(|_| persist(&s)) {
+                                Ok(()) => session_list(&s, player_id),
                                 Err(reason) => ServerMessage::Rejected { reason },
                             };
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::DeleteSession { id }) => {
-                            let reply = match campaigns::manage(&s, player_id, &id, true) {
-                                Ok(()) => session_list(&s),
+                            let reply = match campaigns::manage(&s, player_id, &id, true).and_then(|_| persist(&s)) {
+                                Ok(()) => session_list(&s, player_id),
                                 Err(reason) => ServerMessage::Rejected { reason },
                             };
                             if !send(&mut socket, &reply).await { break; }
@@ -3143,6 +3231,14 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             };
                             if !send(&mut socket, &reply).await { break; }
                         }
+                        Ok(ClientMessage::EvaInteract { vessel }) => {
+                            let result = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => s.universe.lock().expect("sim lock").eva_interact(e),
+                                None => Err("not your vessel".into()),
+                            };
+                            let reply = ServerMessage::FlightAck { vessel, accepted: result.is_ok(), reason: result.err() };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
                         Ok(ClientMessage::SetRawRotation {vessel,pitch,yaw,roll}) => {
                             let ok=owned_vessel(&s,vessel,player_id).is_some_and(|e|s.universe.lock().expect("sim lock").set_raw_rotation(e,ose_math::DVec3::new(pitch as f64,yaw as f64,roll as f64)));
                             if !send(&mut socket,&ServerMessage::FlightAck {vessel,accepted:ok,reason:(!ok).then(||"invalid raw input or ownership".into())}).await {break;}
@@ -3204,7 +3300,8 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         Ok(msg @ (ClientMessage::QuickSave
                         | ClientMessage::QuickLoad
                         | ClientMessage::RevertToLaunch
-                        | ClientMessage::RevertToEditor)) => {
+                        | ClientMessage::RevertToEditor
+                        | ClientMessage::RevertScoped { .. })) => {
                             let reply = save_request(&s, player_id, &msg);
                             if !send(&mut socket, &reply).await { break; }
                         }
@@ -3294,6 +3391,21 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             };
                             if !send(&mut socket, &reply).await { break; }
                         }
+                        Ok(ClientMessage::SetPartDeployment { vessel, part, deploy }) => {
+                            let accepted = owned_vessel(&s, vessel, player_id).is_some_and(|e| s.universe.lock().expect("sim lock").deploy_part(e, part, deploy));
+                            let reply = ServerMessage::FlightAck { vessel, accepted, reason: if accepted { None } else { Some("part cannot deploy or retract".into()) } };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::DeployAntennas { vessel, deploy }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => match s.universe.lock().expect("sim lock").deploy_antennas(e, deploy) {
+                                    Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
+                                    _ => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("no antennas can move".into()) },
+                                },
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
                         Ok(ClientMessage::DeployPanels { vessel, deploy }) => {
                             let reply = match owned_vessel(&s, vessel, player_id) {
                                 Some(e) => match s.universe.lock().expect("sim lock").deploy_panels(e, deploy) {
@@ -3331,6 +3443,7 @@ async fn session(mut socket: WebSocket, s: AppState) {
                 .expect("warp lock")
                 .remove(&player_id);
             s.playing.lock().expect("playing lock").remove(&player_id);
+            s.universe.lock().expect("sim lock").set_timeline_warp(player_id, 1);
         }
     }
     drop(connections);

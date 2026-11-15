@@ -578,6 +578,33 @@ class Exporter:
             return None
         path = self.out / "parts" / f"{part_id}.glb"
         metadata = export_rig(env, glb, transforms, go_name, node_by_tf, skins)
+        # Retain authored Unity Light transforms, ranges and cones for flight lamps.
+        emitters = []
+        lamp_strengths = {}
+        for obj in env.objects:
+            if obj.type.name != "MonoBehaviour":
+                continue
+            try:
+                module = obj.read_typetree()
+            except Exception:
+                continue
+            if "dataLight" not in module:
+                continue
+            for lamp in module.get("kspLights", []):
+                lamp_strengths[lamp["light"]["m_PathID"]] = float(lamp.get("brightness", 1.0)) * float(module.get("maxLightIntensity", 2.0))
+            metadata["ose_light_emission"] = float(module.get("emissionHDRIntensity", 6.0))
+        for obj in env.objects:
+            if obj.type.name != "Light":
+                continue
+            light = obj.read()
+            tf = next((k for k, t in transforms.items() if t.m_GameObject.path_id == light.m_GameObject.path_id), None)
+            if tf not in node_by_tf or (roots and tf not in under):
+                continue
+            emitters.append({"node": node_by_tf[tf], "range": float(light.m_Range),
+                             "spot_cos": math.cos(math.radians(float(light.m_SpotAngle)) * 0.5) if light.m_Type == 0 else -1.0,
+                             "intensity": lamp_strengths.get(obj.path_id, float(light.m_Intensity))})
+        if emitters:
+            metadata["ose_lights"] = emitters
         from gimbal_metadata import definition
         gimbal = definition(part_id, glb.nodes)
         if gimbal is not None:
@@ -597,7 +624,7 @@ class Exporter:
         if "ose_deployment" in metadata and part_data.exists():
             modules = json.loads(part_data.read_text(encoding="utf-8"))["data"].get("serializedPartModules", [])
             names = {m["Name"] for m in modules}
-            control = "panels" if "PartComponentModule_SolarPanel" in names else "gear" if any(n in names for n in ("PartComponentModule_LandingLeg", "PartComponentModule_WheelBase")) else ""
+            control = "panels" if "PartComponentModule_SolarPanel" in names else "gear" if any(n in names for n in ("PartComponentModule_LandingLeg", "PartComponentModule_WheelBase")) else "antennas" if "PartComponentModule_DataTransmitter" in names else ""
             metadata["ose_deployment"]["control"] = control
         size = glb.write(path, {"part_id": part_id, "source": main, **metadata})
         return {"id": part_id, "file": f"parts/{part_id}.glb", "bytes": size, "meshes": mesh_count, "textures": sorted(texture_slots_used)}
