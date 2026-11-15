@@ -56,9 +56,17 @@ impl Universe {
     /// up by their next heat step) and their craft is pushed along the exhaust for the `dt` seconds this
     /// covers. Landed craft hold their ground.
     pub(crate) fn exhaust_on_other_vessels(&mut self, dt: f64) {
-        let mut q = self.world.query::<&mut Structure>();
-        for mut st in q.iter_mut(&mut self.world) {
-            if st.outside_exhaust_flux_kw.iter().any(|&f| f != 0.0) {
+        let heated: Vec<Entity> = {
+            let mut q = self.world.query::<(Entity, &Structure)>();
+            q.iter(&self.world)
+                .filter(|(e, st)| {
+                    st.outside_exhaust_flux_kw.iter().any(|&f| f != 0.0) && self.here(*e)
+                })
+                .map(|(e, _)| e)
+                .collect()
+        };
+        for e in heated {
+            if let Some(mut st) = self.world.get_mut::<Structure>(e) {
                 st.outside_exhaust_flux_kw.fill(0.0);
             }
         }
@@ -68,7 +76,7 @@ impl Universe {
                 .world
                 .query::<(Entity, &flight::Powered, &bodies::ReferenceBody, &Structure)>();
             q.iter(&self.world)
-                .filter(|(_, p, _, _)| !p.crashed)
+                .filter(|(e, p, _, _)| !p.crashed && self.here(*e))
                 .map(|(e, p, b, st)| {
                     let c = st.rigid.rest_centre();
                     let reach = (0..st.rigid.len())

@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 69;
+pub const PROTOCOL_VERSION: u16 = 70;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -440,6 +440,20 @@ pub enum ClientMessage {
     },
     /// Stop piloting (leaving the flight view), so another player can take the vessel.
     ReleaseControl,
+    /// The vessel the player's view follows now (a vessel they ride along in, or picked on the map), or none.
+    /// The server sends the vessels near it, and near the one the player pilots, in full detail; others go
+    /// without their per-part lists.
+    Viewing {
+        vessel: Option<u64>,
+    },
+    /// Catch up with `player`'s time (protocol 70): time warp is each player's own, so players drift apart in
+    /// time; this runs the sender's time (and the vessel they pilot) forward at the fastest warp their vessels
+    /// allow until it reaches `player`'s, and from then on they share one clock. Nothing goes back in time, so
+    /// a player behind the sender is refused (they sync to the sender instead). Answered by `Rejected` when
+    /// refused; `PlayerTimes` shows the progress.
+    SyncTime {
+        player: u64,
+    },
 }
 
 /// A science report (the original's research report).
@@ -567,6 +581,40 @@ pub struct VesselState {
     pub target: Option<TargetReadout>,
     /// Changes whenever the vessel's craft does (parts lost or gained); ask `GetVesselCraft` again then.
     pub craft_rev: u32,
+    /// What is left of the flight readout of a vessel sent far from anything the player views (`flight` is
+    /// then `None`): enough for the map and the tracking station (protocol 69).
+    pub brief: Option<FlightBrief>,
+}
+
+/// A far vessel's flight readout in brief (see `VesselState::brief`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FlightBrief {
+    pub situation: FlightSituation,
+    pub eva: bool,
+    pub altitude_m: f64,
+}
+
+impl VesselState {
+    /// Its flight situation, from the readout or the brief.
+    pub fn situation(&self) -> Option<FlightSituation> {
+        self.flight
+            .as_ref()
+            .map(|f| f.situation)
+            .or(self.brief.map(|b| b.situation))
+    }
+
+    /// Whether it is a Kerbal on EVA, from the readout or the brief.
+    pub fn is_eva(&self) -> bool {
+        self.flight.as_ref().map(|f| f.eva).unwrap_or(false) || self.brief.is_some_and(|b| b.eva)
+    }
+
+    /// Height above the sea of its body, m, when the server gave it.
+    pub fn altitude_m(&self) -> Option<f64> {
+        self.flight
+            .as_ref()
+            .map(|f| f.altitude_m)
+            .or(self.brief.map(|b| b.altitude_m))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1299,6 +1347,23 @@ pub enum ServerMessage {
         by: Option<String>,
         event: AgencyEvent,
     },
+    /// Where the other players are in time (protocol 70), once a second while anyone is in another time
+    /// than the receiver: time warp is each player's own. Empty once everyone shares one clock again.
+    PlayerTimes {
+        players: Vec<PlayerTime>,
+        /// Catching up with this player's time now (`ClientMessage::SyncTime`).
+        syncing_to: Option<u64>,
+    },
+}
+
+/// Another player's time, against the receiver's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlayerTime {
+    pub player: u64,
+    /// Seconds ahead of the receiver (negative: behind). Zero: the same clock.
+    pub ahead_s: f64,
+    /// Their time warp now.
+    pub warp: u32,
 }
 
 pub fn encode<T: Serialize>(msg: &T) -> Result<Vec<u8>, postcard::Error> {
