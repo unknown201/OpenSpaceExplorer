@@ -22,10 +22,10 @@ async fn start_with_mail(dir: &Path, mail: Option<u16>) -> (Server, String) {
     start_config(dir, mail, true).await
 }
 async fn start_config(dir: &Path, mail: Option<u16>, allow_guests: bool) -> (Server, String) {
-    // Wait for `/health` to answer, not just for a TCP connect: a connect to a localhost port in the
-    // ephemeral range with nobody listening yet can connect to itself (TCP simultaneous open), which made the
-    // first WebSocket connect fail with "connection refused". A port picked free can also be taken by another
-    // test's server first: then this one exits, and another port is picked.
+    // A port picked free can be taken by another test's server before this one binds it: then this server
+    // exits, while a TCP probe (or the next connection) reaches the other test's server, which goes away when
+    // that test ends ("connection refused" later on). So wait for this server's own "server listening" log
+    // line, which it writes only once it holds the port, and pick another port if it exits first.
     for _ in 0..5 {
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
@@ -43,51 +43,39 @@ async fn start_config(dir: &Path, mail: Option<u16>, allow_guests: bool) -> (Ser
                 .env("OSE_SMTP_PORT", port.to_string())
                 .env("OSE_SMTP_FROM", "OpenSpaceExplorer <ose@example.com>");
         }
-        let child = command
+        let mut child = command
             .args(["--listen", &addr, "--save-interval-s", "3600", "--db"])
             .arg(dir.join("accounts.json"))
             .arg("--save")
             .arg(dir.join("save.json"))
-            .stdout(Stdio::null())
+            .env("RUST_LOG", "info")
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let mut server = Server(child);
-        for _ in 0..200 {
-            if server.0.try_wait().ok().flatten().is_some() {
-                break;
-            }
-            if health_ok(&addr).await {
-                // still ours a moment later (a server that lost the port has exited by now)
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                if server.0.try_wait().ok().flatten().is_none() {
-                    return (server, addr);
+        // keep draining the log so the server never blocks on a full pipe
+        let log = child.stdout.take().unwrap();
+        let (bound_tx, bound) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(log).lines().map_while(Result::ok) {
+                if line.contains("server listening") {
+                    let _ = bound_tx.send(());
                 }
+            }
+        });
+        let mut server = Server(child);
+        for _ in 0..400 {
+            if bound.try_recv().is_ok() {
+                return (server, addr);
+            }
+            if server.0.try_wait().ok().flatten().is_some() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
     panic!("server did not start");
-}
-/// True when `GET /health` answers 200: this server's listener is bound and its router serving.
-async fn health_ok(addr: &str) -> bool {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let Ok(Ok(mut s)) = tokio::time::timeout(
-        Duration::from_millis(500),
-        tokio::net::TcpStream::connect(addr),
-    )
-    .await
-    else {
-        return false;
-    };
-    let request = format!("GET /health HTTP/1.0\r\nHost: {addr}\r\n\r\n");
-    if s.write_all(request.as_bytes()).await.is_err() {
-        return false;
-    }
-    let mut buf = Vec::new();
-    let _ = tokio::time::timeout(Duration::from_millis(500), s.read_to_end(&mut buf)).await;
-    String::from_utf8_lossy(&buf).contains(" 200 ")
 }
 async fn connect(addr: &str, token: Option<String>) -> (Ws, S) {
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
