@@ -18,6 +18,7 @@ mod packages;
 mod previews;
 mod replay;
 mod rooms;
+mod routes;
 mod save;
 mod science;
 mod streaming;
@@ -957,6 +958,7 @@ fn step_once(sim: &Shared) {
         }
     }
     maintain_registry(sim);
+    routes::after_step(sim);
     replay::after_step(sim, sim.steps.load(std::sync::atomic::Ordering::SeqCst));
 }
 
@@ -4859,6 +4861,13 @@ fn handle_message(
             };
             out.push((reply).clone());
         }
+        Ok(
+            msg @ (ClientMessage::SetDepot { .. }
+            | ClientMessage::RecordRoute { .. }
+            | ClientMessage::StopRecording
+            | ClientMessage::ForgetRecording { .. }
+            | ClientMessage::RoutesInfo),
+        ) => out.push(routes::handle(s, player_id, &msg)),
         Ok(ClientMessage::Viewing { vessel }) => interest::set_viewing(s, player_id, vessel),
         Ok(ClientMessage::TakeControl { vessel }) => {
             let ok = owned_vessel(s, vessel, player_id).is_some();

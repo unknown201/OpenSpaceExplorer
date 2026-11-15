@@ -2031,6 +2031,7 @@ dependencies = [
  "ose-data",
  "ose-math",
  "ose-net",
+ "ose-routes",
  "ose-sim",
  "serde",
  "serde_json",

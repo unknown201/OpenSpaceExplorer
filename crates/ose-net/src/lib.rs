@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 70;
+pub const PROTOCOL_VERSION: u16 = 71;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -454,6 +454,26 @@ pub enum ClientMessage {
     SyncTime {
         player: u64,
     },
+    /// Delivery routes (protocol 71, `docs/delivery-routes-design.md`): mark one of the player's vessels as a
+    /// depot, or unmark the depot it carries. Answers `Routes`.
+    SetDepot {
+        vessel: u64,
+        depot: bool,
+    },
+    /// Start recording the proving flight of a route: `vessel` is the player's, standing on the pad or runway.
+    /// One recording per player at a time. Answers `Routes`.
+    RecordRoute {
+        vessel: u64,
+    },
+    /// End the player's recording: docked at the depot it becomes a one-way route (the vessel stays), anywhere
+    /// else it is dropped. Answers `Routes`.
+    StopRecording,
+    /// Remove one of the player's finished or dropped recordings. Answers `Routes`.
+    ForgetRecording {
+        id: u64,
+    },
+    /// The campaign's depots and recordings. Answers `Routes`.
+    RoutesInfo,
 }
 
 /// A science report (the original's research report).
@@ -1354,6 +1374,50 @@ pub enum ServerMessage {
         /// Catching up with this player's time now (`ClientMessage::SyncTime`).
         syncing_to: Option<u64>,
     },
+    /// The campaign's depots and proving flights (protocol 71): the answer to the routes messages, and sent to
+    /// a player when their recording moves on (a phase, a burn, docking, landing, or its end). `reason` says
+    /// why a request was refused.
+    Routes {
+        depots: Vec<DepotInfo>,
+        recordings: Vec<RecordingInfo>,
+        reason: Option<String>,
+    },
+}
+
+/// A vessel marked as a depot (`ServerMessage::Routes`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DepotInfo {
+    pub id: u64,
+    pub name: String,
+    pub owner: u64,
+    /// The vessel carrying it now (`None` when it is in another player's time or gone).
+    pub vessel: Option<u64>,
+}
+
+/// A proving flight, recorded or being recorded (`ServerMessage::Routes`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecordingInfo {
+    pub id: u64,
+    pub player: u64,
+    /// The craft's name.
+    pub craft: String,
+    /// The vessel carrying it now, while recording.
+    pub vessel: Option<u64>,
+    /// Pad, Ascent, Transfer, Approach, Docked, Return or Descent.
+    pub phase: String,
+    /// Recording, RoundTrip, OneWay, or Dropped.
+    pub state: String,
+    /// Why it was dropped.
+    pub dropped: Option<String>,
+    /// The depot's name, once arrived.
+    pub depot: Option<String>,
+    pub duration_s: f64,
+    /// Resources used from its own tanks (burned or transferred), and what the depot gained.
+    pub used: Vec<(String, f64)>,
+    pub delivered: Vec<(String, f64)>,
+    /// How many of its parts stayed docked at the depot.
+    pub payload_parts: u32,
+    pub burns: u32,
 }
 
 /// Another player's time, against the receiver's.

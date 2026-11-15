@@ -151,10 +151,14 @@ impl Recording {
 /// Which vessels count as depots: the server answers from the players' depot flags.
 pub type IsDepot<'a> = &'a dyn Fn(&Universe, Entity) -> bool;
 
+/// Saved with the campaign, so a quicksave, a revert and a restart keep it. The entities are only hints: the
+/// vessel is found again by its parts, and the depot by distance.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Recorder {
     pub recording: Recording,
     /// Our parts (still with us, or left as payload). Parts dropped by staging leave this set.
     ours: BTreeSet<String>,
+    #[serde(skip, default = "no_entity")]
     vessel: Entity,
     phase: Phase,
     phase_start: f64,
@@ -163,11 +167,24 @@ pub struct Recorder {
     burning: bool,
     last_lit: f64,
     /// The depot we are near or docked to, and the depot's tanks when we docked.
+    #[serde(skip)]
     depot: Option<Entity>,
     depot_tanks_at_dock: BTreeMap<String, f64>,
     depot_guids: BTreeSet<String>,
     /// The nearest depot's parts, as last seen before docking.
     near_guids: BTreeSet<String>,
+    /// Our vessel's parts last tick, in order. Crafts launched from the editor share part names (`p1`,
+    /// `p2`, ...), and docking renames the repeats, so the docked craft is told apart by position: the
+    /// vessel kept comes first, the one joined to it after (`ose_sim::docking::merge`).
+    #[serde(default)]
+    prev_parts: Vec<String>,
+    /// Where we were last seen (body, position, speed, time), to pick our piece among same-named copies.
+    #[serde(default)]
+    last_seen: Option<(String, DVec3, f64, f64)>,
+}
+
+fn no_entity() -> Entity {
+    Entity::PLACEHOLDER
 }
 
 fn sum_tanks(craft: &Craft, which: &dyn Fn(&str) -> bool) -> BTreeMap<String, f64> {
@@ -209,6 +226,7 @@ impl Recorder {
         let (lat, lon) = flight::lat_lon(&body, p.r, u.ut());
         let ours: BTreeSet<String> = craft.parts.iter().map(|p| p.guid.clone()).collect();
         let tanks = sum_tanks(&craft, &|_| true);
+        let prev_parts = craft.parts.iter().map(|p| p.guid.clone()).collect();
         Ok(Self {
             recording: Recording {
                 craft,
@@ -230,13 +248,16 @@ impl Recorder {
             phase: Phase::Pad,
             phase_start: u.ut(),
             phase_tanks: tanks,
-            last_sample: f64::NEG_INFINITY,
+            // finite, so the save's JSON keeps it
+            last_sample: f64::MIN,
             burning: false,
             last_lit: 0.0,
             depot: None,
             depot_tanks_at_dock: BTreeMap::new(),
             depot_guids: BTreeSet::new(),
             near_guids: BTreeSet::new(),
+            prev_parts,
+            last_seen: Some((body.id.clone(), p.r, p.v.length(), u.ut())),
         })
     }
 
@@ -247,6 +268,12 @@ impl Recorder {
     /// The entity carrying our parts now.
     pub fn vessel(&self) -> Entity {
         self.vessel
+    }
+
+    /// The universe was replaced (a quickload or a revert): the vessel is found again by its parts.
+    pub fn universe_replaced(&mut self) {
+        self.vessel = Entity::PLACEHOLDER;
+        self.depot = None;
     }
 
     pub fn is_recording(&self) -> bool {
@@ -286,21 +313,54 @@ impl Recorder {
         self.recording.state = State::Dropped(why.into());
     }
 
-    /// Find the entity that carries our parts, after a merge or split. Prefers the one holding most.
+    /// Find the entity that carries our parts, after a merge or split. Docked, the vessel must hold all of
+    /// them: after undocking, our piece is the one without the depot's parts. Among copies of the same craft
+    /// (same part names) only those near where we were last seen count.
     fn follow(&mut self, u: &mut Universe) -> Option<Craft> {
+        let docked = self.phase == Phase::Docked;
+        let holds = |me: &Self, c: &Craft| {
+            let n = c.parts.iter().filter(|p| me.with_us(&p.guid)).count();
+            if docked {
+                n == me.ours.len()
+            } else {
+                n > 0
+            }
+        };
         if let Some(c) = u.current_craft(self.vessel) {
-            if c.parts.iter().any(|p| self.with_us(&p.guid)) {
+            if holds(self, &c) {
                 return Some(c);
             }
         }
-        let mut best: Option<(usize, Entity, Craft)> = None;
-        for e in u.vessels() {
+        let ut = u.ut();
+        let near = |u: &Universe, e: Entity, me: &Self| -> Option<f64> {
+            let Some((body, r, speed, t)) = &me.last_seen else {
+                return Some(0.0);
+            };
+            let (p, _) = flight_state(u, e)?;
+            let (_, b) = body_of(u, e)?;
+            let d = (p.r - *r).length();
+            let gate = 1_000.0 + 2.0 * speed * (ut - t).abs();
+            (b.id == *body && d < gate).then_some(d)
+        };
+        // (no depot parts while docked, our part count, -distance)
+        let mut best: Option<((bool, usize, f64), Entity, Craft)> = None;
+        let mut hints = vec![self.depot];
+        hints.extend(u.vessels().into_iter().map(Some));
+        for e in hints.into_iter().flatten() {
             let Some(c) = u.current_craft(e) else {
                 continue;
             };
             let n = c.parts.iter().filter(|p| self.with_us(&p.guid)).count();
-            if n > 0 && best.as_ref().is_none_or(|b| n > b.0) {
-                best = Some((n, e, c));
+            if n == 0 {
+                continue;
+            }
+            let Some(d) = near(u, e, self) else {
+                continue;
+            };
+            let free = !c.parts.iter().any(|p| self.depot_guids.contains(&p.guid));
+            let key = (!docked || free, n, -d);
+            if best.as_ref().is_none_or(|b| key > b.0) {
+                best = Some((key, e, c));
             }
         }
         let (_, e, c) = best?;
@@ -342,27 +402,36 @@ impl Recorder {
             .map(|q| q.guid.clone())
             .collect();
 
-        // Docking: our parts now share a vessel with someone else's.
-        if self.phase < Phase::Docked && !foreign.is_empty() {
+        // Docking: our vessel grew. Our parts are its first or its last ones, the depot's the rest.
+        let grew = !self.prev_parts.is_empty() && craft.parts.len() > self.prev_parts.len();
+        let guids: Vec<String> = craft.parts.iter().map(|q| q.guid.clone()).collect();
+        let (n, m) = (self.prev_parts.len(), guids.len());
+        let prev = std::mem::replace(&mut self.prev_parts, guids.clone());
+        self.last_seen = Some((body.id.clone(), p.r, p.v.length(), ut));
+        if self.phase < Phase::Docked && grew {
+            let (mine, theirs) = if guids[..n] == prev[..] {
+                (0..n, n..m)
+            } else {
+                (m - n..m, 0..m - n)
+            };
             // the parts we joined must be the depot's we were closing on
-            if self.depot.is_none() || !foreign.is_subset(&self.near_guids) {
+            if self.near_guids.is_empty() || theirs.len() != self.near_guids.len() {
                 return self.drop_it("docked with something that is not its depot");
             }
-            let links = u.docked_links(e);
-            let port = |i: usize| craft.parts.get(i).map(|q| q.guid.clone());
-            let (mut depot_port, mut own_port) = (None, None);
-            for (a, c) in links {
-                let (ga, gc) = (port(a), port(c));
-                match (ga, gc) {
-                    (Some(x), Some(y)) if self.ours.contains(&x) && !self.ours.contains(&y) => {
-                        own_port = Some(x);
-                        depot_port = Some(y);
-                    }
-                    (Some(x), Some(y)) if self.ours.contains(&y) && !self.ours.contains(&x) => {
-                        own_port = Some(y);
-                        depot_port = Some(x);
-                    }
-                    _ => {}
+            self.ours = guids[mine].iter().cloned().collect();
+            let foreign: BTreeSet<String> = guids[theirs].iter().cloned().collect();
+            let mut depot_port = None;
+            let mut own_port = None;
+            for (a, c) in u.docked_links(e) {
+                let (Some(x), Some(y)) = (guids.get(a), guids.get(c)) else {
+                    continue;
+                };
+                if self.ours.contains(x) && foreign.contains(y) {
+                    own_port = Some(x.clone());
+                    depot_port = Some(y.clone());
+                } else if self.ours.contains(y) && foreign.contains(x) {
+                    own_port = Some(y.clone());
+                    depot_port = Some(x.clone());
                 }
             }
             self.depot_guids = foreign.clone();

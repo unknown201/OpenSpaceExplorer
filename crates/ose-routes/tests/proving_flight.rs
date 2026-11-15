@@ -1,6 +1,9 @@
 //! Delivery routes step 1: record a proving flight flown by the pilot. A tanker launches from the KSC
 //! pad, docks at a depot in low orbit, pumps monopropellant into the depot's empty tank, and the
 //! player ends the recording there (a one-way route).
+//!
+//! Both crafts name their parts as the editor does (`p0`, `p1`, ...), so the names repeat between them and
+//! docking renames the repeats, and the recorder is saved and loaded again on the way.
 use bevy_ecs::entity::Entity;
 use ose_data::craft::Craft;
 use ose_pilot::{
@@ -9,11 +12,21 @@ use ose_pilot::{
     Status,
 };
 use ose_routes::recording::{Event, Phase, Recorder, Recording, State};
+use ose_routes::Routes;
 use ose_sim::Universe;
 
 #[path = "../../ose-pilot/tests/common/mod.rs"]
 mod common;
 use common::{in_orbit, modules, on_pad, spec, world};
+
+/// Name the parts `p0`, `p1`, ... as the editor does, all but `keep` (the ports and tanks the test uses).
+fn editor_names(c: &mut Craft, keep: &[&str]) {
+    for (i, p) in c.parts.iter_mut().enumerate() {
+        if !keep.contains(&p.guid.as_str()) {
+            p.guid = format!("p{i}");
+        }
+    }
+}
 
 #[derive(serde::Deserialize)]
 struct Launchers {
@@ -41,19 +54,15 @@ fn records_a_one_way_fuel_run_to_a_depot() {
             r.stored_units = 0.0;
         }
     }
+    editor_names(&mut zarya, &["iss-zarya-forward", "iss-zarya-service-tank"]);
+    let mut chaser = launchers.chaser.clone();
+    editor_names(&mut chaser, &["iss-unity-aft", "iss-unity-service-tank"]);
     let depot = in_orbit(&mut w, &zarya, 100_000.0, 0.0);
-    let tanker = on_pad(&mut w, &launchers.chaser);
-    let depot_name =
-        w.u.world
-            .get::<ose_sim::vessels::Vessel>(depot)
-            .unwrap()
-            .name
-            .clone();
-    let is_depot = move |u: &Universe, e: Entity| {
-        u.world
-            .get::<ose_sim::vessels::Vessel>(e)
-            .is_some_and(|v| v.name == depot_name)
-    };
+    let tanker = on_pad(&mut w, &chaser);
+    // the campaign's routes book follows the depot as the server does
+    let mut book = Routes::default();
+    assert!(book.set_depot(&w.u, depot, 1, true).unwrap());
+    let depot_parts = zarya.parts.len();
 
     let mut rec = Recorder::start(&w.u, tanker).expect("on the pad");
     let mut params = MissionParams::new(depot, "iss-zarya-forward", "iss-unity-aft");
@@ -70,9 +79,16 @@ fn records_a_one_way_fuel_run_to_a_depot() {
         spec: &spec_for,
     };
     let start = w.u.ut();
+    let mut saved = false;
     loop {
         let s = run.update(&mut w.u, &catalog);
-        rec.observe(&mut w.u, &is_depot);
+        book.follow_depots(&mut w.u);
+        rec.observe(&mut w.u, &|_: &Universe, e: Entity| book.is_depot_vessel(e));
+        if !saved && rec.phase() == Phase::Transfer {
+            // a save and a restart on the way: the recorder finds its vessel again by its parts
+            saved = true;
+            rec = serde_json::from_str(&serde_json::to_string(&rec).unwrap()).unwrap();
+        }
         if s != Status::Running {
             assert_eq!(s, Status::Done, "{:?}", run.log);
             break;
@@ -84,8 +100,18 @@ fn records_a_one_way_fuel_run_to_a_depot() {
     }
     // the tick that docked
     w.u.step();
-    rec.observe(&mut w.u, &is_depot);
+    book.follow_depots(&mut w.u);
+    rec.observe(&mut w.u, &|_: &Universe, e: Entity| book.is_depot_vessel(e));
     assert_eq!(rec.phase(), Phase::Docked, "{:?}", rec.recording.markers);
+    assert!(
+        book.is_depot_vessel(rec.vessel()),
+        "the docked vessel carries the depot"
+    );
+    assert_eq!(
+        book.depots[0].parts.len(),
+        depot_parts,
+        "only the depot's own parts"
+    );
 
     // The player pumps monopropellant from the tanker's tank into the depot's.
     let joined = rec.vessel();
@@ -101,7 +127,8 @@ fn records_a_one_way_fuel_run_to_a_depot() {
     for _ in 0..(60 * 50) {
         w.u.set_warp(1);
         w.u.step();
-        rec.observe(&mut w.u, &is_depot);
+        book.follow_depots(&mut w.u);
+        rec.observe(&mut w.u, &|_: &Universe, e: Entity| book.is_depot_vessel(e));
     }
     rec.finish_docked(&mut w.u).unwrap();
     let r: &Recording = &rec.recording;
