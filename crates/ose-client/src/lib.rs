@@ -23,6 +23,7 @@ pub mod authored_particles;
 mod authored_sprite_gpu;
 pub mod authored_trails;
 pub mod camera_modes;
+pub mod diagnostics;
 pub mod engine_fx;
 #[cfg(target_arch = "wasm32")]
 mod engine_fx_gpu;
@@ -220,6 +221,9 @@ struct App {
     time: TimeSync,
     /// Stream and frame smoothness counters, published on `<body data-ose-net>` once a second.
     net: netstats::NetStats,
+    diagnostics: diagnostics::Sampler,
+    diagnostics_session: String,
+    diagnostics_pending: Rc<std::cell::Cell<bool>>,
     /// `?netsmooth=0`: the pre-protocol-58 presentation (clock snaps, orbit-element extrapolation), for the
     /// smoothness benchmark to compare against on one build.
     legacy_netcode: bool,
@@ -943,6 +947,13 @@ pub fn start() -> Result<(), JsValue> {
         scene: None,
         time: TimeSync::new(legacy_netcode),
         net: netstats::NetStats::default(),
+        diagnostics: diagnostics::Sampler::default(),
+        diagnostics_session: format!(
+            "{:016x}{:016x}",
+            js_sys::Date::now() as u64,
+            (js_sys::Math::random() * u64::MAX as f64) as u64
+        ),
+        diagnostics_pending: Rc::new(std::cell::Cell::new(false)),
         legacy_netcode,
         camera: Camera::new(0),
         ws: None,
@@ -1695,6 +1706,15 @@ fn install_rnd_nav(doc: &Document) -> Result<(), JsValue> {
 /// in localStorage and applied at start.
 fn install_settings(app: &Shared) -> Result<(), JsValue> {
     let doc = app.borrow().doc.clone();
+    if let Some(button) = doc.get_element_by_id("settings-report-performance") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            a.borrow_mut()
+                .report_diagnostics(ose_net::diagnostics::Reason::Manual)
+        });
+        button.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     if let Some(el) = doc.get_element_by_id("settings-input") {
         el.set_inner_html(&format!(
             "<div id=\"settings-rebind\" data-ose=\"settings-rebind\"></div>{}",
@@ -4615,6 +4635,7 @@ fn connect(app: &Shared) -> Result<(), JsValue> {
     {
         let app = app.clone();
         let on_message = Closure::<dyn FnMut(MessageEvent)>::new(move |ev: MessageEvent| {
+            let diagnostic_start = now_ms();
             if let Ok(buf) = ev.data().dyn_into::<js_sys::ArrayBuffer>() {
                 let bytes = js_sys::Uint8Array::new(&buf).to_vec();
                 match ose_net::decode::<ServerMessage>(&bytes) {
@@ -4635,6 +4656,8 @@ fn connect(app: &Shared) -> Result<(), JsValue> {
                         if streamed {
                             a.net.handled(now_ms() - started);
                         }
+                        a.diagnostics
+                            .message(now_ms() - diagnostic_start, bytes.len());
                     }
                     Err(e) => log(&format!("bad server message: {e}")),
                 }
@@ -5416,6 +5439,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let on_key =
         Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
             let mut app = a.borrow_mut();
+            app.diagnostics.input(now_ms() - ev.time_stamp());
             let typing = ev
                 .target()
                 .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
@@ -6000,6 +6024,7 @@ fn animate(app: Shared) {
     let f: FrameCallback = Rc::new(RefCell::new(None));
     let g = f.clone();
     *g.borrow_mut() = Some(Closure::new(move || {
+        let started = now_ms();
         {
             let mut app = app.borrow_mut();
             let now = now_ms();
@@ -6010,6 +6035,13 @@ fn animate(app: Shared) {
             } else if app.frame_pacer.should_render(now) {
                 app.frame();
             }
+            let visible = !app.doc.hidden();
+            app.diagnostics.callback(now_ms() - started, visible);
+            if visible && app.in_session {
+                if let Some(reason) = app.diagnostics.due(now_ms()) {
+                    app.report_diagnostics(reason);
+                }
+            }
         }
         request_frame(f.borrow().as_ref().unwrap());
     }));
@@ -6019,6 +6051,71 @@ fn animate(app: Shared) {
 fn request_frame(f: &Closure<dyn FnMut()>) {
     if let Some(w) = web_sys::window() {
         w.request_animation_frame(f.as_ref().unchecked_ref()).ok();
+    }
+}
+
+impl App {
+    fn report_diagnostics(&mut self, reason: ose_net::diagnostics::Reason) {
+        use ose_net::diagnostics::{Report, Scene};
+        let Some(token) = stored("ose.token").filter(|_| self.player_id.is_some()) else {
+            set_text(
+                &self.doc,
+                "performance-report-status",
+                "Sign in to send a report.",
+            );
+            return;
+        };
+        if self.diagnostics_pending.get() {
+            return;
+        }
+        let scene = if self.map_mode {
+            Scene::Map
+        } else if self.vab_active() {
+            Scene::Editor
+        } else if self.flying.is_some() {
+            Scene::Flight
+        } else if self.in_session {
+            Scene::Ksc
+        } else {
+            Scene::Menu
+        };
+        let metrics = self.diagnostics.take(now_ms());
+        #[cfg(target_arch = "wasm32")]
+        let webgpu = self.gpu.is_some();
+        #[cfg(not(target_arch = "wasm32"))]
+        let webgpu = false;
+        let heap_bytes = web_sys::window()
+            .and_then(|w| w.performance())
+            .and_then(|p| {
+                let memory = js_sys::Reflect::get(&p, &JsValue::from_str("memory")).ok()?;
+                js_sys::Reflect::get(&memory, &JsValue::from_str("usedJSHeapSize"))
+                    .ok()?
+                    .as_f64()
+            });
+        let report = Report {
+            session: self.diagnostics_session.clone(),
+            sequence: self.diagnostics.sequence,
+            build: ose_net::BUILD_REVISION.into(),
+            protocol: ose_net::PROTOCOL_VERSION,
+            reason,
+            scene,
+            unix_ms: js_sys::Date::now(),
+            vessel: self.flying,
+            vessels: self.scene.as_ref().map_or(0, |s| s.vessels.len()) as u32,
+            warp: self.time.warp,
+            webgpu,
+            width: self.gpu_canvas.width(),
+            height: self.gpu_canvas.height(),
+            heap_bytes,
+            websocket_buffered_bytes: self.ws.as_ref().map_or(0, |ws| ws.buffered_amount()),
+            metrics,
+        };
+        diagnostics::send(
+            report,
+            token,
+            self.doc.clone(),
+            self.diagnostics_pending.clone(),
+        );
     }
 }
 
@@ -7000,6 +7097,7 @@ impl App {
             }
             ServerMessage::Vessels { vessels, tick } => {
                 self.state_timings.record(now_ms());
+                self.diagnostics.state(now_ms(), !self.doc.hidden());
                 self.rendezvous.snapshot_ms = now_ms();
                 if let (Some(own), Some(old)) = (self.flying, self.rendezvous.destination) {
                     if !vessels.iter().any(|v| v.id == old) {
@@ -14693,6 +14791,7 @@ impl App {
         });
         self.net.frame(now, ut, motion);
         if let Some(json) = self.net.report(now) {
+            self.diagnostics.network_summary(&json);
             if let Some(body) = self.doc.body() {
                 body.set_attribute("data-ose-net", &json).ok();
             }
@@ -14700,6 +14799,9 @@ impl App {
     }
 
     fn frame(&mut self) {
+        if !self.doc.hidden() {
+            self.diagnostics.frame(now_ms());
+        }
         self.mnv_hold_tick();
         self.update_node_eta();
         let t = now_ms();

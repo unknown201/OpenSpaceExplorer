@@ -126,6 +126,7 @@ pub fn start(s: super::AppState) {
                         });
                         tracing::debug!(elapsed_us = started.elapsed().as_micros() as u64,
                             clients = s.streams.snapshots.receiver_count(), "snapshot published");
+                        s.diagnostics.record(&s, "snapshot_publish", started.elapsed().as_secs_f64() * 1000.0, 100.0);
                     }
                 }
                 _ = predictions.tick() => {
@@ -139,6 +140,7 @@ pub fn start(s: super::AppState) {
                         });
                         tracing::debug!(elapsed_us = started.elapsed().as_micros() as u64,
                             clients = s.streams.trajectories.receiver_count(), "trajectories published");
+                        s.diagnostics.record(&s, "trajectory_publish", started.elapsed().as_secs_f64() * 1000.0, 250.0);
                     }
                 }
             }
@@ -234,7 +236,8 @@ pub async fn send_batch(
     }
     // Bound the whole update, including trajectories for a large fleet. On timeout the caller exits
     // and drops the socket: a partially written frame must never be retried on this connection.
-    timeout(WRITE_TIMEOUT, async {
+    let started = std::time::Instant::now();
+    let ok = timeout(WRITE_TIMEOUT, async {
         for (bytes, _) in frames.messages.iter().zip(wanted).filter(|x| x.1) {
             if socket.send(Message::Binary(bytes.clone())).await.is_err() {
                 return false;
@@ -248,7 +251,9 @@ pub async fn send_batch(
         true
     })
     .await
-    .unwrap_or(false)
+    .unwrap_or(false);
+    crate::diagnostics::websocket_write(player, started.elapsed().as_secs_f64() * 1000.0, ok);
+    ok
 }
 
 #[cfg(test)]

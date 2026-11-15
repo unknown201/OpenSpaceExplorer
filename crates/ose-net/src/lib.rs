@@ -7,6 +7,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod diagnostics;
+pub const BUILD_REVISION: &str = env!("OSE_BUILD_REVISION");
+
 use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};

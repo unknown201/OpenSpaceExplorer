@@ -12,6 +12,7 @@
 mod accounts;
 mod campaigns;
 mod crew_docking;
+mod diagnostics;
 mod interest;
 mod otp;
 mod packages;
@@ -377,6 +378,7 @@ impl Shared {
 }
 
 struct Shared {
+    diagnostics: diagnostics::Timings,
     universe: Mutex<Universe>,
     streams: streaming::Streams,
     /// Messages for one player's connections (finished experiments), picked up by their stream.
@@ -681,6 +683,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     let shared: AppState = Arc::new(Shared {
+        diagnostics: diagnostics::Timings::default(),
         universe: Mutex::new(universe),
         streams: streaming::Streams::default(),
         pending: Mutex::new(Vec::new()),
@@ -749,6 +752,11 @@ async fn main() -> anyhow::Result<()> {
         }
         return Ok(());
     }
+    tracing::info!(
+        build = ose_net::BUILD_REVISION,
+        protocol = ose_net::PROTOCOL_VERSION,
+        "server diagnostics ready"
+    );
     start_room(shared.clone());
 
     if save_path.is_some() {
@@ -788,6 +796,11 @@ async fn main() -> anyhow::Result<()> {
             }),
         )
         .route(WS_PATH, get(ws_upgrade))
+        .route(
+            "/api/diagnostics",
+            axum::routing::post(diagnostics::report)
+                .layer(axum::extract::DefaultBodyLimit::max(8192)),
+        )
         .route(
             "/api/replays",
             get(replay::list_route).post(replay::file_route),
@@ -870,6 +883,12 @@ fn start_room(room: AppState) {
                 break;
             }
             let now = tokio::time::Instant::now();
+            sim.diagnostics.record(
+                &sim,
+                "simulation_wake_lag",
+                now.saturating_duration_since(due).as_secs_f64() * 1000.0,
+                100.0,
+            );
             let warped = sim.universe.lock().expect("sim lock").warp() > 1;
             if warped || due + period * MAX_CATCH_UP < now {
                 due = now;
@@ -889,6 +908,7 @@ fn start_room(room: AppState) {
 /// One simulation step and what runs with it (docking latches; once a second missions, the roster, science
 /// and the campaign's settings), then the replay recorder. Live and in a replay alike.
 fn step_once(sim: &Shared) {
+    let _timing = diagnostics::measure(sim, "simulation_step", 50.0);
     {
         let split = sim.universe.lock().expect("sim lock").timelines_enabled();
         if split {
@@ -3397,7 +3417,12 @@ fn persist(s: &Shared) -> Result<(), String> {
         return Ok(());
     };
     let _write = s.save_lock.lock().expect("save write lock");
-    save::write(path, &rooms::save_file(s)).map_err(|e| format!("could not save campaign: {e}"))
+    let file = {
+        let _timing = diagnostics::measure(s, "save_capture", 100.0);
+        rooms::save_file(s)
+    };
+    let _timing = diagnostics::measure(s, "save_write", 100.0);
+    save::write(path, &file).map_err(|e| format!("could not save campaign: {e}"))
 }
 fn session_list(s: &Shared, player: u64) -> ServerMessage {
     campaigns::list(s, player)
@@ -3679,7 +3704,15 @@ fn handle_decoded(
 ) {
     let from = out.len();
     // everything a player does happens at their own time (`timelines.rs`)
+    let _timing = diagnostics::measure(s, "command_total", 100.0);
+    let waiting = std::time::Instant::now();
     let _turn = s.turn.lock().expect("turn lock");
+    s.diagnostics.record(
+        s,
+        "command_lock",
+        waiting.elapsed().as_secs_f64() * 1000.0,
+        50.0,
+    );
     timelines::enter_for(s, player_id);
     handle_message(s, player_id, decoded, out);
     // a craft just launched is in the launching player's view: they get it in full straight away

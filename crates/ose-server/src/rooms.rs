@@ -166,6 +166,7 @@ fn move_player(s: &Shared, player: u64, from: &AppState, to: &AppState) {
 /// A new, empty room (its campaign is switched in next).
 fn open(s: &Shared) -> AppState {
     let room = Arc::new(Shared {
+        diagnostics: crate::diagnostics::Timings::default(),
         universe: Mutex::new(s.setup.new_campaign_universe()),
         streams: crate::streaming::Streams::default(),
         pending: Mutex::new(Vec::new()),
