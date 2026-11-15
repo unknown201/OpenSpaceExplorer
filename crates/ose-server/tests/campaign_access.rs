@@ -22,9 +22,10 @@ async fn start_with_mail(dir: &Path, mail: Option<u16>) -> (Server, String) {
     start_config(dir, mail, true).await
 }
 async fn start_config(dir: &Path, mail: Option<u16>, allow_guests: bool) -> (Server, String) {
-    // A port picked free can be taken by another test's server before this one binds it: then this server
-    // exits and a bare TCP probe would connect to the other one. Probe until this server answers and is
-    // still running, and pick another port if it exited.
+    // Wait for `/health` to answer, not just for a TCP connect: a connect to a localhost port in the
+    // ephemeral range with nobody listening yet can connect to itself (TCP simultaneous open), which made the
+    // first WebSocket connect fail with "connection refused". A port picked free can also be taken by another
+    // test's server first: then this one exits, and another port is picked.
     for _ in 0..5 {
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
@@ -56,7 +57,7 @@ async fn start_config(dir: &Path, mail: Option<u16>, allow_guests: bool) -> (Ser
             if server.0.try_wait().ok().flatten().is_some() {
                 break;
             }
-            if tokio::net::TcpStream::connect(&addr).await.is_ok() {
+            if health_ok(&addr).await {
                 // still ours a moment later (a server that lost the port has exited by now)
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 if server.0.try_wait().ok().flatten().is_none() {
@@ -68,6 +69,25 @@ async fn start_config(dir: &Path, mail: Option<u16>, allow_guests: bool) -> (Ser
         }
     }
     panic!("server did not start");
+}
+/// True when `GET /health` answers 200: this server's listener is bound and its router serving.
+async fn health_ok(addr: &str) -> bool {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let Ok(Ok(mut s)) = tokio::time::timeout(
+        Duration::from_millis(500),
+        tokio::net::TcpStream::connect(addr),
+    )
+    .await
+    else {
+        return false;
+    };
+    let request = format!("GET /health HTTP/1.0\r\nHost: {addr}\r\n\r\n");
+    if s.write_all(request.as_bytes()).await.is_err() {
+        return false;
+    }
+    let mut buf = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_millis(500), s.read_to_end(&mut buf)).await;
+    String::from_utf8_lossy(&buf).contains(" 200 ")
 }
 async fn connect(addr: &str, token: Option<String>) -> (Ws, S) {
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
