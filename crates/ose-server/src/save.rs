@@ -114,6 +114,9 @@ pub struct Campaign {
     /// The campaign's quicksave (F5).
     #[serde(default)]
     pub quicksave: Option<Box<SaveFile>>,
+    /// Delivery routes: depots and proving flights (`routes.rs`).
+    #[serde(default)]
+    pub routes: ose_routes::Routes,
 }
 
 fn shared_id() -> String {
@@ -139,6 +142,7 @@ impl Default for Campaign {
             science: Default::default(),
             roster: Vec::new(),
             quicksave: None,
+            routes: Default::default(),
         }
     }
 }

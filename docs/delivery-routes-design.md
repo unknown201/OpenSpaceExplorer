@@ -229,7 +229,14 @@ Colonies, cargo inventory, a funds economy, crew rotation, landed depots (decisi
    arrival, docking with both ports, undocking with the payload left behind, deorbit and landing. It
    keeps fuel and time per phase, what the depot gained, and a 10 Hz / 1 Hz trajectory in the depot's
    frame near it. The test records a tanker flown from the pad to a depot by the pilot, pumping
-   monopropellant across. Server wiring (launch checkbox, depot flag, save) is next.*
+   monopropellant across. Server wiring is done too (protocol 71): `SetDepot`, `RecordRoute`,
+   `StopRecording`, `ForgetRecording` and `RoutesInfo`, answered by `Routes`, which is also pushed to the
+   pilot as the recording moves on. Depots and recordings live in the campaign (`ose_routes::Routes` in
+   `save::Campaign`), so saves, quicksaves and revert carry them; revert to launch keeps a recording started
+   on the pad. Crafts from the editor share part names (`p0`, `p1`, ...) and docking renames the repeats, so
+   both the recorder and the depots tell their half of a docked vessel by position (the vessel kept comes
+   first) and pick among same-named copies by distance from where they were last seen. The launch
+   checkbox itself is the client's (step 3); it sends `RecordRoute` right after `CraftLaunched`.*
 2. **Route scheduler**: spawned runs and shuttles, windows from rendezvous v2, pad and port checks,
    outcomes, auto-pause, end-of-run modes, warp rules (3.5), restart resume, take control.
 3. **Client**: launch checkbox, routes panel, depot toggle, map tags, toasts.

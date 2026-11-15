@@ -4550,3 +4550,143 @@ async fn each_player_warps_on_their_own_and_can_sync_up() {
     .await;
     assert!(t2.0 - t1.0 < 200, "{t1:?} {t2:?}");
 }
+
+#[tokio::test]
+async fn a_route_is_recorded_from_the_pad_and_survives_revert_to_launch() {
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    let (me, _) = hello(&mut ws, None, "route pilot").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::CreateSession {
+            name: "Routes".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: Vec::new(),
+        },
+    )
+    .await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    type Routes = (
+        Vec<ose_net::DepotInfo>,
+        Vec<ose_net::RecordingInfo>,
+        Option<String>,
+    );
+    let routes = |m: ServerMessage| -> Option<Routes> {
+        match m {
+            ServerMessage::Routes {
+                depots,
+                recordings,
+                reason,
+            } => Some((depots, recordings, reason)),
+            _ => None,
+        }
+    };
+    // a depot in orbit, built from the same craft as the rocket (the same part names)
+    let depot = launch_to_orbit(&mut ws, 100_000.0).await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::SetDepot {
+            vessel: depot,
+            depot: true,
+        },
+    )
+    .await;
+    let (depots, _, reason) = wait_for(&mut ws, routes).await;
+    assert!(reason.is_none(), "{reason:?}");
+    assert_eq!(depots.len(), 1);
+    assert_eq!(depots[0].owner, me);
+    // a depot cannot record its own route
+    send_msg(&mut ws, &ClientMessage::RecordRoute { vessel: depot }).await;
+    assert!(wait_for(&mut ws, routes).await.2.is_some());
+
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchOnPad {
+            craft: starter_craft(),
+        },
+    )
+    .await;
+    let rocket = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
+    send_msg(&mut ws, &ClientMessage::RecordRoute { vessel: rocket }).await;
+    let (depots, recs, reason) = wait_for(&mut ws, routes).await;
+    assert!(reason.is_none(), "{reason:?}");
+    assert_eq!(
+        depots[0].vessel,
+        Some(depot),
+        "the depot is still the depot"
+    );
+    assert_eq!(recs.len(), 1);
+    assert_eq!(
+        (recs[0].state.as_str(), recs[0].phase.as_str()),
+        ("Recording", "Pad")
+    );
+    assert_eq!(recs[0].vessel, Some(rocket));
+    // one recording at a time
+    send_msg(&mut ws, &ClientMessage::RecordRoute { vessel: rocket }).await;
+    assert!(wait_for(&mut ws, routes).await.2.is_some());
+
+    // lift off: the recorder tells the pilot
+    send_msg(
+        &mut ws,
+        &ClientMessage::SetControls {
+            vessel: rocket,
+            throttle: 1.0,
+            attitude: ose_net::AttitudeMode::Up,
+        },
+    )
+    .await;
+    send_msg(&mut ws, &ClientMessage::Stage { vessel: rocket }).await;
+    let recs = wait_for(&mut ws, |m| {
+        routes(m).and_then(|(_, r, _)| r.iter().any(|x| x.phase == "Ascent").then_some(r))
+    })
+    .await;
+    assert_eq!(recs[0].state, "Recording");
+
+    // revert to launch: back on the pad, still recording
+    send_msg(&mut ws, &ClientMessage::RevertToLaunch).await;
+    let ok = wait_for(&mut ws, |m| match m {
+        ServerMessage::SaveAck {
+            accepted, reason, ..
+        } => Some((accepted, reason)),
+        _ => None,
+    })
+    .await;
+    assert!(ok.0, "{:?}", ok.1);
+    send_msg(&mut ws, &ClientMessage::RoutesInfo).await;
+    let (depots, recs, _) = wait_for(&mut ws, routes).await;
+    assert_eq!(depots.len(), 1);
+    assert_eq!(recs.len(), 1);
+    assert_eq!(
+        (recs[0].state.as_str(), recs[0].phase.as_str()),
+        ("Recording", "Pad")
+    );
+
+    // stopping away from the depot drops it, and a dropped recording can be forgotten
+    send_msg(&mut ws, &ClientMessage::StopRecording).await;
+    let (_, recs, reason) = wait_for(&mut ws, routes).await;
+    assert!(reason.is_none(), "{reason:?}");
+    assert_eq!(recs[0].state, "Dropped");
+    assert_eq!(recs[0].dropped.as_deref(), Some("stopped"));
+    let id = recs[0].id;
+    send_msg(&mut ws, &ClientMessage::ForgetRecording { id }).await;
+    assert!(wait_for(&mut ws, routes).await.1.is_empty());
+    send_msg(
+        &mut ws,
+        &ClientMessage::SetDepot {
+            vessel: depot,
+            depot: false,
+        },
+    )
+    .await;
+    assert!(wait_for(&mut ws, routes).await.0.is_empty());
+}

@@ -124,6 +124,7 @@ pub fn switch(s: &Shared, player_id: u64, target: Target) -> Result<(), String> 
             *u = nu;
             *v = registry;
             *c = back.save.campaign;
+            c.routes.universe_replaced();
             c.id = back.id;
         }
         Target::New(n) => {
@@ -200,6 +201,7 @@ pub fn reload(s: &Shared, player_id: u64, file: &save::SaveFile) -> Result<(), S
     back.members = c.members.clone();
     back.owner = c.owner;
     back.share_code = c.share_code.clone();
+    back.routes.universe_replaced();
     *s.world_changed_at.lock().expect("world change lock") = crate::streaming::mark();
     *u = nu;
     *v = registry;
@@ -448,6 +450,7 @@ fn manage_in(s: &crate::AppState, player: u64, id: &str, delete: bool) -> Result
             *v = save::restore(&mut nu, &back.save, &s.parts, &s.resources);
             *u = nu;
             *c = back.save.campaign;
+            c.routes.universe_replaced();
             c.id = back.id;
         } else {
             *u = s.setup.new_campaign_universe();
