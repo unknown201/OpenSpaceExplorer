@@ -2191,6 +2191,27 @@ fn load_part_sizes(app: Shared) {
     });
 }
 
+/// Reload the page to pick up a newer client, unless this tab already did so in the last minute.
+/// Returns whether a reload was started.
+fn reload_for_update() -> bool {
+    let Some(w) = web_sys::window() else {
+        return false;
+    };
+    let now = js_sys::Date::now();
+    let storage = w.session_storage().ok().flatten();
+    let last = storage
+        .as_ref()
+        .and_then(|s| s.get_item("ose.reloaded-for-update").ok().flatten())
+        .and_then(|v| v.parse::<f64>().ok());
+    if last.is_some_and(|t| now - t < 60_000.0) {
+        return false;
+    }
+    if let Some(s) = &storage {
+        s.set_item("ose.reloaded-for-update", &now.to_string()).ok();
+    }
+    w.location().reload().is_ok()
+}
+
 /// What the pilot selects to (re)connect: Campaign on the main menu once signed in on this machine, the
 /// sign-in button on the sign-in screen otherwise.
 fn retry_action() -> &'static str {
@@ -6170,7 +6191,14 @@ impl App {
                 }
             }
             ServerMessage::Rejected { reason } => {
+                // A page loaded before a deploy speaks an older protocol: load the new client, at most
+                // once a minute so a stale cache cannot loop.
+                if reason.contains("reload the page") && reload_for_update() {
+                    return;
+                }
                 if self.player_id.is_none() {
+                    // On the sign-in screen the form's own line is where the pilot is looking.
+                    self.login_status(&reason, true);
                     if let Some(w) = web_sys::window() {
                         if let Ok(Some(storage)) = w.local_storage() {
                             storage.remove_item("ose.token").ok();

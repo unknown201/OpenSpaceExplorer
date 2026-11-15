@@ -102,3 +102,14 @@ test('an email code request moves to the code step at once and shows a failed se
   await expect(page.locator('[data-ose="login-status"]')).toContainText('not set up');
   await expect(page.locator('#screen-login')).toHaveClass(/open/);
 });
+
+test('a refused sign-in shows its reason in the sign-in form',async({page,baseURL})=>{
+  // A remembered session the server no longer knows: the main menu first, then back to sign-in with the reason.
+  await page.addInitScript(()=>localStorage.setItem('ose.token','no-such-session'));
+  await page.goto(baseURL!);
+  await expect(page.locator('#screen-name')).toHaveClass(/open/);
+  await page.locator('[data-ose="play"]').click();
+  await expect(page.locator('#screen-login')).toHaveClass(/open/);
+  await expect(page.locator('[data-ose="login-status"]')).toHaveClass(/error/);
+  await expect(page.locator('[data-ose="login-status"]')).not.toBeEmpty();
+});
