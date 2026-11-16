@@ -287,6 +287,7 @@ mod tests {
         assert!(!u.commnet_blocks_control(near));
         // a report goes home packet by packet from the near drone; the far one waits for a link
         let report = ose_data::science::ResearchReport {
+            base_value: 0.0,
             experiment: "CrewReport".into(),
             sample: false,
             location: "Kerbin_InSpaceLow".into(),

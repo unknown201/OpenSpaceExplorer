@@ -134,6 +134,16 @@ impl Accounts {
         ))
     }
 
+    /// Identify a diagnostic sender without updating or writing account state.
+    pub fn identify(&self, token: &str) -> Option<u64> {
+        let hash = hash_token(token);
+        self.store
+            .players
+            .iter()
+            .find(|p| p.token_hash == hash || p.sessions.contains(&hash))
+            .map(|p| p.id)
+    }
+
     /// Resume the player owning `token`, updating their display name and last-seen time.
     pub fn resume(&mut self, token: &str, display_name: &str) -> anyhow::Result<Option<Player>> {
         let h = hash_token(token);

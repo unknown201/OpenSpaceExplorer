@@ -3,7 +3,7 @@
 
 use bevy_ecs::prelude::*;
 use ose_data::science::{
-    run_experiment, BodyScience, ResearchReport, ScienceCatalog, ScienceSituation,
+    run_experiment, BodyScience, PartExperiment, ResearchReport, ScienceCatalog, ScienceSituation,
 };
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,25 @@ use crate::{bodies, flight, structure, Universe};
 pub struct Science {
     pub catalog: ScienceCatalog,
     pub regions: Vec<u8>,
+}
+
+/// Campaign-wide science already credited, shared by every vessel and timeline.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct ScienceLedger(pub std::collections::HashMap<String, f64>);
+
+/// KSP-style subject depletion: value scales with the unclaimed fraction of its cap.
+/// The imported experiments have no science cap, so use twice the initial yield.
+/// Stop when the result rounds to zero in this game's whole-point science economy.
+pub fn potential_value(base: f64, credited: f64) -> f64 {
+    if !base.is_finite() || base <= 0.0 {
+        return 0.0;
+    }
+    let value = (base - credited.max(0.0) * 0.5).max(0.0);
+    if value.round() < 1.0 {
+        0.0
+    } else {
+        value
+    }
 }
 
 /// Reports a vessel carries.
@@ -127,6 +146,135 @@ pub fn body_frame_position(lat_deg: f64, lon_deg: f64, radius_m: f64) -> DVec3 {
 }
 
 impl Universe {
+    pub fn set_science_credited(&mut self, reports: impl IntoIterator<Item = ResearchReport>) {
+        let mut ledger = ScienceLedger::default();
+        for report in reports {
+            *ledger.0.entry(report.key()).or_default() += report.value;
+        }
+        self.world.insert_resource(ledger);
+    }
+
+    fn appraise_report(&self, mut report: ResearchReport) -> ResearchReport {
+        let credited = self
+            .world
+            .get_resource::<ScienceLedger>()
+            .and_then(|l| l.0.get(&report.key()))
+            .copied()
+            .unwrap_or(0.0);
+        report.value = potential_value(report.full_value(), credited);
+        report
+    }
+
+    fn onboard_experiments(&self, e: Entity) -> Vec<(usize, PartExperiment)> {
+        if let Some(st) = self.structure(e) {
+            st.experiments
+                .iter()
+                .filter(|(part, _)| st.rigid.present[*part])
+                .cloned()
+                .collect()
+        } else {
+            self.eva_kerbal(e)
+                .map(|k| k.experiments.iter().map(|pe| (0, pe.clone())).collect())
+                .unwrap_or_default()
+        }
+    }
+
+    /// Read-only counterpart of running an experiment, also used by the HUD's availability cue.
+    fn experiment_reports(
+        &self,
+        e: Entity,
+        part: usize,
+        pe: &PartExperiment,
+        loc: &ScienceLocation,
+    ) -> Result<Vec<ResearchReport>, &'static str> {
+        if self
+            .powered(e)
+            .or_else(|| self.dormant(e))
+            .is_some_and(|p| p.crashed)
+        {
+            return Err("vessel crashed");
+        }
+        let sci = self.science().ok_or("no science here")?;
+        let def = sci
+            .catalog
+            .experiment(&pe.experiment)
+            .ok_or("unknown experiment")?;
+        let st = self.structure(e);
+        let crew = if self.eva_kerbal(e).is_some() {
+            1
+        } else {
+            self.crew(e)
+                .iter()
+                .filter(|(seat, _)| *seat == part)
+                .count()
+        };
+        if crew < pe.crew_required as usize {
+            return Err("needs crew in its part");
+        }
+        if def.requires_eva && self.eva_kerbal(e).is_none() {
+            return Err("needs EVA");
+        }
+        let bs = sci.catalog.body(&loc.body).ok_or("no science here")?;
+        let region = loc
+            .region
+            .as_deref()
+            .and_then(|id| bs.regions.iter().find(|r| r.id == id));
+        let reports = run_experiment(def, bs, loc.situation, loc.situation_scalar, region);
+        if reports.is_empty() {
+            return Err("not here");
+        }
+        let reports: Vec<_> = reports
+            .into_iter()
+            .map(|r| self.appraise_report(r))
+            .filter(|r| r.value > 0.0)
+            .collect();
+        if reports.is_empty() {
+            return Err("science exhausted");
+        }
+        let stored = self.science_carried(e);
+        let reports: Vec<_> = reports
+            .into_iter()
+            .filter(|r| stored.iter().all(|s| s.key() != r.key()))
+            .collect();
+        if reports.is_empty() {
+            return Err("already stored");
+        }
+        if self
+            .running_experiments(e)
+            .iter()
+            .any(|r| r.experiment == pe.experiment && r.location == location_id(loc))
+        {
+            return Err("running");
+        }
+        if pe.electric_rate > 0.0 {
+            let have = st
+                .and_then(|s| {
+                    s.net
+                        .resource("ElectricCharge")
+                        .map(|ec| s.net.available(part, ec))
+                })
+                .unwrap_or(0.0);
+            let seconds = if pe.time_to_complete_s > 0.0 {
+                pe.time_to_complete_s.min(1.0)
+            } else {
+                1.0
+            };
+            if have < pe.electric_rate * seconds {
+                return Err("not enough charge");
+            }
+        }
+        Ok(reports)
+    }
+
+    pub fn experiments_available(&self, e: Entity) -> bool {
+        let Some(loc) = self.science_location(e) else {
+            return false;
+        };
+        self.onboard_experiments(e)
+            .iter()
+            .any(|(part, pe)| self.experiment_reports(e, *part, pe, &loc).is_ok())
+    }
+
     pub fn set_science(&mut self, catalog: ScienceCatalog, regions: Vec<u8>) {
         self.world.insert_resource(Science { catalog, regions });
     }
@@ -172,45 +320,35 @@ impl Universe {
 
     /// Run every experiment on the vessel's attached parts here. New reports (not already carried) are
     /// stored on the vessel and returned; experiments that need crew or charge it lacks, or that do not
-    /// work here, are listed as skipped. Experiment run times are not waited for yet.
+    /// work here, are listed as skipped. Timed experiments start rather than finish immediately.
     pub fn run_experiments(&mut self, e: Entity) -> RunOutcome {
         let mut out = RunOutcome::default();
         let Some(loc) = self.science_location(e) else {
             return out;
         };
+        let experiments: Vec<_> = self
+            .onboard_experiments(e)
+            .into_iter()
+            .map(|(part, pe)| {
+                let result = self.experiment_reports(e, part, &pe, &loc);
+                (part, pe, result)
+            })
+            .collect();
+        let eva = self.eva_kerbal(e).is_some();
         // a vessel's parts, or a Kerbal on EVA with the experiments of the eva_kerbal part
         let mut st = self.world.entity_mut(e).take::<structure::Structure>();
-        let kerbal = self.world.get::<crate::crew::EvaKerbal>(e).cloned();
-        let eva = kerbal.is_some();
-        let experiments = match (&st, &kerbal) {
-            (Some(st), _) => st.experiments.clone(),
-            (None, Some(k)) => k.experiments.iter().map(|x| (0, x.clone())).collect(),
-            (None, None) => return out,
-        };
-        // the crew in each part (a Kerbal on EVA is their own crew)
-        let crew = self.crew(e);
-        let aboard = |part: usize| crew.iter().filter(|(p, _)| *p == part).count() as u32;
         let part_id = |st: &Option<structure::Structure>, part: usize| match st {
             Some(st) => st.part_ids[part].clone(),
             None => "eva_kerbal".to_string(),
         };
-        let sci = self.world.resource::<Science>().clone();
         let mut storage = self
             .world
             .get::<ScienceStorage>(e)
             .cloned()
             .unwrap_or_default();
-        let bs = sci
-            .catalog
-            .body(&loc.body)
-            .expect("located on a body with science");
-        let region = loc
-            .region
-            .as_deref()
-            .and_then(|id| bs.regions.iter().find(|r| r.id == id));
         let ec = st.as_ref().and_then(|s| s.net.resource("ElectricCharge"));
         let mut activated = Vec::new();
-        for (part, pe) in experiments {
+        for (part, pe, result) in experiments {
             if st.as_ref().is_some_and(|s| !s.rigid.present[part]) {
                 continue;
             }
@@ -219,22 +357,13 @@ impl Universe {
                 experiment: pe.experiment.clone(),
                 reason: reason.to_string(),
             };
-            let Some(def) = sci.catalog.experiment(&pe.experiment) else {
-                out.skipped.push(skip("unknown experiment"));
-                continue;
+            let reports = match result {
+                Ok(reports) => reports,
+                Err(reason) => {
+                    out.skipped.push(skip(reason));
+                    continue;
+                }
             };
-            if pe.crew_required > 0 && !eva && aboard(part) < pe.crew_required {
-                out.skipped.push(skip(&format!(
-                    "needs {} crew in its part",
-                    pe.crew_required
-                )));
-                continue;
-            }
-            let reports = run_experiment(def, bs, loc.situation, loc.situation_scalar, region);
-            if reports.is_empty() {
-                out.skipped.push(skip("not here"));
-                continue;
-            }
             let fresh: Vec<ResearchReport> = reports
                 .into_iter()
                 .filter(|r| storage.reports.iter().all(|s| s.key() != r.key()))
@@ -252,7 +381,7 @@ impl Universe {
                 if runs
                     .runs
                     .iter()
-                    .any(|r| r.part == part && r.experiment == pe.experiment)
+                    .any(|r| r.experiment == pe.experiment && r.location == location_id(&loc))
                 {
                     out.skipped.push(skip("running"));
                     continue;
@@ -415,6 +544,8 @@ impl Universe {
                     let fresh: Vec<ResearchReport> =
                         run_experiment(def, bs, loc.situation, loc.situation_scalar, region)
                             .into_iter()
+                            .map(|r| self.appraise_report(r))
+                            .filter(|r| r.value > 0.0)
                             .filter(|r| storage.reports.iter().all(|s| s.key() != r.key()))
                             .collect();
                     storage.reports.extend(fresh.iter().cloned());
@@ -839,6 +970,7 @@ mod tests {
         let a = u.world.spawn_empty().id();
         let b = u.world.spawn_empty().id();
         let report = ResearchReport {
+            base_value: 0.0,
             experiment: "MeasuredPacket".into(),
             sample: false,
             location: "Kerbin_Landed".into(),
@@ -897,6 +1029,7 @@ mod tests {
         let v = u.spawn_vessel_in_circular_orbit("drone", body, 100_000.0);
         let (r, vel) = u.vessel(v).unwrap().2.state_at(u.ut());
         let report = ose_data::science::ResearchReport {
+            base_value: 0.0,
             experiment: "CrewReport".into(),
             sample: false,
             location: "Kerbin_InSpaceLow".into(),
@@ -1003,6 +1136,7 @@ mod tests {
     #[test]
     fn a_crewed_pod_on_the_pad_observes_the_ksc_once() {
         let (mut u, v, _) = k1_universe();
+        assert!(u.experiments_available(v));
         let loc = u.science_location(v).unwrap();
         assert_eq!(loc.situation, ScienceSituation::Landed);
         assert_eq!(loc.region.as_deref(), Some("KerbinKSC"));
@@ -1015,6 +1149,7 @@ mod tests {
         assert_eq!(obs.location, "Kerbin_Landed_KerbinKSC");
         assert!(obs.value > 0.0);
         assert_eq!(u.science_carried(v).len(), first.reports.len());
+        assert!(!u.experiments_available(v));
         // a second run here adds nothing
         let again = u.run_experiments(v);
         assert!(again.reports.is_empty());
@@ -1033,6 +1168,84 @@ mod tests {
             "{:?}",
             out.skipped
         );
+    }
+
+    #[test]
+    fn repeated_science_diminishes_then_cannot_run_but_a_new_location_can() {
+        let (mut u, v, _) = k1_universe();
+        let mut credited = Vec::new();
+        let mut previous = f64::INFINITY;
+        let mut runs = 0;
+        while u.experiments_available(v) {
+            let out = u.run_experiments(v);
+            assert!(!out.reports.is_empty());
+            let value = out.reports.iter().map(|r| r.value).sum::<f64>();
+            assert!(value > 0.0 && value < previous);
+            previous = value;
+            credited.extend(u.take_science(v));
+            u.set_science_credited(credited.clone());
+            runs += 1;
+            assert!(runs < 20, "science must eventually exhaust");
+        }
+        assert!(runs > 1);
+        let out = u.run_experiments(v);
+        assert!(out.reports.is_empty() && out.started.is_empty());
+        assert!(out.skipped.iter().any(|s| s.reason == "science exhausted"));
+        let mut p = u.powered(v).unwrap().clone();
+        p.landed = false;
+        p.r = p.r.normalized() * 700_000.0;
+        u.set_powered(v, p);
+        assert!(u.experiments_available(v), "low orbit is a fresh subject");
+    }
+
+    #[test]
+    fn availability_requires_crew_charge_and_a_working_vessel() {
+        let (mut u, v, _) = k1_universe();
+        let mut st = u
+            .world
+            .entity_mut(v)
+            .take::<structure::Structure>()
+            .unwrap();
+        st.experiments = vec![(
+            0,
+            PartExperiment {
+                experiment: "CrewObservation".into(),
+                crew_required: 0,
+                time_to_complete_s: 1.0,
+                electric_rate: 1.0e9,
+            },
+        )];
+        u.world.entity_mut(v).insert(st);
+        assert!(!u.experiments_available(v));
+        let out = u.run_experiments(v);
+        assert!(out.started.is_empty());
+        assert_eq!(out.skipped[0].reason, "not enough charge");
+        let mut st = u
+            .world
+            .entity_mut(v)
+            .take::<structure::Structure>()
+            .unwrap();
+        st.experiments[0].1.electric_rate = 0.0;
+        st.experiments[0].1.crew_required = 100;
+        u.world.entity_mut(v).insert(st);
+        assert!(!u.experiments_available(v));
+        assert_eq!(
+            u.run_experiments(v).skipped[0].reason,
+            "needs crew in its part"
+        );
+        let mut st = u
+            .world
+            .entity_mut(v)
+            .take::<structure::Structure>()
+            .unwrap();
+        st.experiments[0].1.crew_required = 0;
+        u.world.entity_mut(v).insert(st);
+        assert!(u.experiments_available(v));
+        let mut p = u.powered(v).unwrap().clone();
+        p.crashed = true;
+        u.set_powered(v, p);
+        assert!(!u.experiments_available(v));
+        assert!(u.run_experiments(v).started.is_empty());
     }
 
     #[test]
@@ -1057,6 +1270,10 @@ mod tests {
         let out = u.run_experiments(v);
         assert!(out.reports.is_empty());
         assert_eq!(out.started.len(), 1);
+        assert!(
+            !u.experiments_available(v),
+            "a running experiment must not glow"
+        );
         assert_eq!(u.run_experiments(v).skipped[0].reason, "running");
         for _ in 0..59 {
             u.advance_experiments(1.0);

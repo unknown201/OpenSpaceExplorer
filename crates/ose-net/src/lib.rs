@@ -7,11 +7,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod diagnostics;
+pub const BUILD_REVISION: &str = env!("OSE_BUILD_REVISION");
+
 use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 71;
+pub const PROTOCOL_VERSION: u16 = 72;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -285,6 +288,11 @@ pub enum ClientMessage {
         name: String,
     },
     /// Fold the vessel's deployable solar panels out (`deploy`) or in; answers `FlightAck`.
+    SetPartDeployment {
+        vessel: u64,
+        part: u16,
+        deploy: bool,
+    },
     DeployPanels {
         vessel: u64,
         deploy: bool,
@@ -585,6 +593,7 @@ pub struct VesselState {
     pub name: String,
     /// Player who owns the vessel, if any.
     pub owner: Option<u64>,
+    pub science_available: bool,
     pub reference_body: u16,
     pub position_m: DVec3,
     pub velocity_mps: DVec3,
@@ -817,7 +826,7 @@ pub struct FlightReadout {
     pub dynamic_pressure_kpa: f64,
     /// Ambient static pressure, for atmosphere/vacuum visual effects.
     pub static_pressure_kpa: f64,
-    /// Physical ambient density (kg/mÂ³), separate from the artist's pressure curve.
+    /// Physical ambient density (kg/m³), separate from the artist's pressure curve.
     pub atmosphere_density: f64,
     pub mach_number: f64,
     pub gravity_mps2: f64,
@@ -862,6 +871,8 @@ pub struct FlightReadout {
     pub panels: Vec<(u16, bool)>,
     /// Authoritative per-instance tracking, incidence and producer output, including fixed panels.
     pub solar_panels: Vec<SolarPanelState>,
+    pub non_retractable: Vec<u16>,
+    pub part_lights: Vec<(u16, bool)>,
     /// An EVA Kerbal's single portable flag. Pickup restores this; planting consumes it.
     pub flag_carried: bool,
     /// Each attached deployable antenna's state (extended), by craft part index.

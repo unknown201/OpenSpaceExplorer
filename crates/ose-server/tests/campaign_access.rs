@@ -175,6 +175,73 @@ async fn join(ws: &mut Ws, code: &str, expected: &str) {
     wait(ws, |m| matches!(m, S::SessionList { .. }).then_some(())).await;
 }
 #[tokio::test]
+async fn diagnostic_reports_require_identity_validate_and_limit_payloads() {
+    use ose_net::diagnostics::{Metrics, Reason, Report, Scene};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    async fn post(addr: &str, token: &str, body: &str) -> (u16, String) {
+        let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request = format!("POST /api/diagnostics HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nContent-Type: application/json\r\nAuthorization: Bearer {token}\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        socket.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        socket.read_to_string(&mut response).await.unwrap();
+        let status = response.split_whitespace().nth(1).unwrap().parse().unwrap();
+        (status, response)
+    }
+    let dir = std::env::temp_dir().join(format!("ose-diagnostics-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (server, addr) = start(&dir).await;
+    let (_ws, welcome) = connect(&addr, None).await;
+    let S::Welcome { token, .. } = welcome else {
+        panic!("welcome")
+    };
+    let report = Report {
+        session: "0123456789abcdef".into(),
+        sequence: 7,
+        build: ose_net::BUILD_REVISION.into(),
+        protocol: PROTOCOL_VERSION,
+        reason: Reason::Stall,
+        scene: Scene::Map,
+        unix_ms: 1.0,
+        vessel: Some(1),
+        vessels: 4,
+        warp: 1,
+        webgpu: true,
+        width: 1920,
+        height: 1080,
+        heap_bytes: None,
+        websocket_buffered_bytes: 0,
+        metrics: Metrics {
+            frame_gap_max_ms: 2200.0,
+            ..Default::default()
+        },
+    };
+    let body = serde_json::to_string(&report).unwrap();
+    assert_eq!(post(&addr, "not-a-token", &body).await.0, 401);
+    let mut invalid = report.clone();
+    invalid.session = "unbounded user text".into();
+    assert_eq!(
+        post(&addr, &token, &serde_json::to_string(&invalid).unwrap())
+            .await
+            .0,
+        400
+    );
+    let mut unknown = serde_json::to_value(&report).unwrap();
+    unknown["email"] = "not allowed".into();
+    assert_eq!(post(&addr, &token, &unknown.to_string()).await.0, 422);
+    assert_eq!(post(&addr, &token, &"x".repeat(9000)).await.0, 413);
+    let (status, reply) = post(&addr, &token, &body).await;
+    assert_eq!(status, 200);
+    assert!(reply.contains("0123456789abcdef-7"));
+    assert!(!reply.contains(&token));
+    for _ in 1..12 {
+        assert_eq!(post(&addr, &token, &body).await.0, 200);
+    }
+    assert_eq!(post(&addr, &token, &body).await.0, 429);
+    drop(server);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
 async fn private_campaigns_and_portable_accounts_survive_restart() {
     let dir = std::env::temp_dir().join(format!("ose-access-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

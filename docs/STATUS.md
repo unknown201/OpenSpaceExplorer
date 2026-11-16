@@ -1,5 +1,10 @@
 # Status
 
+Current wire protocol: **72**. Science availability and diminishing returns, per-part deployment permissions, and powered light outputs require matching client and server builds.
+
+Client rendering defaults to 60 FPS with higher/unlimited choices. [Performance diagnostics](performance-diagnostics.md)
+correlate automatic client stall reports and manual Graphics reports with server simulation, publication, command and save timings.
+
 Email sign-in uses protocol 68: six-digit email OTP, account linking, expiring single-use codes, and remembered device sessions. Campaign membership stays server-side.
 
 Updated 2026-10-28.

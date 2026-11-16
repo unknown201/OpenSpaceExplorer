@@ -709,6 +709,8 @@ pub struct FlightView {
     wheel_travel: f64,
     wheel_last_ms: f64,
     deployments: HashMap<(u64, usize), crate::animation::Deployment>,
+    deployment_cursors: HashMap<(u64, usize), (usize, f32)>,
+    pub audio_events: Vec<String>,
     /// Each open parachute's canopy direction and sway, by (vessel, part).
     chute_looks: HashMap<(u64, usize), ChuteLook>,
     gimbals: HashMap<(u64, usize), crate::gimbal::Driver>,
@@ -849,6 +851,8 @@ impl FlightView {
             wheel_travel: 0.0,
             wheel_last_ms: 0.0,
             deployments: HashMap::new(),
+            deployment_cursors: HashMap::new(),
+            audio_events: Vec::new(),
             chute_looks: HashMap::new(),
             gimbals: HashMap::new(),
             agl_m: None,
@@ -1658,7 +1662,24 @@ impl FlightView {
                             .or_insert_with(|| crate::animation::Deployment::new(deployed, inp.ut));
                         let fraction =
                             driver.update(deployed, inp.ut, model.rig.clips[clip].duration);
-                        animation = model.rig.deployment_sample(fraction);
+                        let duration = model.rig.clips[clip].duration;
+                        animation = if !deployed {
+                            model.rig.deployment_close.map(|close| crate::animation::ClipSample {
+                                clip: close, time: model.rig.clips[close].duration * (1.0 - fraction), looping: false,
+                            }).or_else(|| model.rig.deployment_sample(fraction))
+                        } else { model.rig.deployment_sample(fraction) };
+                        if let Some(sample) = animation {
+                            if let Some((old_clip, old_time)) = self.deployment_cursors.insert((inp.vessel.id, i), (sample.clip, sample.time)) {
+                                let from = if old_clip == sample.clip { old_time } else {
+                                    (1.0 - old_time / model.rig.clips[old_clip].duration.max(0.001)) * duration
+                                };
+                                if sample.time >= from {
+                                    for cue in &model.rig.clips[sample.clip].audio_events {
+                                        if cue.time > from && cue.time <= sample.time { self.audio_events.push(cue.sound.clone()); }
+                                    }
+                                }
+                            }
+                        }
                     } else if p.part_id.starts_with("cargobay_") {
                         // The bays' controllers have several clips (open, close, the "min" variants);
                         // the open clip runs from shut to open.
@@ -2209,6 +2230,8 @@ impl FlightView {
                     }
                 }
             }
+            self.deployment_cursors
+                .retain(|(v, i), _| *v == inp.vessel.id && parts.iter().any(|p| p.0 == *i));
             self.deployments
                 .retain(|(v, i), _| *v == inp.vessel.id && parts.iter().any(|p| p.0 == *i));
             self.chute_looks
@@ -2365,7 +2388,13 @@ impl FlightView {
                 lamps.extend(
                     parts
                         .iter()
-                        .filter(|(i, ..)| craft.parts[*i].part_id.starts_with("light_"))
+                        .filter(|(i, ..)| {
+                            readout.is_some_and(|f| {
+                                f.part_lights
+                                    .iter()
+                                    .any(|(part, on)| *part as usize == *i && *on)
+                            })
+                        })
                         .map(|(i, _, lp, lq, _)| {
                             let pid = craft.parts[*i].part_id.as_str();
                             let spot = pid.contains("spot") || pid.contains("broad");
@@ -2507,10 +2536,15 @@ impl FlightView {
                         .push((bone, glam::Quat::from_rotation_x(turn), glam::Vec3::ZERO));
                 }
                 // Lights on (the Lights action group): lamps and cabin windows show their emissive maps.
-                if readout.is_some_and(|f| f.lights)
-                    && (pid.starts_with("light_")
-                        || pid.starts_with("pod_")
-                        || pid.starts_with("cockpit_"))
+                if readout.is_some_and(|f| {
+                    f.lights
+                        && (!pid.starts_with("light_")
+                            || f.part_lights
+                                .iter()
+                                .any(|(part, on)| *part as usize == i && *on))
+                }) && (pid.starts_with("light_")
+                    || pid.starts_with("pod_")
+                    || pid.starts_with("cockpit_"))
                 {
                     it.glow = 1.0;
                 }

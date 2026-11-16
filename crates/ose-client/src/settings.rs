@@ -176,6 +176,15 @@ pub fn ui_scale(stored: Option<&str>) -> f64 {
         .clamp(50.0, 150.0)
 }
 
+pub fn frame_limit(stored: Option<&str>) -> u32 {
+    match stored {
+        Some("30") => 30,
+        Some("120") => 120,
+        Some("0") => 0,
+        _ => 60,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

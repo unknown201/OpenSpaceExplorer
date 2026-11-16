@@ -263,6 +263,10 @@ pub struct PartDef {
     /// Electric charge use and production of the part's modules.
     #[serde(default)]
     pub electric: Electric,
+    #[serde(default)]
+    pub deployable: Option<Deployable>,
+    #[serde(default)]
+    pub light: Option<PartLight>,
     /// Experiments the part can run.
     #[serde(default)]
     pub experiments: Vec<science::PartExperiment>,
@@ -341,6 +345,23 @@ pub struct PartDef {
     pub raw_modules: BTreeMap<String, serde_json::Value>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Deployable {
+    pub extendable: bool,
+    pub retractable: bool,
+    pub starts_extended: bool,
+    pub antenna: bool,
+    pub shielded_extension: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PartLight {
+    pub use_per_s: f64,
+    pub color: [f32; 3],
+    pub smooth: bool,
+    pub brighten_s: f32,
+    pub dim_s: f32,
+}
 impl PartDef {
     pub fn reinforced_target(&self) -> Option<ReinforcementTarget> {
         self.reinforced_connection.or_else(|| {

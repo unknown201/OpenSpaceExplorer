@@ -534,6 +534,7 @@ pub struct Model {
     /// Opaque triangles in model units, kept for parts (`part:` models) so the editor can find where a ray
     /// meets the drawn shape, not just its box.
     pub tris: Vec<[Vec3; 3]>,
+    default_world: Vec<glam::Mat4>,
 }
 
 impl Model {
@@ -912,7 +913,11 @@ pub struct Renderer {
     /// Default texture views: white colour, flat normal, no metal or gloss.
     default_views: [wgpu::TextureView; 5],
     depth: wgpu::TextureView,
-    objects: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    object_buffer: Option<wgpu::Buffer>,
+    object_bind: Option<wgpu::BindGroup>,
+    object_capacity: usize,
+    object_stride: usize,
+    object_upload: Vec<u8>,
     models: HashMap<String, Model>,
     pending: HashMap<String, ()>,
     inbox: ModelInbox,
@@ -1028,9 +1033,23 @@ impl Renderer {
             label: Some("shadow camera"),
             entries: &[uniform_entry(0)],
         });
+        let mut object_entry = uniform_entry(0);
+        if let wgpu::BindingType::Buffer {
+            has_dynamic_offset,
+            min_binding_size,
+            ..
+        } = &mut object_entry.ty
+        {
+            *has_dynamic_offset = true;
+            *min_binding_size =
+                std::num::NonZeroU64::new(std::mem::size_of::<ObjectUniform>() as u64);
+        }
+        let object_stride = std::mem::size_of::<ObjectUniform>()
+            .div_ceil(device.limits().min_uniform_buffer_offset_alignment as usize)
+            * device.limits().min_uniform_buffer_offset_alignment as usize;
         let object_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("object"),
-            entries: &[uniform_entry(0)],
+            entries: &[object_entry],
         });
         let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("texture"),
@@ -1497,7 +1516,11 @@ impl Renderer {
             white,
             default_views,
             depth,
-            objects: Vec::new(),
+            object_buffer: None,
+            object_bind: None,
+            object_capacity: 0,
+            object_stride,
+            object_upload: Vec::new(),
             models: HashMap::new(),
             pending: HashMap::new(),
             inbox: Rc::new(RefCell::new(Vec::new())),
@@ -1845,6 +1868,9 @@ impl Renderer {
             };
             let mut model = Model {
                 tris,
+                default_world: cpu
+                    .rig
+                    .world_matrices(&cpu.rig.pose(cpu.rig.default_sample())),
                 rig: cpu.rig,
                 rest_vertices,
                 influences: cpu.influences,
@@ -1950,23 +1976,32 @@ impl Renderer {
 
     /// Make sure at least `n` object uniform slots exist (grown ahead of a frame so draws only borrow).
     fn ensure_slots(&mut self, n: usize) {
-        while self.objects.len() < n {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("object"),
-                size: std::mem::size_of::<ObjectUniform>() as u64,
+        if n > self.object_capacity {
+            self.object_capacity = n.next_power_of_two();
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("frame objects"),
+                size: (self.object_capacity * self.object_stride) as u64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("object"),
-                layout: &self.object_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buf.as_entire_binding(),
-                }],
-            });
-            self.objects.push((buf, bind));
+            self.object_bind =
+                Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("frame objects"),
+                    layout: &self.object_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &buffer,
+                            offset: 0,
+                            size: std::num::NonZeroU64::new(
+                                std::mem::size_of::<ObjectUniform>() as u64
+                            ),
+                        }),
+                    }],
+                }));
+            self.object_buffer = Some(buffer);
         }
+        self.object_upload.resize(n * self.object_stride, 0);
     }
 
     pub fn device(&self) -> &wgpu::Device {
@@ -2133,6 +2168,10 @@ impl Renderer {
         }
     }
 
+    pub fn has_line(&self, key: &str) -> bool {
+        self.lines.contains_key(key)
+    }
+
     pub fn frame(
         &mut self,
         asset_base: &str,
@@ -2280,26 +2319,34 @@ impl Renderer {
                 item.rotation,
                 item.rel_pos_km,
             );
-            let mut pose = if item.blend.is_empty() {
-                model
-                    .rig
-                    .pose(item.animation.or_else(|| model.rig.default_sample()))
+            let world = if item.animation.is_none()
+                && item.blend.is_empty()
+                && item.node_turns.is_empty()
+                && item.node_rotations.is_empty()
+            {
+                std::borrow::Cow::Borrowed(model.default_world.as_slice())
             } else {
-                model.rig.blended_pose(&item.blend)
-            };
-            for (node, turn, pivot) in &item.node_turns {
-                if let Some(i) = model.rig.nodes.iter().position(|n| n.name == *node) {
-                    // L' = L * T(p) * turn * T(-p), for the node's (uniform) scale s.
-                    let t = &mut pose[i];
-                    let s = t.scale.x;
-                    t.translation += t.rotation * (*pivot - *turn * *pivot) * s;
-                    t.rotation = (t.rotation * *turn).normalize();
+                let mut pose = if item.blend.is_empty() {
+                    model
+                        .rig
+                        .pose(item.animation.or_else(|| model.rig.default_sample()))
+                } else {
+                    model.rig.blended_pose(&item.blend)
+                };
+                for (node, turn, pivot) in &item.node_turns {
+                    if let Some(i) = model.rig.nodes.iter().position(|n| n.name == *node) {
+                        // L' = L * T(p) * turn * T(-p), for the node's (uniform) scale s.
+                        let t = &mut pose[i];
+                        let s = t.scale.x;
+                        t.translation += t.rotation * (*pivot - *turn * *pivot) * s;
+                        t.rotation = (t.rotation * *turn).normalize();
+                    }
                 }
-            }
-            for (i, turn) in &item.node_rotations {
-                pose[*i].rotation = (pose[*i].rotation * *turn).normalize();
-            }
-            let world = model.rig.world_matrices(&pose);
+                for (i, turn) in &item.node_rotations {
+                    pose[*i].rotation = (pose[*i].rotation * *turn).normalize();
+                }
+                std::borrow::Cow::Owned(model.rig.world_matrices(&pose))
+            };
             for (pi, (mesh_i, _, node)) in model.primitives.iter().enumerate() {
                 if hide.is_some_and(|h| h.contains(&model.mesh_names[*mesh_i])) {
                     continue;
@@ -2393,8 +2440,9 @@ impl Renderer {
                     haze_sun: item.haze.map(|h| h[2]).unwrap_or([1.0; 4]),
                     haze_sky: item.haze.map(|h| h[3]).unwrap_or([1.0; 4]),
                 };
-                self.queue
-                    .write_buffer(&self.objects[slot].0, 0, bytemuck::bytes_of(&u));
+                let offset = slot * self.object_stride;
+                self.object_upload[offset..offset + std::mem::size_of::<ObjectUniform>()]
+                    .copy_from_slice(bytemuck::bytes_of(&u));
                 mesh_draws.push((item.model.clone(), pi, slot, m.determinant() < 0.0, skinned));
                 slot += 1;
             }
@@ -2430,12 +2478,20 @@ impl Renderer {
                 haze_sun: [1.0; 4],
                 haze_sky: [1.0; 4],
             };
-            self.queue
-                .write_buffer(&self.objects[slot].0, 0, bytemuck::bytes_of(&u));
+            let offset = slot * self.object_stride;
+            self.object_upload[offset..offset + std::mem::size_of::<ObjectUniform>()]
+                .copy_from_slice(bytemuck::bytes_of(&u));
             line_draws.push((l.key.clone(), slot));
             slot += 1;
         }
 
+        if slot > 0 {
+            self.queue.write_buffer(
+                self.object_buffer.as_ref().unwrap(),
+                0,
+                &self.object_upload[..slot * self.object_stride],
+            );
+        }
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -2469,7 +2525,11 @@ impl Renderer {
                     if prim.blend {
                         continue;
                     }
-                    pass.set_bind_group(1, &self.objects[*s].1, &[]);
+                    pass.set_bind_group(
+                        1,
+                        self.object_bind.as_ref().unwrap(),
+                        &[(*s * self.object_stride) as u32],
+                    );
                     pass.set_vertex_buffer(0, skinned.as_ref().unwrap_or(&prim.vertices).slice(..));
                     pass.set_index_buffer(prim.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..prim.index_count, 0, 0..1);
@@ -2532,7 +2592,11 @@ impl Renderer {
                         continue;
                     }
                     let tex = prim.bind.as_ref().unwrap_or(&self.white);
-                    pass.set_bind_group(1, &self.objects[*s].1, &[]);
+                    pass.set_bind_group(
+                        1,
+                        self.object_bind.as_ref().unwrap(),
+                        &[(*s * self.object_stride) as u32],
+                    );
                     pass.set_bind_group(2, tex, &[]);
                     pass.set_vertex_buffer(0, skinned.as_ref().unwrap_or(&prim.vertices).slice(..));
                     pass.set_index_buffer(prim.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -2554,7 +2618,11 @@ impl Renderer {
                     if *n < 2 {
                         continue;
                     }
-                    pass.set_bind_group(1, &self.objects[*s].1, &[]);
+                    pass.set_bind_group(
+                        1,
+                        self.object_bind.as_ref().unwrap(),
+                        &[(*s * self.object_stride) as u32],
+                    );
                     pass.set_vertex_buffer(0, buf.slice(..));
                     pass.set_vertex_buffer(1, buf.slice(12..));
                     pass.draw(0..4, 0..*n - 1);
@@ -2577,8 +2645,8 @@ impl Renderer {
         if self.fixture_grid {
             self.post.reference_grid(&mut encoder);
         }
-        self.post.snapshot(&mut encoder);
-        {
+        if self.engine_fx.has_draws() {
+            self.post.snapshot(&mut encoder);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("authored engine effects"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

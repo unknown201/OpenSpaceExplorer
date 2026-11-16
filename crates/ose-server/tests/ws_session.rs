@@ -1338,7 +1338,8 @@ async fn exploration_science_tech_tree_and_recovery() {
     .await;
     assert!(!accepted && reason.is_some());
 
-    // the same report again is worth nothing
+    let first_earned = earned;
+    // The same subject can be repeated for a reduced reward.
     send_msg(&mut ws, &ClientMessage::RunExperiments { vessel }).await;
     wait_for(&mut ws, |m| {
         matches!(m, ServerMessage::ScienceReports { .. }).then_some(())
@@ -1358,7 +1359,10 @@ async fn exploration_science_tech_tree_and_recovery() {
         _ => None,
     })
     .await;
-    assert!(recovered && earned == 0.0, "{earned}");
+    assert!(
+        recovered && earned > 0.0 && earned < first_earned,
+        "repeat {earned} vs first {first_earned}"
+    );
     // the recovered vessel is gone
     for _ in response_window() {
         if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws).await {
@@ -3458,9 +3462,14 @@ async fn deployment_snapshots_identify_panel_and_gear_instances() {
     })
     .await;
     let mut craft = starter_craft();
-    for (i, id) in ["solararray_1v_1x6", "solararray_1v_1x6", "landingleg_0v"]
-        .iter()
-        .enumerate()
+    // Shielded panels retract; the exposed OX-4L intentionally cannot (covered by part_controls).
+    for (i, id) in [
+        "solararray_1v_shielded_1x6",
+        "solararray_1v_shielded_1x6",
+        "landingleg_0v",
+    ]
+    .iter()
+    .enumerate()
     {
         let mut part = craft.parts[0].clone();
         part.guid = format!("rig-{i}");

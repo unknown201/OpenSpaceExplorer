@@ -14,6 +14,7 @@ use ose_math::{DVec3, Orbit};
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct CrashedAt(pub f64);
 
+/// Marks separated debris; removed once it crashes, lands or splashes down.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Debris;
 

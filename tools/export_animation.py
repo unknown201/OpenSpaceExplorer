@@ -215,10 +215,12 @@ def export_rig(env, glb, transforms, names, node_by_tf, skins):
             channels.append({"sampler":len(samplers)-1,"target":{"node":node,"path":path}})
         if channels:
             clip_by_id[obj.path_id] = len(glb.animations)
-            glb.animations.append({"name":clip["m_Name"],"samplers":samplers,"channels":channels})
+            glb.animations.append({"name":clip["m_Name"],"samplers":samplers,"channels":channels,
+                                   "extras":{"ose_audio_events":[{"time":e["time"],"sound":e["data"]} for e in clip.get("m_Events",[]) if e.get("functionName")=="PostAnimWWEvent" and e.get("data","").startswith("Play_")]}})
             audit["sampled_clips"] += 1
     # Use the controller's semantic deployment state to select the clip, rather than part-id heuristics.
     candidates = set()
+    closing = set()
     for obj in env.objects:
         if obj.type.name != "AnimatorController":
             continue
@@ -228,15 +230,17 @@ def export_rig(env, glb, transforms, names, node_by_tf, skins):
             for state in machine["data"]["m_StateConstantArray"]:
                 state = state["data"]
                 name = strings.get(state["m_NameID"], "").lower()
-                if name not in ("open", "extend", "deploy", "opening", "extending", "deploying"):
+                if name not in ("open", "extend", "deploy", "opening", "extending", "deploying", "close", "retract", "closing", "retracting"):
                     continue
                 for tree in state["m_BlendTreeConstantArray"]:
                     for node in tree["data"]["m_NodeArray"]:
                         ci = node["data"].get("m_ClipID", -1)
                         refs = ctrl["m_AnimationClips"]
                         if 0 <= ci < len(refs) and refs[ci]["m_PathID"] in clip_by_id:
-                            candidates.add(clip_by_id[refs[ci]["m_PathID"]])
+                            (closing if name in ("close", "retract", "closing", "retracting") else candidates).add(clip_by_id[refs[ci]["m_PathID"]])
     metadata = {"ose_animation_audit":audit}
     if len(candidates) == 1:
         metadata["ose_deployment"] = {"clip":candidates.pop(), "reverse":False}
+        if len(closing) == 1:
+            metadata["ose_deployment"]["close_clip"] = closing.pop()
     return metadata

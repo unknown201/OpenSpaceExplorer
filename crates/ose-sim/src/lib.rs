@@ -834,7 +834,13 @@ impl Universe {
         group: ActionGroup,
         on: Option<bool>,
     ) -> Option<bool> {
-        let mut p = self.world.get_mut::<flight::Powered>(e)?;
+        let mut p = if self.world.get::<flight::Powered>(e).is_some() {
+            self.world.get_mut::<flight::Powered>(e)?
+        } else {
+            self.world
+                .get_mut::<flight::Dormant>(e)?
+                .map_unchanged(|d| &mut d.0)
+        };
         let g = &mut p.groups;
         let slot = match group {
             ActionGroup::Lights => &mut g.lights,
@@ -1100,6 +1106,24 @@ impl Universe {
             }
             None => false,
         }
+    }
+
+    pub fn deploy_part(&mut self, e: Entity, part: u16, out: bool) -> bool {
+        let Some(mut st) = self.world.get_mut::<structure::Structure>(e) else {
+            return false;
+        };
+        let i = part as usize;
+        if i >= st.deployed.len()
+            || !st.rigid.present[i]
+            || !st.can_deploy(i, out)
+            || !(st.deploy_defs[i].is_some_and(|d| d.antenna && d.extendable)
+                || st.electric[i].solar_output > 0.0 && st.electric[i].solar_deployable)
+            || st.deployed[i] == out
+        {
+            return false;
+        }
+        st.deployed[i] = out;
+        true
     }
 
     /// Fold a vessel's deployable solar panels out or in; how many moved, `None` without a structure.
@@ -1835,6 +1859,15 @@ impl Universe {
             self.world.get::<bodies::ReferenceBody>(e)?.0,
             self.world.get::<bodies::OnRails>(e)?.0,
         ))
+    }
+
+    /// Hide settled debris from the tracking UI while retaining its collision/support structure.
+    pub fn is_surface_debris(&self, e: Entity) -> bool {
+        self.world.get::<vessels::Debris>(e).is_some()
+            && self
+                .powered(e)
+                .or_else(|| self.dormant(e))
+                .is_some_and(|p| p.landed || p.splashed || p.crashed)
     }
 
     /// Schedule an impulsive burn for a vessel at universal time `ut` (seconds, must be in the future).
@@ -2673,6 +2706,8 @@ impl Universe {
         self.run_transfers(ticks.max(1) as f64 * dt);
         self.run_transmissions(ticks.max(1) as f64 * dt);
         self.run_ladders(ticks.max(1) as f64 * dt);
+        // Landed debris is hidden from tracking by the server, but its physical structure remains:
+        // it may hold up another vessel or float in the sea. Destroying it here removes those supports.
         // crashed debris is gone at once; a crashed craft stays for `WRECK_LINGER_S` (its pilot sees the crash
         // and its report) and then is gone too, as the original destroys it
         let wrecks: Vec<(Entity, bool, Option<f64>)> = {
@@ -2912,6 +2947,32 @@ mod tests {
             "powered state re-expressed around Kerbol"
         );
         assert!(p.r.length() > 1.0e10, "now relative to the star");
+    }
+
+    #[test]
+    fn surface_debris_is_untracked_without_destroying_physical_supports() {
+        let mut u = Universe::with_bodies(&[kerbin_def()]);
+        let body = u.body_entity("Kerbin").unwrap();
+        let craft = u.spawn_powered_on_surface("craft", body, upper_stage(), 0.0, 0.0);
+        let landed = u.spawn_powered_on_surface("soft landing", body, upper_stage(), 0.0, 1.0);
+        u.world.entity_mut(landed).insert(vessels::Debris);
+        let crashed = u.spawn_powered_on_surface("wreck", body, upper_stage(), 0.0, 2.0);
+        u.world.entity_mut(crashed).insert(vessels::Debris);
+        let mut p = u.powered(crashed).unwrap().clone();
+        p.crashed = true;
+        u.set_powered(crashed, p);
+        let dormant = u.spawn_powered_on_surface("dormant debris", body, upper_stage(), 0.0, 3.0);
+        let p = u.powered(dormant).unwrap().clone();
+        u.set_dormant(dormant, p);
+        u.world.entity_mut(dormant).insert(vessels::Debris);
+        u.step();
+        assert!(u.is_surface_debris(landed));
+        assert!(u.vessel(landed).is_some());
+        assert!(u.vessel(crashed).is_none());
+        assert!(u.is_surface_debris(dormant));
+        assert!(u.vessel(dormant).is_some());
+        assert!(u.vessel(craft).is_some());
+        assert!(!u.is_surface_debris(craft));
     }
 
     #[test]

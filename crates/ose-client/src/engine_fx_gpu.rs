@@ -1077,6 +1077,9 @@ impl EngineFxGpu {
     pub fn particle_count(&self) -> usize {
         self.particle_system.particles.len() + self.trail_system.count()
     }
+    pub fn has_draws(&self) -> bool {
+        !self.draws.is_empty() || !self.sprites.batches.is_empty()
+    }
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
         for refraction in [true, false] {
             for draw in self.draws.iter().filter(|d| d.refraction == refraction) {

@@ -458,6 +458,8 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut wheel_torque: f64 = 0.0;
     let mut wheel_axes = None;
     let mut electric = ose_data::Electric::default();
+    let mut deployment = None;
+    let mut light = None;
     let mut experiments = Vec::new();
     let mut docking = None;
     let mut chute: Option<ose_data::Parachute> = None;
@@ -486,6 +488,32 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
             if let Some(entries) = m["ModuleData"].as_array() {
                 for entry in entries.iter() {
                     let o = &entry["DataObject"];
+                    if entry["Name"] == "Data_Deployable" {
+                        deployment = Some(ose_data::Deployable {
+                            extendable: b(o, "extendable"),
+                            retractable: b(o, "retractable"),
+                            starts_extended: b(o, "IsExtended"),
+                            antenna: false,
+                            shielded_extension: b(o, "applyShieldingExtend"),
+                        });
+                    }
+                    if entry["Name"] == "Data_Light" {
+                        light = Some(ose_data::PartLight {
+                            use_per_s: if b(o, "useResources") {
+                                ec_rate(&o["requiredResource"])
+                            } else {
+                                0.0
+                            },
+                            color: [
+                                f(o, "LightR") as f32,
+                                f(o, "LightG") as f32,
+                                f(o, "LightB") as f32,
+                            ],
+                            smooth: b(o, "isSmoothTransitionEnabled"),
+                            brighten_s: f(o, "lightBrightenDuration") as f32,
+                            dim_s: f(o, "lightDimDuration") as f32,
+                        });
+                    }
                     if entry["Name"] == "Data_ReinforcedConnection" {
                         use ose_data::ReinforcementTarget::*;
                         reinforced_connection = Some(match &o["ConnectionTarget"] {
@@ -911,6 +939,9 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
             dynamics: wheel_dynamics.clone(),
         }
     });
+    if let Some(d) = &mut deployment {
+        d.antenna = electric.comm_range_m > 0.0;
+    }
     let bounds = part_bounds(&drag_cubes, &attach_nodes);
     // Data_Deployable is shared by legs, antennae and bays too. Its settings describe solar
     // behavior only when this part actually contains a solar producer.
@@ -952,6 +983,8 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         reaction_wheel_torque_knm: wheel_torque,
         reaction_wheel_axes_knm: wheel_axes,
         electric,
+        deployable: deployment,
+        light,
         experiments,
         docking,
         parachute,

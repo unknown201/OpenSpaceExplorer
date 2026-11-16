@@ -99,6 +99,13 @@ pub struct Clip {
     pub name: String,
     pub duration: f32,
     channels: Vec<Channel>,
+    pub audio_events: Vec<AudioCue>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct AudioCue {
+    pub time: f32,
+    pub sound: String,
 }
 
 #[derive(Debug)]
@@ -114,6 +121,14 @@ pub struct ClipSample {
     pub looping: bool,
 }
 
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct LightEmitter {
+    pub node: usize,
+    pub range: f32,
+    pub spot_cos: f32,
+    pub intensity: f32,
+}
+
 #[derive(Debug)]
 pub struct Rig {
     pub nodes: Vec<Node>,
@@ -123,6 +138,9 @@ pub struct Rig {
     /// Exported explicitly by the converter, never guessed by the renderer from part names.
     pub deployment: Option<(usize, bool)>,
     pub deployment_control: String,
+    pub deployment_close: Option<usize>,
+    pub lights: Vec<LightEmitter>,
+    pub light_emission: f32,
     pub gimbal: Option<crate::gimbal::Definition>,
 }
 
@@ -314,18 +332,37 @@ impl Rig {
                 name: a["name"].as_str().unwrap_or("").into(),
                 duration,
                 channels,
+                audio_events: serde_json::from_value(
+                    a["extras"]["ose_audio_events"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default()
+                        .into(),
+                )
+                .map_err(|e| format!("audio cue: {e}"))?,
             });
         }
         let deploy = &json["extras"]["ose_deployment"];
         let deployment = index(&deploy["clip"])
             .filter(|i| *i < clips.len())
             .map(|i| (i, deploy["reverse"].as_bool().unwrap_or(false)));
+        let deployment_close = index(&deploy["close_clip"]).filter(|i| *i < clips.len());
         Ok(Self {
             nodes,
             clips,
             skins,
             order,
             deployment,
+            deployment_close,
+            light_emission: json["extras"]["ose_light_emission"].as_f64().unwrap_or(6.0) as f32,
+            lights: serde_json::from_value(
+                json["extras"]["ose_lights"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into(),
+            )
+            .map_err(|e| format!("light metadata: {e}"))?,
             gimbal: json["extras"]
                 .get("ose_gimbal")
                 .map(|v| serde_json::from_value(v.clone()))
@@ -613,7 +650,7 @@ impl Rig {
     /// authored rest pose until a caller explicitly samples them (e.g. engine mode/reverser clips).
     pub fn default_sample(&self) -> Option<ClipSample> {
         match self.deployment_control.as_str() {
-            "panels" | "gear" => self.deployment_sample(0.0),
+            "panels" | "gear" | "antennas" => self.deployment_sample(0.0),
             _ => None,
         }
     }

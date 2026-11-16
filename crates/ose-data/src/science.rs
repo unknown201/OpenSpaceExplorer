@@ -224,9 +224,20 @@ pub struct ResearchReport {
     /// `"{Body}_{Situation}"` plus `"_{Region}"` when the vessel is over a region (`ResearchLocationId`).
     pub location: String,
     pub value: f64,
+    /// Full value before diminishing returns. Old saves stored only full-value reports.
+    #[serde(default)]
+    pub base_value: f64,
 }
 
 impl ResearchReport {
+    pub fn full_value(&self) -> f64 {
+        if self.base_value > 0.0 {
+            self.base_value
+        } else {
+            self.value
+        }
+    }
+
     /// `ResearchReportKey`: one submission per experiment, report type and location.
     pub fn key(&self) -> String {
         format!(
@@ -277,6 +288,7 @@ pub fn run_experiment(
             sample: false,
             location: location.clone(),
             value: exp.data_value * scale,
+            base_value: exp.data_value * scale,
         });
     }
     if matches!(exp.kind, ExperimentKind::Sample | ExperimentKind::Both) && exp.sample_value > 0.0 {
@@ -285,6 +297,7 @@ pub fn run_experiment(
             sample: true,
             location,
             value: exp.sample_value * scale,
+            base_value: exp.sample_value * scale,
         });
     }
     out

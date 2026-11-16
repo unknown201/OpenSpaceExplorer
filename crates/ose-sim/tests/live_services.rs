@@ -117,6 +117,7 @@ fn fixture(size: f64) -> (Universe, bevy_ecs::entity::Entity) {
 }
 fn report(sample: bool) -> ResearchReport {
     ResearchReport {
+        base_value: 0.0,
         experiment: "MeasuredPacket".into(),
         sample,
         location: "Kerbin_Landed".into(),
