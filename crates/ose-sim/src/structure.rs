@@ -101,6 +101,20 @@ impl Airflow {
 /// KSP2's `PhysicsSettings.AngularDragMultiplier`.
 pub const ANGULAR_DRAG_MULTIPLIER: f64 = 2.0;
 
+#[derive(Clone, Copy)]
+struct FaceCover {
+    direction: DVec3,
+    area: f64,
+    blocker: usize,
+    through: Option<usize>,
+}
+
+impl FaceCover {
+    fn attached(self, present: &[bool]) -> bool {
+        present[self.blocker] && self.through.is_none_or(|i| present[i])
+    }
+}
+
 #[derive(Component)]
 pub struct Structure {
     pub eva_hatches: Vec<Option<crate::crew::HatchFrame>>,
@@ -247,11 +261,11 @@ pub struct Structure {
     /// Control settings each part was built with (`CraftPart::control`), given to the flight once.
     craft_controls: Vec<Option<ose_data::flight_geometry::PartControl>>,
     /// The attach nodes covering each part's faces (`SetExposedArea`), reapplied to a re-weighted shape.
-    face_covers: Vec<Vec<(DVec3, f64, usize)>>,
+    face_covers: Vec<Vec<FaceCover>>,
     /// Each part's own faces before any attach node covers them.
     base_faces: Vec<Option<Faces>>,
-    /// How many parts were attached when the covered faces were last worked out.
-    faces_for_parts: usize,
+    /// Attachment mask when the covered faces were last worked out.
+    faces_for_parts: Vec<bool>,
     /// Part temperatures and limits, K, thermal masses, and the re-entry heat each took last step, kW.
     pub temperature_k: Vec<f64>,
     pub max_temp_k: Vec<f64>,
@@ -719,8 +733,7 @@ impl Structure {
         // `Module_Drag.SetExposedArea`: each stack node takes the cross-section of the part on it (its full
         // drag-cube area facing back along the node) off the face the node points through; a part on it
         // thinner than 1 m along the node also lets the part beyond it cover that face.
-        // (node direction in this part's frame, area covered, the part that covers it)
-        let mut face_covers: Vec<Vec<(DVec3, f64, usize)>> = vec![Vec::new(); craft.parts.len()];
+        let mut face_covers: Vec<Vec<FaceCover>> = vec![Vec::new(); craft.parts.len()];
         let stack_links: Vec<Vec<(DVec3, usize)>> = {
             let mut links: Vec<Vec<(DVec3, usize)>> = vec![Vec::new(); craft.parts.len()];
             for (i, p) in craft.parts.iter().enumerate() {
@@ -737,12 +750,7 @@ impl Structure {
                     if !n.node_type.eq_ignore_ascii_case("stack") {
                         continue;
                     }
-                    let dir = if n.orientation.length_squared() > 1e-9 {
-                        n.orientation
-                    } else {
-                        n.position
-                    };
-                    links[part].push((dir, other));
+                    links[part].push((n.orientation, other));
                 }
             }
             links
@@ -777,7 +785,12 @@ impl Structure {
         for (i, links) in stack_links.iter().enumerate() {
             for &(dir, other) in links {
                 let d = carry(dir, i, other);
-                face_covers[i].push((dir, cross_section(other, d), other));
+                face_covers[i].push(FaceCover {
+                    direction: dir,
+                    area: cross_section(other, d),
+                    blocker: other,
+                    through: None,
+                });
                 if depth(other, d) >= 1.0 {
                     continue;
                 }
@@ -786,15 +799,20 @@ impl Structure {
                 for &(dir2, beyond) in &stack_links[other] {
                     if beyond != i && (dir2 - dir).length() < 1e-6 {
                         let d2 = carry(dir2, other, beyond);
-                        face_covers[i].push((dir, cross_section(beyond, d2), beyond));
+                        face_covers[i].push(FaceCover {
+                            direction: dir,
+                            area: cross_section(beyond, d2),
+                            blocker: beyond,
+                            through: Some(other),
+                        });
                     }
                 }
             }
         }
         for (i, f) in faces.iter_mut().enumerate() {
             if let Some(f) = f.as_mut() {
-                for &(dir, area, _) in &face_covers[i] {
-                    f.cover(dir, area);
+                for cover in &face_covers[i] {
+                    f.cover(cover.direction, cover.area);
                 }
             }
         }
@@ -1098,7 +1116,7 @@ impl Structure {
                 .collect(),
             face_covers,
             base_faces,
-            faces_for_parts: n,
+            faces_for_parts: vec![true; n],
             temperature_k: vec![thermal::INITIAL_TEMPERATURE_K; n],
             max_temp_k: (0..n)
                 .map(|i| def_of(i).map(|d| d.max_temp_k).unwrap_or(0.0))
@@ -1361,6 +1379,7 @@ impl Structure {
             s.trim_to(0);
         }
         s.enclose_shaped_fairings();
+        s.update_exposed_faces();
         s
     }
 
@@ -2895,18 +2914,17 @@ impl Structure {
     /// Uncover the faces whose neighbour has gone (`Module_Drag.OnPartDetached` / `OnPartDestroyed` recompute
     /// `SetExposedArea`): a capsule whose decoupler has dropped meets the air with its whole base.
     fn update_exposed_faces(&mut self) {
-        let attached = self.rigid.present.iter().filter(|x| **x).count();
-        if attached == self.faces_for_parts {
+        if self.rigid.present == self.faces_for_parts {
             return;
         }
-        self.faces_for_parts = attached;
+        self.faces_for_parts.clone_from(&self.rigid.present);
         for i in 0..self.faces.len() {
             let Some(mut f) = self.base_faces[i] else {
                 continue;
             };
-            for &(dir, area, other) in &self.face_covers[i] {
-                if self.rigid.present[other] {
-                    f.cover(dir, area);
+            for cover in &self.face_covers[i] {
+                if cover.attached(&self.rigid.present) {
+                    f.cover(cover.direction, cover.area);
                 }
             }
             self.faces[i] = Some(f);
@@ -4114,6 +4132,7 @@ impl Structure {
         settings: &thermal::HeatSettings,
         dt: f64,
     ) -> Vec<usize> {
+        self.update_exposed_faces();
         let present: Vec<usize> = (0..self.rigid.len())
             .filter(|&i| self.rigid.present[i])
             .collect();
@@ -4733,9 +4752,9 @@ impl Structure {
             }
             _ => Some(Faces::from_cube(packed)),
         }?;
-        for &(dir, area, other) in &self.face_covers[i] {
-            if self.rigid.present[other] {
-                faces.cover(dir, area);
+        for cover in &self.face_covers[i] {
+            if cover.attached(&self.rigid.present) {
+                faces.cover(cover.direction, cover.area);
             }
         }
         Some(faces)
@@ -4757,9 +4776,9 @@ impl Structure {
         }
         let cube = self.fairing_cube.get(i)?.as_ref()?;
         let mut faces = Faces::from_cube(cube);
-        for &(dir, area, other) in &self.face_covers[i] {
-            if self.rigid.present[other] {
-                faces.cover(dir, area);
+        for cover in &self.face_covers[i] {
+            if cover.attached(&self.rigid.present) {
+                faces.cover(cover.direction, cover.area);
             }
         }
         Some(faces)
@@ -5611,6 +5630,7 @@ impl Structure {
         if self.untrimmed(stage) {
             self.trim_to(stage);
         }
+        self.update_exposed_faces();
         self.last_air_speed_mps = flow.velocity.length();
         self.last_airflow = Some(flow);
         self.part_cda_m2.fill(0.0);
@@ -6016,6 +6036,162 @@ pub(crate) fn test_capsule(shield: bool) -> (Craft, Vec<PartDef>, Vec<ResourceDe
 mod tests {
     use super::*;
     use crate::flight::{FlightSpec, StageSpec};
+
+    fn reentry_stack(thin: bool, rotated: bool) -> Structure {
+        let (mut craft, mut defs, resources) = test_capsule(true);
+        craft.parts.truncate(2);
+        craft.stages = vec![Vec::new()];
+        for (i, part) in craft.parts.iter_mut().enumerate() {
+            part.resources.clear();
+            part.local_position = DVec3::new(0.0, -2.0 * i as f64, 0.0);
+            part.local_rotation = ose_data::craft::Quat {
+                w: 1.0,
+                ..Default::default()
+            };
+            part.parent = (i > 0).then_some(0);
+            part.own_node = (i > 0).then(|| "test_top".into());
+            part.parent_node = (i > 0).then(|| "test_bottom".into());
+            let def = defs.iter_mut().find(|d| d.id == part.part_id).unwrap();
+            let mut node = def.attach_nodes[0].clone();
+            node.node_type = "stack".into();
+            node.size = 4; // deliberately unrelated to the cube's cross-section
+            node.id = "test_top".into();
+            node.orientation = DVec3::new(0.0, 1.0, 0.0);
+            let mut bottom = node.clone();
+            bottom.id = "test_bottom".into();
+            bottom.orientation = -node.orientation;
+            def.attach_nodes = vec![node, bottom];
+            let mut cube = def.drag_cubes[0].clone();
+            cube.area = if i == 0 {
+                [2.0; 6]
+            } else {
+                [0.75, 0.75, 0.25, 0.25, 0.5, 0.5]
+            };
+            cube.drag = [1.0; 6];
+            cube.depth = [if thin && i == 1 { 0.1 } else { 1.0 }; 6];
+            def.drag_cubes = vec![cube];
+        }
+        if rotated {
+            let s = std::f64::consts::FRAC_1_SQRT_2;
+            craft.parts[1].local_rotation = ose_data::craft::Quat {
+                z: s,
+                w: s,
+                ..Default::default()
+            };
+        }
+        if thin {
+            let mut end = craft.parts[0].clone();
+            end.guid = "end-cube".into();
+            end.parent = Some(1);
+            end.own_node = Some("test_top".into());
+            end.parent_node = Some("test_bottom".into());
+            end.local_position.y = -4.0;
+            craft.parts.push(end);
+        }
+        let mut s = Structure::build(&craft, &defs, &resources);
+        s.geometry.fill(Default::default());
+        s.lift_defs.fill(None);
+        s.heatshields.fill(None);
+        s.stowed_box[0] = (DVec3::ZERO, DVec3::new(1.0, 1.0, 1.0));
+        s.stowed_box[1] = (DVec3::ZERO, DVec3::new(0.5, 0.5, 0.5));
+        s
+    }
+
+    #[test]
+    fn reentry_uses_attached_cube_area_and_full_heating_cross_section() {
+        let mut s = reentry_stack(false, false);
+        assert_eq!(s.faces[0].unwrap().area[3], 1.75);
+        let frame = (
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(0.0, 1.0, 0.0),
+            DVec3::new(0.0, 0.0, 1.0),
+        );
+        let flow = Airflow::uniform(frame, DVec3::new(0.0, -2100.0, 0.0), 0.01, 7.0);
+        let before = s.temperature_k[0];
+        s.update_heat_in_flow(flow, 220.0, 0.0, &thermal::HeatSettings::default(), 0.02);
+        // The 1x1 upstream outline shadows a quarter of the 2x2 pod outline.
+        // Source UpdateReentryFlux uses the full cube area (2), not the covered face (1.75).
+        let expected = 500.0 * 7.0_f64.powi(3) * 0.75 * 2.0 * 0.01_f64.powf(0.53);
+        assert!((s.reentry_flux_kw[0] - expected).abs() < 1e-8);
+        assert!((s.temperature_k[0] - before - expected / s.thermal_mass[0] * 0.02).abs() < 1e-9);
+
+        let rotated = reentry_stack(false, true);
+        assert!(
+            (rotated.faces[0].unwrap().area[3] - 1.25).abs() < 1e-12,
+            "a rotated neighbour covers its X cross-section, independent of node size"
+        );
+    }
+
+    #[test]
+    fn reentry_drag_and_heat_recover_after_staging_or_loss_of_a_neighbour() {
+        let mut s = reentry_stack(false, false);
+        let frame = (
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(0.0, 1.0, 0.0),
+            DVec3::new(0.0, 0.0, 1.0),
+        );
+        let flow = Airflow::uniform(frame, DVec3::new(0.0, -2100.0, 0.0), 0.01, 7.0);
+        s.aerodynamics_local(0, flow);
+        let covered = s.part_cda_m2[0];
+        s.stage_parts = vec![vec![0, 1], vec![0]];
+        s.first_stage_pending = false;
+        let force = s.aerodynamics_local(1, flow);
+        assert_eq!(s.faces[0].unwrap().area[3], 2.0);
+        assert!(s.part_cda_m2[0] > covered);
+        let q_kn = 0.5 * 0.01 * 2100.0_f64.powi(2) / 1000.0;
+        assert!((force.drag_kn.y - q_kn * s.part_cda_m2[0]).abs() < 1e-10);
+        assert_eq!(s.part_cda_m2[1], 0.0);
+        s.update_heat_in_flow(flow, 220.0, 0.0, &thermal::HeatSettings::default(), 0.02);
+        let expected = 500.0 * 7.0_f64.powi(3) * 2.0 * 0.01_f64.powf(0.53);
+        assert!((s.reentry_flux_kw[0] - expected).abs() < 1e-8);
+        // Repeated evaluation must not accumulate face coverage.
+        s.aerodynamics_local(1, flow);
+        assert_eq!(s.faces[0].unwrap().area[3], 2.0);
+
+        let mut damaged = reentry_stack(false, false);
+        damaged.rigid.remove_parts(&[1]);
+        damaged.update_heat_in_flow(flow, 220.0, 0.0, &thermal::HeatSettings::default(), 0.02);
+        assert_eq!(damaged.faces[0].unwrap().area[3], 2.0);
+        assert!((damaged.reentry_flux_kw[0] - expected).abs() < 1e-8);
+    }
+
+    #[test]
+    fn thin_stack_neighbours_cover_the_next_cube_only_while_attached() {
+        let mut s = reentry_stack(true, false);
+        assert_eq!(
+            s.faces[0].unwrap().area[3],
+            0.0,
+            "the thin neighbour also exposes the next 2 m2 cube"
+        );
+        s.rigid.remove_parts(&[2]);
+        s.update_exposed_faces();
+        assert_eq!(s.faces[0].unwrap().area[3], 1.75);
+        s.rigid.remove_parts(&[1]);
+        s.update_exposed_faces();
+        assert_eq!(s.faces[0].unwrap().area[3], 2.0);
+    }
+
+    #[test]
+    fn reentry_coverage_tracks_part_identity_and_the_thin_intermediate() {
+        let mut s = reentry_stack(true, false);
+        s.rigid.present[2] = false;
+        s.update_exposed_faces();
+        assert_eq!(s.faces[0].unwrap().area[3], 1.75);
+        // The count stays at two; both the direct blocker and the link to the far cube changed.
+        s.rigid.present[2] = true;
+        s.rigid.present[1] = false;
+        s.update_exposed_faces();
+        assert_eq!(s.faces[0].unwrap().area[3], 2.0);
+
+        let mut s = reentry_stack(true, false);
+        s.rigid.present[1] = false;
+        s.update_exposed_faces();
+        assert_eq!(
+            s.faces[0].unwrap().area[3],
+            2.0,
+            "a far cube cannot cover through a missing intermediate part"
+        );
+    }
 
     /// The starter rocket with three large landing legs on its tank.
     fn lander() -> (Craft, Vec<PartDef>, Vec<ResourceDef>) {
@@ -10454,8 +10630,8 @@ mod tests {
         let mut plain = open_cube.clone();
         plain.drag_multiplier = [1.0; 6];
         let mut expected = Faces::from_cube(&plain);
-        for &(dir, area, _) in &s.face_covers[chute] {
-            expected.cover(dir, area);
+        for cover in &s.face_covers[chute] {
+            expected.cover(cover.direction, cover.area);
         }
         let ratio = full.area_drag(&curves, down, 0.03) / expected.area_drag(&curves, down, 0.03);
         assert!((ratio - 2.0).abs() < 1e-9, "{ratio}");
