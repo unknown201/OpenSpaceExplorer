@@ -47,6 +47,7 @@ pub mod kerbin_time;
 pub mod ksc3d;
 #[cfg(target_arch = "wasm32")]
 pub mod lens_flare;
+pub mod maneuver;
 pub mod map_prediction;
 #[cfg(target_arch = "wasm32")]
 pub mod menu3d;
@@ -1531,6 +1532,9 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
                 ev.stop_propagation();
                 let mut app = a.borrow_mut();
                 if let Some(n) = app.node {
+                    if app.warp_to.is_some() {
+                        app.stop_warp();
+                    }
                     app.mnv_drag = Some((
                         6,
                         ev.client_x() as f64,
@@ -5489,6 +5493,16 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 app.flight_open_pam(None, 0.0, 0.0);
                 return;
             }
+            // A focused range is still a flight control surface: the stop shortcut must work there.
+            let on_range = ev
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                .is_some_and(|i| i.type_() == "range");
+            if code == "Slash" && app.in_session && (!typing || on_range) {
+                ev.prevent_default();
+                app.stop_warp();
+                return;
+            }
             if typing {
                 app.keys.clear();
                 return;
@@ -5811,10 +5825,6 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 }
             }
             match code.as_str() {
-                "Slash" if app.in_session => {
-                    app.warp_to = None;
-                    app.request_warp(1);
-                }
                 "F2" => {
                     ev.prevent_default();
                     if let Some(b) = app.doc.body() {
@@ -5926,6 +5936,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_warp = Closure::<dyn FnMut()>::new(move || {
         let mut app = a.borrow_mut();
+        app.warp_to = None;
         let w = kerbin_time::next_warp(app.requested_warp);
         app.request_warp(w);
     });
@@ -5955,6 +5966,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         let a = app.clone();
         let on_down = Closure::<dyn FnMut()>::new(move || {
             let mut app = a.borrow_mut();
+            app.warp_to = None;
             let w = kerbin_time::prev_warp(app.requested_warp);
             app.request_warp(w);
         });
@@ -5963,6 +5975,12 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     }
 
     let doc = app.borrow().doc.clone();
+    if let Some(btn) = doc.get_element_by_id("warp-stop") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || a.borrow_mut().stop_warp());
+        btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     if let Some(btn) = doc.get_element_by_id("add-node") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut()>::new(move || a.borrow_mut().add_node());
@@ -5973,6 +5991,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         let a = app.clone();
         let cb = Closure::<dyn FnMut()>::new(move || {
             let mut app = a.borrow_mut();
+            if app.warp_to.is_some() {
+                app.stop_warp();
+                return;
+            }
             // To a little before the burn should start (half its length before the node), as the original.
             let Some(n) = app.node else { return };
             let burn = app
@@ -5980,14 +6002,14 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 .as_ref()
                 .and_then(|s| s.vessel(n.vessel))
                 .and_then(|v| v.flight.as_ref())
-                .filter(|f| f.throttle > 0.01)
+                .filter(|f| f.throttle > 0.01 && f.thrust_kn > 1e-6)
                 .map(|f| {
                     let dv = (n.prograde_mps.powi(2) + n.normal_mps.powi(2) + n.radial_mps.powi(2))
                         .sqrt();
                     dv * f.mass_t / (f.thrust_kn / f.throttle).max(1e-6)
                 })
                 .unwrap_or(0.0);
-            app.start_warp_to(n.ut - burn * 0.5 - 15.0, "the maneuver");
+            app.start_warp_to_for_vessel(n.ut - burn * 0.5 - 15.0, "the maneuver", Some(n.vessel));
         });
         btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
@@ -6007,8 +6029,41 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     for id in ["node-dt", "node-prograde", "node-normal", "node-radial"] {
         if let Some(input) = doc.get_element_by_id(id) {
             let a = app.clone();
-            let cb = Closure::<dyn FnMut()>::new(move || a.borrow_mut().node_inputs_changed());
+            let cb = Closure::<dyn FnMut()>::new(move || a.borrow_mut().node_inputs_changed(id));
             input.add_event_listener_with_callback("input", cb.as_ref().unchecked_ref())?;
+            cb.forget();
+            let a = app.clone();
+            let cb = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(
+                move |ev: web_sys::KeyboardEvent| {
+                    let sign = match ev.key().as_str() {
+                        "ArrowLeft" | "ArrowDown" => -1.0,
+                        "ArrowRight" | "ArrowUp" => 1.0,
+                        _ => return,
+                    };
+                    let Some(input) = ev
+                        .target()
+                        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    else {
+                        return;
+                    };
+                    ev.prevent_default();
+                    ev.stop_propagation();
+                    let step = maneuver::slider_increment(ev.shift_key(), ev.ctrl_key());
+                    let mut app = a.borrow_mut();
+                    let value = if id == "node-dt" {
+                        let Some(node) = app.node else { return };
+                        hud::node_dt_to_slider(
+                            (node.ut - node.anchor_ut + sign * step).clamp(0.0, hud::NODE_DT_MAX_S),
+                        )
+                    } else {
+                        input.value_as_number() + sign * step
+                    };
+                    input.set_value(&format!("{value}"));
+                    app.keys.clear();
+                    app.node_inputs_changed(id);
+                },
+            );
+            input.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref())?;
             cb.forget();
         }
     }
@@ -11802,6 +11857,9 @@ impl App {
     }
 
     fn set_throttle(&mut self, t: f64) {
+        if t > 0.0 && self.warp_to.is_some() {
+            self.stop_warp();
+        }
         self.throttle = t.clamp(0.0, 1.0);
         self.control_cadence.sent(now_ms());
         self.send_controls();
@@ -12292,7 +12350,7 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         let additional = {
             let (axes, throttle) = analog::poll(&self.analog);
-            if let Some(throttle) = throttle {
+            if let Some(throttle) = throttle.filter(|_| self.warp_to.is_none()) {
                 if (throttle - self.throttle).abs() > 0.002 {
                     self.throttle = throttle;
                     self.controls_dirty = true;
@@ -12340,7 +12398,14 @@ impl App {
             (0.0, 0.0, 0.0)
         } else {
             let rotation = flight_rotation;
-            (rotation.x, rotation.y, k.throttle())
+            // Shift/Ctrl belong to the maneuver editor in map view (including fine gizmo
+            // drags). Holding a planning modifier must never also open the engines.
+            let throttle = if self.map_mode && self.node.is_some() {
+                0.0
+            } else {
+                k.throttle()
+            };
+            (rotation.x, rotation.y, throttle)
         };
         if self.precision_sent != Some((vessel, k.precision)) {
             self.precision_sent = Some((vessel, k.precision));
@@ -12361,6 +12426,9 @@ impl App {
             k.brakes() || self.brakes_latched,
         );
         if thr_in != 0.0 {
+            if self.warp_to.is_some() {
+                self.stop_warp();
+            }
             self.throttle = interaction::throttle_step(self.throttle, thr_in, dt);
             self.controls_dirty = true;
         }
@@ -12493,14 +12561,49 @@ impl App {
 
     /// Start warping to `ut` (the original's WarpTo on nodes and orbit markers).
     fn start_warp_to(&mut self, ut: f64, what: &str) {
+        self.start_warp_to_for_vessel(ut, what, None);
+    }
+
+    fn start_warp_to_for_vessel(&mut self, ut: f64, what: &str, vessel: Option<u64>) {
         let now = self.time.ut_at(now_ms());
         if !ut.is_finite() || ut <= now + 10.0 {
+            hud::push(&self.doc, "Already close to the warp target", "passive");
             return;
+        }
+        // Warp-to is a coast, never an engine command. Clear held throttle keys before the
+        // next control tick, and send the cutoff before the first warp request on the socket.
+        self.keys.clear();
+        if let Some(vessel) = vessel.or(self.flying).or(self.follow) {
+            if self.flying == Some(vessel) {
+                self.set_throttle(0.0);
+            } else if let Some(f) = self
+                .scene
+                .as_ref()
+                .and_then(|s| s.vessel(vessel))
+                .and_then(|v| v.flight.as_ref())
+            {
+                if let Some(ws) = &self.ws {
+                    send(
+                        ws,
+                        &ClientMessage::SetControls {
+                            vessel,
+                            throttle: 0.0,
+                            attitude: f.attitude,
+                        },
+                    );
+                }
+            }
         }
         self.warp_to = Some((ut, what.to_string()));
         self.warp_to_sent_ms = 0.0;
+        self.update_hud(now);
         self.lesson_event("TimeWarpToLocationInitializedMessage");
         hud::push(&self.doc, &format!("Warping to {what}"), "passive");
+    }
+
+    fn stop_warp(&mut self) {
+        self.warp_to = None;
+        self.request_warp(1);
     }
 
     /// Step the warp toward the warp-to point: as fast as leaves a few seconds, 1x for the last ten.
@@ -12512,10 +12615,7 @@ impl App {
         let remaining = at - ut;
         // The original drops to 1x (w + 1) / 2 game seconds out, so a fast warp does not overshoot.
         if remaining <= 2.0 || kerbin_time::warp_drop(self.time.warp, remaining) {
-            self.warp_to = None;
-            if self.time.warp != 1 {
-                self.request_warp(1);
-            }
+            self.stop_warp();
             hud::push(&self.doc, &format!("Arrived: {what}"), "triumph");
             self.lesson_event("TimeWarpToLocationCompletedMessage");
             return;
@@ -14305,6 +14405,9 @@ impl App {
     }
 
     fn add_node(&mut self) {
+        if self.warp_to.is_some() {
+            self.stop_warp();
+        }
         let Some((vessel, rb)) = self.my_vessel() else {
             set_text(&self.doc, "node-reason", "no vessel to plan for yet");
             return;
@@ -14362,6 +14465,9 @@ impl App {
     /// A left press on a maneuver handle (the handles sit in #labels, which takes no pointer events, so the
     /// press is matched by position): start dragging it. True when a handle took the press.
     fn mnv_press(&mut self, x: f64, y: f64) -> bool {
+        if self.warp_to.is_some() {
+            self.stop_warp();
+        }
         let Some(node) = self.node else { return false };
         let hit = (0..6).find(|k| {
             self.doc
@@ -14458,18 +14564,29 @@ impl App {
         }
     }
 
-    /// Slide the node along the orbit to the sampled point nearest the pointer (screen px).
+    /// Slide continuously along the orbit, keeping the revolution when crossing its screen seam.
     fn mnv_slide(&mut self, x: f64, y: f64) {
         let rect = self.gpu_canvas.get_bounding_client_rect();
         let (x, y) = (x - rect.left(), y - rect.top());
-        let Some((_, t)) = self
-            .orbit_pick
-            .iter()
-            .map(|(px, py, t)| ((px - x).powi(2) + (py - y).powi(2), *t))
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-        else {
+        let Some(n) = self.node else { return };
+        let period = self.scene.as_ref().and_then(|s| {
+            let v = s.vessel(n.vessel)?;
+            let patch = s.trajectories.get(&n.vessel).and_then(|patches| {
+                patches
+                    .iter()
+                    .find(|p| p.start_ut <= n.ut && n.ut <= p.end_ut)
+            });
+            let (body, elements) = patch
+                .map(|p| (p.body as usize, &p.orbit))
+                .unwrap_or((v.reference_body as usize, &v.orbit));
+            Some(scene::orbit_from(s.bodies[body].mu, elements).period)
+        });
+        let Some((_, t)) = maneuver::pick_time(&self.orbit_pick, x, y, Some(n.ut), period) else {
             return;
         };
+        if self.warp_to.is_some() {
+            self.stop_warp();
+        }
         let Some(node) = self.node.as_mut() else {
             return;
         };
@@ -14485,11 +14602,7 @@ impl App {
 
     /// A click on the map near the planning vessel's orbit puts a maneuver node there (CSS px).
     fn map_click(&mut self, x: f64, y: f64) -> bool {
-        let best = self
-            .orbit_pick
-            .iter()
-            .map(|(px, py, t)| ((px - x).powi(2) + (py - y).powi(2), *t))
-            .min_by(|a, b| a.0.total_cmp(&b.0));
+        let best = maneuver::pick_time(&self.orbit_pick, x, y, None, None);
         let Some((d2, t)) = best else { return false };
         if d2 > 14.0 * 14.0 {
             return false;
@@ -14529,6 +14642,9 @@ impl App {
 
     /// Delete the node being edited; the nearest other one becomes the one edited (the original's trash).
     fn delete_node(&mut self) {
+        if self.warp_to.is_some() {
+            self.stop_warp();
+        }
         let Some(node) = self.node else { return };
         self.nodes.retain(|n| n.vessel == node.vessel);
         if self.nodes.is_empty() {
@@ -14550,6 +14666,9 @@ impl App {
 
     /// Edit another planned node (a click on its marker): the one edited joins the others.
     fn select_node(&mut self, k: usize) {
+        if self.warp_to.is_some() {
+            self.stop_warp();
+        }
         if k >= self.nodes.len() {
             return;
         }
@@ -14586,6 +14705,10 @@ impl App {
     }
 
     fn clear_node(&mut self) {
+        if self.warp_to.is_some() {
+            self.stop_warp();
+        }
+        self.mnv_drag = None;
         self.nodes.clear();
         if let (Some(node), Some(ws)) = (self.node.take(), &self.ws) {
             send(
@@ -14604,21 +14727,24 @@ impl App {
         set_text(&self.doc, "node-reason", "");
     }
 
-    fn node_inputs_changed(&mut self) {
+    fn node_inputs_changed(&mut self, id: &str) {
         let Some(mut node) = self.node else {
             return;
         };
-        if let Some(pos) = input_value(&self.doc, "node-dt") {
-            node.ut = node.anchor_ut + hud::node_slider_to_dt(pos);
+        let Some(value) = input_value(&self.doc, id).filter(|v| v.is_finite()) else {
+            return;
+        };
+        if self.warp_to.is_some() {
+            self.stop_warp();
         }
-        if let Some(p) = input_value(&self.doc, "node-prograde") {
-            node.prograde_mps = p;
-        }
-        if let Some(n) = input_value(&self.doc, "node-normal") {
-            node.normal_mps = n;
-        }
-        if let Some(r) = input_value(&self.doc, "node-radial") {
-            node.radial_mps = r;
+        // Ranges sanitize values to their step and bounds. Reading unrelated ranges here
+        // used to quantize a map drag's exact time and fractional delta-v on the next edit.
+        match id {
+            "node-dt" => node.ut = node.anchor_ut + hud::node_slider_to_dt(value),
+            "node-prograde" => node.prograde_mps = value,
+            "node-normal" => node.normal_mps = value,
+            "node-radial" => node.radial_mps = value,
+            _ => return,
         }
         self.node = Some(node);
         self.send_node();
@@ -14774,6 +14900,24 @@ impl App {
         self.warp_el
             .set_attribute("data-ose-requested-warp", &self.requested_warp.to_string())
             .ok();
+        let auto = self.warp_to.is_some();
+        set_text(
+            &self.doc,
+            "node-warp",
+            if auto { "Stop warp" } else { "Warp to" },
+        );
+        if let Some(button) = self.doc.get_element_by_id("node-warp") {
+            button
+                .set_attribute(
+                    "title",
+                    if auto {
+                        "Cancel automatic warp and return to real time"
+                    } else {
+                        "Coast with engines off to just before the maneuver"
+                    },
+                )
+                .ok();
+        }
     }
 
     /// Feed the smoothness counters this frame's motion of the flown vessel, and publish the last second's
@@ -15643,25 +15787,11 @@ impl App {
                     let mut pts = Vec::new();
                     if !gpu.has_line(&key) {
                         let orbit = scene::orbit_from(body.mu, &patch.orbit);
-                        let end_ut = if patch.end_ut.is_finite() {
-                            patch.end_ut
-                        } else if orbit.period.is_finite() {
-                            patch.start_ut + orbit.period
-                        } else {
-                            patch.start_ut + 6.0 * 3600.0
-                        };
                         let soi = body.soi_radius_m.unwrap_or(f64::INFINITY);
-                        let n = 240;
-                        pts.reserve(n + 1);
-                        for s in 0..=n {
-                            let t =
-                                patch.start_ut + (end_ut - patch.start_ut) * s as f64 / n as f64;
-                            let rel = orbit.position_at(t);
-                            if rel.length() > soi * 1.02 {
-                                break;
-                            }
-                            pts.push(to_km(rel));
-                        }
+                        pts = scene::trajectory_points(&orbit, patch.start_ut, patch.end_ut, soi)
+                            .into_iter()
+                            .map(to_km)
+                            .collect();
                     }
                     let colour = match patch.end {
                         PatchEnd::Final => [0.47, 0.86, 0.63, 0.95],
@@ -15838,12 +15968,15 @@ impl App {
                     (end - start).min(6.0 * 3600.0)
                 };
                 if span.is_finite() && span > 0.0 {
-                    for k in 1..=360 {
+                    for k in 0..=360 {
                         let t = start + span * k as f64 / 360.0;
                         if let Some((x, y)) = project(to_km(positions[bi] + orbit.position_at(t))) {
                             self.orbit_pick.push((x, y, t));
                         }
                     }
+                    // A truncated closed patch can end many revolutions before the next
+                    // patch starts. Never interpolate a straight line through that gap.
+                    self.orbit_pick.push((f64::NAN, f64::NAN, f64::NAN));
                 }
             }
         }
@@ -16272,16 +16405,7 @@ impl App {
                     };
                     let orbit = scene::orbit_from(body.mu, &patch.orbit);
                     let origin = positions[patch.body as usize];
-                    let end_ut = if patch.end_ut.is_finite() {
-                        patch.end_ut
-                    } else if orbit.period.is_finite() {
-                        patch.start_ut + orbit.period
-                    } else {
-                        // Hyperbolic with no end: draw out to the body's SOI or a few hours.
-                        patch.start_ut + 6.0 * 3600.0
-                    };
                     let soi = body.soi_radius_m.unwrap_or(f64::INFINITY);
-                    let n = 240;
                     ctx.set_line_width(if mine { 1.5 } else { 1.0 });
                     let colour = match patch.end {
                         PatchEnd::Final => "rgba(120,220,160,0.9)",
@@ -16295,12 +16419,7 @@ impl App {
                     ctx.set_stroke_style_str(colour);
                     ctx.begin_path();
                     let mut started = false;
-                    for k in 0..=n {
-                        let t = patch.start_ut + (end_ut - patch.start_ut) * k as f64 / n as f64;
-                        let rel = orbit.position_at(t);
-                        if rel.length() > soi * 1.02 {
-                            break;
-                        }
+                    for rel in scene::trajectory_points(&orbit, patch.start_ut, patch.end_ut, soi) {
                         let (x, y) = cam.to_screen(origin + rel, centre);
                         if started {
                             ctx.line_to(x, y);
@@ -16432,7 +16551,8 @@ fn install_focus_clicks(app: &Shared, target: &Element) -> Result<(), JsValue> {
         };
         let mut app = a.borrow_mut();
         let ut = app.apsis_ut[k];
-        app.start_warp_to(ut, if k == 0 { "apoapsis" } else { "periapsis" });
+        let vessel = app.flying.or(app.follow);
+        app.start_warp_to_for_vessel(ut, if k == 0 { "apoapsis" } else { "periapsis" }, vessel);
     });
     target.add_event_listener_with_callback("click", on_apsis.as_ref().unchecked_ref())?;
     on_apsis.forget();

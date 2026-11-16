@@ -1424,6 +1424,7 @@
     <span class="warp" data-cap="TIME.WARP" data-loc-cap="HUD/timewarp">
       <button id="warp-down" data-ose="warp-down" title="Slow down">&minus;</button>
       <button id="warp" data-ose="warp" title="Time warp; click to speed up">&times;--</button>
+      <button id="warp-stop" data-ose="warp-stop" title="Stop time warp (/)">Stop warp</button>
       <span id="warp-pips" class="warp-pips" data-ose="warp-pips" title="Time warp rates: click one (. and , step, / stops)"></span>
     </span>
     <span id="focus"></span>
@@ -1827,12 +1828,13 @@
   </div>
   <div id="fh-map-info" data-ose="map-info"><button id="fh-map-info-toggle" data-ose="map-info-toggle" title="Information panel: the object in focus">i</button><div id="fh-map-info-body"></div></div>
   <div id="node-panel" data-ose="node-panel">
-    <label>time <input id="node-dt" type="range" min="0" max="10000" step="1" value="771" title="Time to the node: logarithmic, from now out to ten Kerbin years" /><span id="node-dt-text">T-2:00</span></label>
-    <label>prograde <input id="node-prograde" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-prograde-text">0 m/s</span></label>
-    <label>normal <input id="node-normal" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-normal-text">0 m/s</span></label>
-    <label>radial <input id="node-radial" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-radial-text">0 m/s</span></label>
+    <label>time <input id="node-dt" type="range" min="0" max="10000" step="any" value="771" title="Time to the node: logarithmic, from now out to ten Kerbin years" /><span id="node-dt-text">T-2:00</span></label>
+    <label>prograde <input id="node-prograde" type="range" min="-1500" max="1500" step="0.1" value="0" /><span id="node-prograde-text">0 m/s</span></label>
+    <label>normal <input id="node-normal" type="range" min="-1500" max="1500" step="0.1" value="0" /><span id="node-normal-text">0 m/s</span></label>
+    <label>radial <input id="node-radial" type="range" min="-1500" max="1500" step="0.1" value="0" /><span id="node-radial-text">0 m/s</span></label>
+    <div class="slider-help">Arrow keys: 1 · Shift: 10 · Ctrl: 0.1 (seconds or m/s)</div>
     <div class="reason" id="node-reason"></div>
-    <button id="node-warp" data-ose="node-warp" title="Warp to just before the burn: the warp steps down as it gets close (any warp key cancels)" data-loc="Map/WarpTo">Warp to</button>
+    <button id="node-warp" data-ose="node-warp" title="Coast with engines off to just before the maneuver">Warp to</button>
     <button id="clear-node" data-ose="clear-node" title="Delete this maneuver node (the others stay)">Delete node</button>
     <button id="add-next-node" data-ose="add-next-node" title="Plan another node after the last one; or click the orbit after a node">Add next</button>
   </div>
