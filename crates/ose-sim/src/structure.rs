@@ -6263,6 +6263,8 @@ mod tests {
         s.lift_defs.fill(None);
         s.lift_defs[wing] = Some(lift);
         s.faces.fill(None);
+        // This synthetic fixture has no body cubes, including after an attachment refresh.
+        s.base_faces.fill(None);
         s.ctrl.fill((0.0, 0.0));
         s.ctrl[wing] = (0.2, 1.0);
         s.part_rot[wing] = [0.0, 0.0, 0.0, 1.0];
