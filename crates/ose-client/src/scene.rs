@@ -52,6 +52,33 @@ const MAX_GROUND_CARRY_S: f64 = 0.5;
 /// Faster than this over the ground is no walk or drive (a bad state): it is not carried.
 const MAX_GROUND_SPEED_MPS: f64 = 60.0;
 
+/// Plot a conic once, even when the next maneuver is many revolutions away. Sampling
+/// hundreds of revolutions into a fixed 240-segment strip aliases into crossing chords.
+/// An encounter/impact inside the first revolution still ends at its actual event time.
+pub fn trajectory_points(orbit: &Orbit, start_ut: f64, end_ut: f64, soi: f64) -> Vec<DVec3> {
+    let closed = orbit.period.is_finite() && orbit.period > 0.0;
+    let end = if closed {
+        end_ut.min(start_ut + orbit.period)
+    } else if end_ut.is_finite() {
+        end_ut
+    } else {
+        start_ut + 6.0 * 3600.0
+    };
+    if !start_ut.is_finite() || !end.is_finite() || end <= start_ut {
+        return Vec::new();
+    }
+    let mut points = Vec::with_capacity(241);
+    for k in 0..=240 {
+        let t = start_ut + (end - start_ut) * k as f64 / 240.0;
+        let rel = orbit.position_at(t);
+        if !rel.length_squared().is_finite() || rel.length() > soi * 1.02 {
+            break;
+        }
+        points.push(rel);
+    }
+    points
+}
+
 /// `ose-math` orbit from wire elements around a body with gravitational parameter `mu`.
 pub fn orbit_from(mu: f64, o: &OrbitElements) -> Orbit {
     Orbit::from_elements(
@@ -538,6 +565,52 @@ pub fn craft_covers(doc: Option<&ose_data::craft::Craft>, flown: &ose_data::craf
 mod tests {
     use super::*;
     use ose_net::OrbitElements;
+
+    #[test]
+    fn distant_maneuver_draws_one_smooth_orbit_as_time_advances() {
+        let radius = 700_000.0;
+        let orbit = Orbit::from_state_vectors(
+            3.5316e12,
+            DVec3::new(radius, 0.0, 0.0),
+            DVec3::new(0.0, (3.5316e12 / radius).sqrt(), 0.0),
+            0.0,
+        );
+        // Same long countdown as the reported screenshots, across prediction refreshes.
+        let event = 21.0 * 21600.0 + 5.0 * 3600.0 + 475.0;
+        for start in [0.0, 272.0, 10000.0, 100000.0] {
+            let points = trajectory_points(&orbit, start, event, f64::INFINITY);
+            let lengths: Vec<_> = points.windows(2).map(|p| (p[1] - p[0]).length()).collect();
+            assert_eq!(points.len(), 241);
+            assert!(
+                lengths.iter().all(|&d| d < radius * 0.03),
+                "no chords across the orbit"
+            );
+            let circumference = std::f64::consts::TAU * radius;
+            assert!((lengths.iter().sum::<f64>() / circumference - 1.0).abs() < 0.001);
+            assert!((points[0] - points[240]).length() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn plotting_preserves_event_boundaries_and_open_trajectory_endpoints() {
+        let orbit = Orbit::from_state_vectors(
+            3.5316e12,
+            DVec3::new(700000.0, 0.0, 0.0),
+            DVec3::new(0.0, 2200.0, 0.0),
+            0.0,
+        );
+        let points = trajectory_points(&orbit, 0.0, 100.0, f64::INFINITY);
+        assert!((points.last().unwrap().to_owned() - orbit.position_at(100.0)).length() < 1e-9);
+        let escape = Orbit::from_state_vectors(
+            3.5316e12,
+            DVec3::new(700000.0, 0.0, 0.0),
+            DVec3::new(0.0, 4000.0, 0.0),
+            0.0,
+        );
+        let points = trajectory_points(&escape, 0.0, 30000.0, f64::INFINITY);
+        assert!((points.last().unwrap().to_owned() - escape.position_at(30000.0)).length() < 1e-9);
+        assert!(trajectory_points(&orbit, 100.0, 0.0, f64::INFINITY).is_empty());
+    }
 
     fn kerbol_kerbin_mun() -> Vec<BodyInfo> {
         let body = |id: &str, parent: Option<u16>, radius_m, mu, orbit| BodyInfo {
