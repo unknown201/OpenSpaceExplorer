@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { deleteTestCampaign } from '../helpers/campaign';
 
 test("science buttons glow for available experiments and stop after diminishing returns exhaust", async ({ page, baseURL }, testInfo) => {
   const errors: string[] = [];
@@ -38,6 +39,7 @@ test("science buttons glow for available experiments and stop after diminishing 
     await expect(science).toBeDisabled();
     await expect(science).not.toHaveClass(/science-ready/);
     await expect(textButton).not.toHaveClass(/science-ready/);
+    await expect(page.locator('#fh-comm')).toHaveClass(/\bon\b/, { timeout: 10_000 });
     await page.locator("#fh-transmit").click({ force: true });
     const note = page.locator("#fh-note");
     await expect(note).toContainText(/transmitted [1-9]\d* .* for [1-9]\d* science/, { timeout: 30_000 });
@@ -57,12 +59,5 @@ test("science buttons glow for available experiments and stop after diminishing 
   await expect(textButton).toBeDisabled();
   expect(await science.evaluate(el => getComputedStyle(el).boxShadow)).toBe("none");
   expect(errors).toEqual([]);
-  await page.keyboard.press('Escape');
-  await page.locator('[data-ose="to-recover"]').click();
-  await page.locator('#fr-close').click();
-  await page.locator('[data-ose="ksc-sessions"]').click();
-  const session = page.locator('[data-ose="session"]').filter({ hasText: 'Science availability regression' });
-  page.once('dialog', dialog => dialog.accept());
-  await session.locator('[data-ose="session-delete"]').click();
-  await expect(session).toHaveCount(0);
+  await deleteTestCampaign(page, 'Science availability regression');
 });

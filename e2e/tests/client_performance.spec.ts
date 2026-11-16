@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { deleteTestCampaign } from '../helpers/campaign';
 
 test('graphics frame cap persists and idle views batch uploads without refraction copies', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'The WebGPU probe uses Chromium GPUQueue instrumentation.');
@@ -114,12 +115,5 @@ test('held flight controls still flush on press and release with the 30 FPS rend
   }
   await expect.poll(() => rotations.length).toBe(before + 2);
   expect(errors).toEqual([]);
-  await page.keyboard.press('Escape');
-  await page.locator('[data-ose="to-recover"]').click();
-  await page.locator('#fr-close').click();
-  await page.locator('[data-ose="ksc-sessions"]').click();
-  const session = page.locator('[data-ose="session"]').filter({ hasText: 'Render cap controls' });
-  page.once('dialog', dialog => dialog.accept());
-  await session.locator('[data-ose="session-delete"]').click();
-  await expect(session).toHaveCount(0);
+  await deleteTestCampaign(page, 'Render cap controls');
 });

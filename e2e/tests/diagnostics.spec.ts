@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { deleteTestCampaign } from '../helpers/campaign';
 
 test('manual and automatic stall reports reach the authenticated server', async ({ page }) => {
   await page.goto('/');
@@ -42,11 +43,5 @@ test('manual and automatic stall reports reach the authenticated server', async 
   expect(stall.status()).toBe(200);
   expect(stall.request().postDataJSON().session).toBe(report.session);
   expect(stall.request().postDataJSON().sequence).toBeGreaterThan(report.sequence);
-  await page.locator('#settings-close').click();
-  await page.keyboard.press('Escape');
-  await page.locator('[data-ose="ksc-sessions"]').click();
-  const session = page.locator('[data-ose="session"]').filter({ hasText: 'Diagnostics check' });
-  page.once('dialog', dialog => dialog.accept());
-  await session.locator('[data-ose="session-delete"]').click();
-  await expect(session).toHaveCount(0);
+  await deleteTestCampaign(page, 'Diagnostics check');
 });
