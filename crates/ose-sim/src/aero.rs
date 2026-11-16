@@ -196,6 +196,10 @@ impl Faces {
     /// frame), never below zero.
     pub fn cover(&mut self, node_dir: DVec3, area: f64) {
         let face = face_of(node_dir);
+        let (x, y, z) = NORMALS[face];
+        if (node_dir - DVec3::new(x, y, z)).length_squared() >= 1e-10 {
+            return;
+        }
         self.area[face] = (self.area[face] - area).max(0.0);
     }
 
@@ -382,6 +386,23 @@ mod tests {
         let d = DVec3::new(0.0, 1.0, 0.0);
         assert!(t.area_drag(&c, d, 0.3) < 0.1 * free.area_drag(&c, d, 0.3));
         assert!(free.area_drag(&c, d, 1.1) > 2.0 * free.area_drag(&c, d, 0.5));
+    }
+
+    #[test]
+    fn stack_coverage_preserves_full_heating_area_and_rejects_non_axial_nodes() {
+        let curves = DragCurves::default();
+        let mut faces = tank();
+        let travel = DVec3::new(0.0, 1.0, 0.0);
+        let full = faces.airstream(&curves, travel, 7.0).0;
+        let drag = faces.area_drag(&curves, travel, 7.0);
+        faces.cover(travel, 0.5);
+        assert!((faces.area[2] - (1.21755731 - 0.5)).abs() < 1e-12);
+        assert_eq!(faces.airstream(&curves, travel, 7.0).0, full);
+        assert!(faces.area_drag(&curves, travel, 7.0) < drag);
+        let exposed = faces.area;
+        faces.cover(DVec3::new(1.0, 1.0, 0.0).normalized(), 100.0);
+        faces.cover(DVec3::ZERO, 100.0);
+        assert_eq!(faces.area, exposed, "only axial nodes cover cube faces");
     }
 
     #[test]
