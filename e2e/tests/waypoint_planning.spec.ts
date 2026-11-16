@@ -63,8 +63,16 @@ test('planning modifier arrows preserve the burn and warp can be stopped', async
   await page.locator('#fh-ksc').click();
   await page.locator('[data-ose="ksc-sessions"]').click();
   const campaign = page.locator('[data-ose="session"]').filter({ hasText: campaignName });
-  page.once('dialog', dialog => dialog.accept());
-  await campaign.locator('[data-ose="session-delete"]').click();
-  await expect(campaign).toHaveCount(0);
+  await expect(campaign).toHaveCount(1);
+  page.on('dialog', dialog => dialog.accept());
+  // A campaign update queued before LeaveSession can reopen KSC after the first exit.
+  // Retry only the cleanup handshake; all waypoint assertions above have already passed.
+  await expect(async () => {
+    if (await campaign.count() === 0) return;
+    const exit = page.locator('[data-ose="ksc-sessions"]');
+    if (await exit.isVisible()) await exit.click();
+    await campaign.locator('[data-ose="session-delete"]').click({ timeout: 1500 });
+    await expect(campaign).toHaveCount(0, { timeout: 3000 });
+  }).toPass({ timeout: 20_000 });
   expect(errors).toEqual([]);
 });
