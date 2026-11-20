@@ -8,7 +8,7 @@
 use ose_data::craft::Craft;
 use ose_pilot::{
     ascent::AscentParams,
-    mission::{Catalog, Mission, MissionParams},
+    mission::{Catalog, Leg, Mission, MissionParams},
     Status,
 };
 use ose_routes::recording::{Event, Phase, Recording, State};
@@ -242,6 +242,25 @@ fn records_a_one_way_fuel_run_to_a_depot_and_runs_it_as_a_route() {
     w.u.despawn_vessel(away);
 
     let mut pilots = Pilots::default();
+    // the server restarts while the run is in orbit: the pilot is made again from the saved route
+    let in_orbit = |p: &Pilots| {
+        matches!(
+            p.leg(route),
+            Some(Leg::Plan | Leg::Transfer | Leg::SoiTransfer | Leg::Brake)
+        )
+    };
+    drive_until(&mut w, &mut book, &mut pilots, &catalog, &|b, p| {
+        !b.routes[0].runs.is_empty() || in_orbit(p)
+    });
+    assert!(book.routes[0].runs.is_empty(), "{:?}", book.routes[0].runs);
+    restart(&mut w, &mut book, &mut pilots);
+    book.fly(&mut w.u, &mut pilots, &catalog);
+    assert!(book.routes[0].active.is_some(), "{:?}", book.routes[0].runs);
+    assert!(
+        in_orbit(&pilots) || pilots.leg(route) == Some(Leg::Approach),
+        "{:?}",
+        pilots.leg(route)
+    );
     drive(&mut w, &mut book, &mut pilots, &catalog, &|b| {
         !b.routes[0].runs.is_empty()
     });
@@ -300,6 +319,13 @@ fn records_a_one_way_fuel_run_to_a_depot_and_runs_it_as_a_route() {
     w.u.transfer_resource(dv, "MonoPropellant", &[], &[])
         .unwrap();
     let after = |b: &Routes| b.routes[0].runs[0].after.clone().unwrap_or_default();
+    // and again while the first run flies home
+    drive(&mut w, &mut book, &mut pilots, &catalog, &|b| {
+        !["docked", "undocking to fly home"].contains(&after(b).as_str())
+    });
+    assert_eq!(after(&book), "flying home");
+    assert_eq!(book.routes[0].runs[0].leaving, Some(true));
+    restart(&mut w, &mut book, &mut pilots);
     drive(&mut w, &mut book, &mut pilots, &catalog, &|b| {
         b.routes[0].runs.len() == 2
             && !["docked", "undocking to fly home", "flying home"].contains(&after(b).as_str())
@@ -315,6 +341,15 @@ fn records_a_one_way_fuel_run_to_a_depot_and_runs_it_as_a_route() {
     assert_eq!(book.routes[0].stayed, Some(2));
 }
 
+/// What a server restart does to the routes: the book comes back from the save, every vessel is found
+/// again by its parts or name, and the pilots start empty.
+fn restart(w: &mut World, book: &mut Routes, pilots: &mut Pilots) {
+    *book = serde_json::from_str(&serde_json::to_string(&*book).unwrap()).unwrap();
+    book.universe_replaced();
+    *pilots = Pilots::default();
+    book.tick(&mut w.u);
+}
+
 /// Run the routes, launching what they ask for, until `done`.
 fn drive(
     w: &mut World,
@@ -323,13 +358,24 @@ fn drive(
     catalog: &Catalog,
     done: &dyn Fn(&Routes) -> bool,
 ) {
+    drive_until(w, book, pilots, catalog, &|b, _| done(b));
+}
+
+fn drive_until(
+    w: &mut World,
+    book: &mut Routes,
+    pilots: &mut Pilots,
+    catalog: &Catalog,
+    done: &dyn Fn(&Routes, &Pilots) -> bool,
+) {
     let start = w.u.ut();
     let mut ticks = 0u64;
-    while !done(book) {
+    while !done(book, pilots) {
         book.tick(&mut w.u);
         if ticks.is_multiple_of(50) {
             for req in book.schedule(&mut w.u, pilots) {
                 let e = on_pad(w, &req.craft);
+                w.u.rename_vessel(e, &req.vessel_name);
                 book.launched(&w.u, pilots, req.route, e, &req.vessel_name)
                     .unwrap();
             }

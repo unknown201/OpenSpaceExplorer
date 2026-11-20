@@ -255,9 +255,15 @@ Colonies, cargo inventory, a funds economy, crew rotation, landed depots (decisi
    and **Let go** undock straight after pumping. A run that comes to rest at home is recovered (removed).
    The run log says what each run did after delivering. The test runs the route twice: Stay holds the
    second run back, then Rotate sends the first run home once the second is in orbit, and the second
-   delivers. Still to do: warp rules, restart resume (a run interrupted by a restart or reload ends as
-   Missed and its vessel stays), take control, the "Send home / Let go / Keep" buttons for stayed runs,
-   and depot-to-depot shuttles.*
+   delivers.*
+   *Step 2c (no protocol change): runs survive a restart or a reload (`Routes::resume`). The pilots are
+   still kept in memory only, and are made again from the saved routes on the first step: a run in flight
+   is found by its vessel's name (an undocked run is renamed back to it) and carries on, ascending again
+   if it was still climbing, planning its rendezvous from where it is if in orbit, or pumping what is
+   left of its cargo if docked (what each run has pumped so far is saved). A run leaving the depot carries
+   on undocking, or flying home. A run whose vessel is gone ends as Missed. The test restarts once while
+   the first run is in orbit and once while it flies home. Still to do: warp rules, take control, the
+   "Send home / Let go / Keep" buttons for stayed runs, and depot-to-depot shuttles.*
 3. **Client**: launch checkbox, routes panel, depot toggle, map tags, toasts.
 4. **Browser e2e** against a local server, never prod: record a run with the bot, create the route,
    and watch two runs. Plus a collision test: two routes into one port at the same window.

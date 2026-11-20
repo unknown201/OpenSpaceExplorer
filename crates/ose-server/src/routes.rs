@@ -1,8 +1,9 @@
 //! Delivery routes on the server (`docs/delivery-routes-design.md`, steps 1 and 2): depot flags, proving
 //! flights and routes. The state is `ose_routes::Routes`, kept in the campaign (`save::Campaign::routes`),
 //! so the save, the quicksave and revert carry it. The recorder follows each flight every simulation step,
-//! the route pilots (`Shared::route_pilots`, not saved) fly the runs, and once a second the scheduler may
-//! ask for a launch, which goes through the same pad launch as a player's.
+//! the route pilots (`Shared::route_pilots`, not saved, made again from the routes after a restart or a
+//! reload) fly the runs, and once a second the scheduler may ask for a launch, which goes through the same
+//! pad launch as a player's.
 
 use bevy_ecs::entity::Entity;
 use ose_net::RouteEnd;
