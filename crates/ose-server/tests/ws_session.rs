@@ -264,6 +264,27 @@ fn response_window() -> impl Iterator<Item = ()> {
 }
 
 #[tokio::test]
+async fn a_view_hint_before_hello_does_not_end_the_handshake() {
+    // Clients sent `Viewing` as soon as the socket opened, before signing in; the server must keep the
+    // connection for the Hello that follows.
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    for msg in [
+        ClientMessage::Viewing { vessel: None },
+        ClientMessage::Hello {
+            protocol: PROTOCOL_VERSION,
+            token: None,
+            display_name: "early viewer".into(),
+        },
+    ] {
+        ws.send(Message::Binary(ose_net::encode(&msg).unwrap().into()))
+            .await
+            .unwrap();
+    }
+    assert!(matches!(recv(&mut ws).await, ServerMessage::Welcome { .. }));
+}
+
+#[tokio::test]
 async fn hello_catalog_and_snapshots() {
     let (_server, addr) = spawn_server().await;
     let mut ws = connect_ws(&addr).await;
