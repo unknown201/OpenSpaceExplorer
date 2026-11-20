@@ -1,5 +1,5 @@
-//! KSP2's engine shrouds: the fairing round an engine's bell that shows once a part hangs from the engine's
-//! bottom node (`Module_Fairing` on an engine, `Data_Fairing.IsShroud`).
+//! KSP2's part shrouds: the fairing round an engine's bell, or round a heat shield's back, that shows once a
+//! part hangs from its bottom node (`Module_Fairing` with `Data_Fairing.IsShroud`).
 //!
 //! The original builds the shroud procedurally rather than drawing a mesh from the engine's prefab
 //! (`Module_Fairing.CheckForNeededShroud` -> `GenerateConnectingCrossSection`): two cross sections down the
@@ -188,11 +188,32 @@ mod tests {
     }
 
     #[test]
+    fn heat_shield_shrouds_down_to_a_decoupler_below() {
+        // heatshield_1v: Data_Fairing IsShroud, start 0.052, 0.1597 down to its bottom node at -0.1077, and
+        // MinAutoFairingTargetRadius 2 keeps a smaller part below from pinching it in.
+        let c = craft(vec![
+            part("pod_1v_conical_crew", None, "", ""),
+            part("heatshield_1v", Some(0), "top", "bottom"),
+            part("decoupler_1v_inline", Some(1), "top", "bottom"),
+        ]);
+        let (d, r) = shroud_for(&c, 1).expect("a decoupler hangs from the shield");
+        let [lo, hi] = d.rings(r);
+        assert!((hi.0 - 0.052).abs() < 1e-6 && (lo.0 + 0.1077).abs() < 1e-4);
+        assert_eq!((lo.1, hi.1), (0.625, 0.625));
+        assert_eq!(d.target_radius(Some(0)), 0.625);
+        let bare = craft(vec![
+            part("pod_1v_conical_crew", None, "", ""),
+            part("heatshield_1v", Some(0), "top", "bottom"),
+        ]);
+        assert!(shroud_for(&bare, 1).is_none());
+    }
+
+    #[test]
     fn every_shroud_runs_down_to_its_node() {
         // KSP2's shrouds end at the engine's bottom node (within a few cm), never past it.
         let catalog: Vec<serde_json::Value> =
             serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
-        assert_eq!(file().shrouds.len(), 19);
+        assert_eq!(file().shrouds.len(), 24);
         for (id, d) in &file().shrouds {
             let p = catalog.iter().find(|p| p["id"] == id.as_str()).unwrap();
             let node = p["attach_nodes"]

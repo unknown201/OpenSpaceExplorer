@@ -257,19 +257,19 @@ fn wheel_spinner(part_id: &str) -> Option<(&'static str, f64)> {
     })
 }
 
-/// Whether part `i` is an engine whose prefab shroud mesh (mesh names containing "fairing") stays hidden:
-/// always for the engines the original builds a procedural shroud for (`ose_data::engine_shroud`, drawn by
-/// `fairing_mesh::shroud_model_for` once a part hangs below), else when nothing hangs from its bottom node.
+/// Whether part `i`'s prefab shroud mesh (mesh names containing "fairing") stays hidden: always for the
+/// engines and heat shields the original builds a procedural shroud for (`ose_data::engine_shroud`, drawn by
+/// `fairing_mesh::shroud_model_for` once a part hangs below), else for an engine with nothing on its bottom node.
 pub(crate) fn hides_prefab_shroud(craft: &Craft, i: usize) -> bool {
     craft.parts.get(i).is_some_and(|p| {
-        p.part_id.starts_with("engine_")
-            && (ose_data::engine_shroud::def(&p.part_id).is_some()
-                || !craft.parts.iter().any(|q| {
+        ose_data::engine_shroud::def(&p.part_id).is_some()
+            || p.part_id.starts_with("engine_")
+                && !craft.parts.iter().any(|q| {
                     q.parent == Some(i)
                         && q.parent_node
                             .as_deref()
                             .is_some_and(|n| n.contains("bottom"))
-                }))
+                })
     })
 }
 
@@ -2314,6 +2314,10 @@ impl FlightView {
                         let wpos = pos + vessel_rot * (*flp + drift + origin);
                         let mut it =
                             DrawItem::lit(name, wpos - cam, vessel_rot * *flq * tumble, 1.0, sun);
+                        crate::fairing_mesh::tint_base(
+                            &mut it.color,
+                            part_paint(craft, *fi, inp.paint),
+                        );
                         it.ambient = part_ambient;
                         it.fill_dir = up;
                         it.fill = 0.25;

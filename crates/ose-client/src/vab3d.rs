@@ -647,6 +647,10 @@ impl VabView {
                 if let Some(names) = crate::fairing_mesh::models_for(gpu, &craft.parts[*fi]) {
                     for name in names {
                         let mut it = DrawItem::lit(name, *fpos - cam_pos, *frot, 1.0, light);
+                        crate::fairing_mesh::tint_base(
+                            &mut it.color,
+                            crate::flight3d::part_paint(craft, *fi, self.paint),
+                        );
                         it.ambient = 0.45;
                         it.fill_dir = -forward;
                         it.fill = 0.35;

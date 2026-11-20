@@ -458,12 +458,18 @@ pub fn shroud_model_for(
 #[cfg(target_arch = "wasm32")]
 pub fn shroud_item(engine: &crate::render::DrawItem, model: String) -> crate::render::DrawItem {
     let mut it = engine.companion(model);
-    if let Some((base, _)) = engine.paint {
-        for (c, b) in it.color.iter_mut().zip(base) {
+    tint_base(&mut it.color, engine.paint);
+    it
+}
+
+/// Tint a fairing wall by its part's base paint. `FairingsProceduralMat`'s paint mask is full in every
+/// channel and `Module_Color` paints the wall in the part's base colour, so the whole wall takes it.
+pub fn tint_base(color: &mut [f32; 4], paint: Option<([f32; 3], [f32; 3])>) {
+    if let Some((base, _)) = paint {
+        for (c, b) in color.iter_mut().zip(base) {
             *c *= b;
         }
     }
-    it
 }
 
 #[cfg(test)]
@@ -587,5 +593,14 @@ mod tests {
 
     fn def_base(d: &FairingDef) -> f32 {
         d.base_height as f32
+    }
+
+    #[test]
+    fn fairing_walls_take_the_base_paint() {
+        let mut c = [1.0, 0.5, 1.0, 1.0];
+        tint_base(&mut c, Some(([0.5, 0.5, 0.25], [0.0, 0.0, 0.0])));
+        assert_eq!(c, [0.5, 0.25, 0.25, 1.0]);
+        tint_base(&mut c, None);
+        assert_eq!(c, [0.5, 0.25, 0.25, 1.0]);
     }
 }
