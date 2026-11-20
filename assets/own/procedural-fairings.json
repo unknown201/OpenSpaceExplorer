@@ -12,7 +12,14 @@
   "radius_snap": 0.03125,
   "ejection_force": 100.0,
   "pieces": 4,
-  "base_height": 0.0820000022649765
+  "base_height": 0.0820000022649765,
+  "start_height": -0.02,
+  "nose_tip": 0.5,
+  "base_cube": [
+   -3.7252903e-09,
+   0.164760053,
+   0.31254005
+  ]
  },
  "fairing_1v_procedural": {
   "mass_t": 0.075,
@@ -27,7 +34,14 @@
   "radius_snap": 0.0625,
   "ejection_force": 100.0,
   "pieces": 4,
-  "base_height": 0.08100000023841858
+  "base_height": 0.08100000023841858,
+  "start_height": -0.0358,
+  "nose_tip": 0.5,
+  "base_cube": [
+   0.000699982047,
+   0.178880125,
+   0.625210105
+  ]
  },
  "fairing_2v_procedural": {
   "mass_t": 0.6,
@@ -42,7 +56,14 @@
   "radius_snap": 0.125,
   "ejection_force": 100.0,
   "pieces": 4,
-  "base_height": 0.16599999368190765
+  "base_height": 0.16599999368190765,
+  "start_height": -0.069,
+  "nose_tip": 0.5,
+  "base_cube": [
+   -7.450581e-09,
+   0.329360247,
+   1.255440115
+  ]
  },
  "fairing_3v_procedural": {
   "mass_t": 1.125,
@@ -57,7 +78,14 @@
   "radius_snap": 0.125,
   "ejection_force": 100.0,
   "pieces": 4,
-  "base_height": 0.15800000727176666
+  "base_height": 0.15800000727176666,
+  "start_height": -0.068,
+  "nose_tip": 0.5,
+  "base_cube": [
+   -0.00592001528,
+   0.3192004,
+   1.877820255
+  ]
  },
  "fairing_4v_procedural": {
   "mass_t": 2.4,
@@ -72,6 +100,13 @@
   "radius_snap": 0.25,
   "ejection_force": 100.0,
   "pieces": 4,
-  "base_height": 0.18000000715255737
+  "base_height": 0.18000000715255737,
+  "start_height": -0.06400001,
+  "nose_tip": 0.5,
+  "base_cube": [
+   0.005964875,
+   0.366610378,
+   2.50281024
+  ]
  }
 }

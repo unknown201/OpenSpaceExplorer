@@ -657,7 +657,10 @@ pub fn render_drag_cube(name: &str, points: &[[f64; 3]], tris: &[[u32; 3]]) -> c
                     let w0 = ((b.0 - x) * (c.1 - y) - (b.1 - y) * (c.0 - x)) / area2;
                     let w1 = ((c.0 - x) * (a.1 - y) - (c.1 - y) * (a.0 - x)) / area2;
                     let w2 = 1.0 - w0 - w1;
-                    if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                    // a pixel centre on the edge two triangles share belongs to both: rounding must not drop it
+                    // from each (a fan's diagonal edges let the far side of a closed shape show through)
+                    const EDGE: f64 = -1e-9;
+                    if w0 < EDGE || w1 < EDGE || w2 < EDGE {
                         continue;
                     }
                     let d = w0 * a.2 + w1 * b.2 + w2 * c.2;

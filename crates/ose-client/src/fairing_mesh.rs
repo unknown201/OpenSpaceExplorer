@@ -429,6 +429,9 @@ pub fn shroud_shape(
         ejection_force: 0.0,
         pieces: 0,
         base_height: lo.0,
+        start_height: 0.0,
+        nose_tip: 0.5,
+        base_cube: None,
     };
     (shape, def)
 }
