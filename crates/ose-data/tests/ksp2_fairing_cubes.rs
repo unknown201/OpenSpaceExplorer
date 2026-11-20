@@ -99,12 +99,11 @@ fn fairing_walls_drag_cubes_match_ksp2s() {
             c.size.y,
             k("sy")
         );
-        for f in 0..6 {
+        for (f, area) in c.area.iter().enumerate() {
             let a = k(&format!("a{f}"));
             assert!(
-                (c.area[f] - a).abs() / a < 0.01,
-                "{name} face {f}: area {:.3} vs KSP2 {a:.3}",
-                c.area[f]
+                (area - a).abs() / a < 0.01,
+                "{name} face {f}: area {area:.3} vs KSP2 {a:.3}"
             );
         }
         for (got, key) in [
