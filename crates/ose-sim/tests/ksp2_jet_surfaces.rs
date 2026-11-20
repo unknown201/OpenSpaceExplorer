@@ -211,3 +211,129 @@ fn ksp2_jet_answers_a_half_pitch_input_as_in_ksp2() {
         }
     }
 }
+
+/// Put the jet where KSP2's was at `t` (height, speed, climb, heading east, control frame as KSP2's control
+/// transform) and hold that attitude with SAS. Returns the time.
+fn place_as_ksp2(
+    u: &mut Universe,
+    v: bevy_ecs::entity::Entity,
+    spin: f64,
+    radius: f64,
+    surfaces: &[Row],
+    trace: &[Row],
+    t: f64,
+) {
+    let at = |rows: &[Row], t: f64| -> Row {
+        rows.iter()
+            .min_by(|a, b| (num(a, "t") - t).abs().total_cmp(&(num(b, "t") - t).abs()))
+            .unwrap()
+            .clone()
+    };
+    let (s0, tr0) = (at(surfaces, t), at(trace, t));
+    let mut p = u.powered(v).unwrap().clone();
+    let upv = p.r.normalized();
+    let east = DVec3::new(0.0, 0.0, 1.0).cross(upv).normalized();
+    let (speed, vs) = (num(&tr0, "srf_speed"), num(&tr0, "vspeed"));
+    let srf = upv * vs + east * (speed * speed - vs * vs).max(0.0).sqrt();
+    let along = srf.normalized();
+    let side = along.cross(upv).normalized();
+    let up = side.cross(along);
+    let map = |c: DVec3| (along * c.x + up * c.y + side * c.z).normalized();
+    let nose = map(ksp2_axis(&s0, DVec3::new(0.0, 1.0, 0.0)));
+    let top = map(ksp2_axis(&s0, DVec3::new(0.0, 0.0, -1.0)));
+    let (cx, cy, cz) = flight::control_basis(&p);
+    let ctop = [cx, -cx, cz, -cz]
+        .into_iter()
+        .max_by(|a, b| a.dot(upv).total_cmp(&b.dot(upv)))
+        .unwrap();
+    let frame = |a: DVec3, b: DVec3| {
+        let b = (b - a * b.dot(a)).normalized();
+        (a, b, a.cross(b))
+    };
+    let (a1, a2, a3) = frame(cy, ctop);
+    let (b1, b2, b3) = frame(nose, top);
+    let turn = |v: DVec3| b1 * v.dot(a1) + b2 * v.dot(a2) + b3 * v.dot(a3);
+    let old_top = flight::vessel_top(&p);
+    p.facing = turn(p.facing).normalized();
+    p.r = upv * (radius + num(&tr0, "alt_m"));
+    p.v = DVec3::new(0.0, 0.0, spin).cross(p.r) + srf;
+    p.angvel = DVec3::ZERO;
+    p.roll_rate = 0.0;
+    p.landed = false;
+    flight::set_vessel_top(&mut p, turn(old_top));
+    u.set_powered(v, p);
+    let hold = flight::control_basis(u.powered(v).unwrap()).1;
+    assert!(u.set_controls(v, 1.0, flight::Attitude::Fixed(hold)));
+}
+
+/// The climb after rotation, SAS holding: from KSP2's state at the start of the climb (68 m/s, nose 10.8
+/// degrees up, full throttle) SAS trims the elevons as KSP2's does (within half a degree once settled) and the
+/// jet settles a little flatter (about 4 degrees against KSP2's 6, a difference from the first seconds' SAS
+/// transient; it held about 12 before the authority limit was resolved).
+#[test]
+fn ksp2_jet_climb_hold_trims_the_elevons_as_in_ksp2() {
+    let (c, _, _) = jet();
+    let (mut u, v, spin, radius) = kerbin_with(&c);
+    let trace = csv(include_str!("data/ksp2-jetfly-climb/trace.csv"));
+    let surfaces = csv(include_str!("data/ksp2-jetfly-climb/surfaces.csv"));
+    let t0 = trace
+        .iter()
+        .find(|r| r["phase"] == "climb")
+        .map(|r| num(r, "t"))
+        .unwrap();
+    // light the engine and let it spool up on the runway, brakes on, before the jump to KSP2's state
+    assert!(u.set_controls(v, 1.0, flight::Attitude::Free));
+    u.stage(v);
+    for _ in 0..(20 * TICKS_PER_SECOND) {
+        u.step();
+    }
+    place_as_ksp2(&mut u, v, spin, radius, &surfaces, &trace, t0);
+    let at = |rows: &[Row], t: f64| -> Row {
+        rows.iter()
+            .min_by(|a, b| (num(a, "t") - t).abs().total_cmp(&(num(b, "t") - t).abs()))
+            .unwrap()
+            .clone()
+    };
+    let dt = 1.0 / TICKS_PER_SECOND as f64;
+    for k in 1..=(19.0 / dt) as usize {
+        let t = t0 + k as f64 * dt;
+        u.step();
+        if k % 50 == 0 {
+            let p = u.powered(v).unwrap();
+            let kt = at(&trace, t);
+            let pitch = flight::control_basis(p)
+                .1
+                .dot(p.r.normalized())
+                .asin()
+                .to_degrees();
+            let srf = p.v - DVec3::new(0.0, 0.0, spin).cross(p.r);
+            let elevon = -u.structure(v).unwrap().surface_angle(3).to_degrees();
+            if t - t0 >= 3.0 {
+                let ksp2 = num(&at(&surfaces, t), "deflection_deg");
+                assert!(
+                    (elevon - ksp2).abs() < 0.5,
+                    "{:.1} s: elevon {elevon:.2} vs KSP2 {ksp2:.2}",
+                    t - t0
+                );
+                assert!(
+                    (pitch - num(&kt, "pitch_deg")).abs() < 3.0,
+                    "{:.1} s: pitch {pitch:.2} vs KSP2 {:.2}",
+                    t - t0,
+                    num(&kt, "pitch_deg")
+                );
+            }
+            println!(
+                "climb {:+5.1} s: pitch {:6.2} (KSP2 {:6.2}) speed {:6.1} ({:6.1}) vs {:6.1} ({:6.1}) elevon {:6.2} (KSP2 {:6.2})",
+                t - t0,
+                pitch,
+                num(&kt, "pitch_deg"),
+                srf.length(),
+                num(&kt, "srf_speed"),
+                srf.dot(p.r.normalized()),
+                num(&kt, "vspeed"),
+                elevon,
+                num(&at(&surfaces, t), "deflection_deg"),
+            );
+        }
+    }
+}
