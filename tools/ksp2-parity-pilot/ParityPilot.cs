@@ -276,6 +276,7 @@ namespace OpenSpaceExplorer.Validation
             if (scenario == "transfer") { yield return Transfer(vessel); yield break; }
             if (scenario == "reentry") { yield return Reentry(vessel); yield break; }
             if (scenario == "fairings") { yield return FairingScenario.Run(vessel, dir, Mark); yield return Finish("fairings"); yield break; }
+            if (scenario == "camera") { yield return CameraScenario.Run(dir, Mark); yield return Finish("camera"); yield break; }
             if (scenario.StartsWith("drop ")) { yield return Drop(vessel, double.Parse(scenario.Split(' ')[2], CultureInfo.InvariantCulture)); yield break; }
             if (scenario.StartsWith("sepland ")) { yield return SepLand(vessel, double.Parse(scenario.Split(' ')[1], CultureInfo.InvariantCulture)); yield break; }
             if (scenario == "visuals")

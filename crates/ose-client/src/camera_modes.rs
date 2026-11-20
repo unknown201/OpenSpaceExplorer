@@ -64,6 +64,32 @@ pub fn is_stable_orbit(sma_m: f64, ecc: f64, radius_m: f64, atmosphere_m: f64, s
     ecc < 1.0 && sma_m * (1.0 + ecc) < soi_m && sma_m * (1.0 - ecc) - radius_m > atmosphere_m
 }
 
+/// How close and how far the flight camera zooms (m) and how far it pitches (radians either way), as the
+/// flight camera's live `CameraTweakables` for its context: `Ground` and `Orbital` for a craft, `EVAGround` and
+/// `EVAOrbital` for a Kerbal, Orbital once the orbit is stable (`VesselComponent`'s camera context; KSP2
+/// `camera` pilot run 2026-11-20). KSP2 clamps the gimbal to them every frame (`ClampGimbalState`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CameraLimits {
+    pub min_distance_m: f64,
+    pub max_distance_m: f64,
+    pub max_pitch_rad: f64,
+}
+
+pub fn flight_camera_limits(stable_orbit: bool, eva: bool) -> CameraLimits {
+    let (min_distance_m, max_distance_m, pitch_deg): (f64, f64, f64) = match (eva, stable_orbit) {
+        (false, false) => (1.15, 1_000.0, 90.0),
+        (false, true) => (1.15, 150_000.0, 90.0),
+        (true, false) => (1.0, 1_000.0, 70.0),
+        (true, true) => (1.0, 40_000.0, 70.0),
+    };
+    CameraLimits {
+        min_distance_m,
+        max_distance_m,
+        // straight up or down leaves the look-at without an up direction: stop just short of it
+        max_pitch_rad: pitch_deg.min(89.5_f64).to_radians(),
+    }
+}
+
 impl CameraMode {
     /// `SelectNextFlightCamera`: the mode after this one in `list` (its first when this one is not in it).
     pub fn next_in(self, list: &[CameraMode]) -> CameraMode {
@@ -90,6 +116,25 @@ impl CameraMode {
 #[cfg(test)]
 mod camera_mode_tests {
     use super::*;
+    use std::f64::consts::FRAC_PI_2;
+
+    /// KSP2's live flight camera tweakables (`camera` pilot run 2026-11-20, `camera-tweakables.csv`): a craft
+    /// zooms from 1.15 m to 1 km until its orbit is stable, then to 150 km; a Kerbal from 1 m to 1 km, then 40 km,
+    /// and pitches 70 degrees either way (a craft 90).
+    #[test]
+    fn ksp2_flight_camera_limits_follow_the_camera_context() {
+        let ground = flight_camera_limits(false, false);
+        assert_eq!(
+            (ground.min_distance_m, ground.max_distance_m),
+            (1.15, 1_000.0)
+        );
+        assert_eq!(flight_camera_limits(true, false).max_distance_m, 150_000.0);
+        let eva = flight_camera_limits(false, true);
+        assert_eq!((eva.min_distance_m, eva.max_distance_m), (1.0, 1_000.0));
+        assert_eq!(flight_camera_limits(true, true).max_distance_m, 40_000.0);
+        assert!((eva.max_pitch_rad.to_degrees() - 70.0).abs() < 1e-9);
+        assert!(ground.max_pitch_rad.to_degrees() > 89.0 && ground.max_pitch_rad < FRAC_PI_2);
+    }
 
     /// KSP2 T26 (`UniverseCameraManager`, `VesselComponent.IsStableOrbit`).
     #[test]
