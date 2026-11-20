@@ -47,6 +47,19 @@ pub struct FairingDef {
     pub pieces: u8,
     /// Height of the fairing node (where the wall starts) on the part, m.
     pub base_height: f64,
+    /// `FairingStartHeight`, m: the floor inside the wall, under the part's origin.
+    #[serde(default)]
+    pub start_height: f64,
+    /// `NoseTip`: how far a wall closed down to the cap radius runs on to its point.
+    #[serde(default = "half")]
+    pub nose_tip: f64,
+    /// The base's own shape, from its default drag cube: (centre height, height, radius), m.
+    #[serde(default)]
+    pub base_cube: Option<(f64, f64, f64)>,
+}
+
+fn half() -> f64 {
+    0.5
 }
 
 static DEFS: OnceLock<BTreeMap<String, FairingDef>> = OnceLock::new();
@@ -159,39 +172,76 @@ impl FairingShape {
         (std::f64::consts::PI * r * r, side)
     }
 
+    /// The wall as KSP2 builds its panels (`FairingPanel.SetupPanelArray`): the sections, and a wall closed
+    /// down to the cap radius runs on to a point `NoseTip` of the way along its last slope.
+    pub fn wall(&self, def: &FairingDef) -> Vec<(f64, f64)> {
+        let mut wall = self.sections.clone();
+        if let [.., (h0, r0), (h1, r1)] = wall[..] {
+            if (r1 - def.cap_radius).abs() < 1e-4 && r1 > 0.0 {
+                // `GetSlopeAngle`: the last section's rise over its run inwards
+                let slope = (h1 - h0) / (r0 - r1);
+                wall.push((h1 + r1 * slope * def.nose_tip, 0.0));
+            }
+        }
+        wall
+    }
+
     /// The fairing's drag cube while its panels are on (`Module_Fairing.GenerateDragCubes`, the procedural
-    /// cube weighted 1 until jettison): the wall as a lathe of `side_count` sides over the base ring, part
-    /// frame (wall axis +Y from the fairing node).
+    /// cube weighted 1 until jettison), part frame. KSP2 renders the part's whole model: the base (its own
+    /// drag cube's box, its floor at `FairingStartHeight` inside the wall) and the panels, a lathe of
+    /// `side_count` sides whose heights count from the part's origin. `IsCapped` builds nothing: only a
+    /// wall closed down to the cap radius has a nose (KSP2 probe, gap T38).
     pub fn drag_cube(&self, def: &FairingDef) -> crate::DragCube {
         let sides = (def.side_count as usize).max(12);
         let mut points: Vec<[f64; 3]> = Vec::new();
         let mut tris: Vec<[u32; 3]> = Vec::new();
-        for (h, r) in &self.sections {
+        let w = sides as u32;
+        let ring = |points: &mut Vec<[f64; 3]>, y: f64, r: f64| {
+            let row = (points.len() / sides) as u32;
             for k in 0..sides {
                 let a = k as f64 / sides as f64 * std::f64::consts::TAU;
-                points.push([r * a.cos(), def.base_height + h, r * a.sin()]);
+                points.push([r * a.cos(), y, r * a.sin()]);
             }
-        }
-        let w = sides as u32;
-        for row in 0..self.sections.len().saturating_sub(1) as u32 {
+            row
+        };
+        let band = |tris: &mut Vec<[u32; 3]>, lo: u32, hi: u32| {
+            let up = (hi - lo) * w;
             for k in 0..w {
-                let (a, b) = (row * w + k, row * w + (k + 1) % w);
-                tris.push([a, b + w, b]);
-                tris.push([a, a + w, b + w]);
-            }
-        }
-        // the base plate under the wall, and the closed top of a capped wall
-        let mut cap = |row: u32, y: f64| {
-            let centre = points.len() as u32;
-            points.push([0.0, y, 0.0]);
-            for k in 0..w {
-                tris.push([centre, row * w + k, row * w + (k + 1) % w]);
+                let (a, b) = (lo * w + k, lo * w + (k + 1) % w);
+                tris.push([a, b + up, b]);
+                tris.push([a, a + up, b + up]);
             }
         };
-        cap(0, def.base_height);
-        if self.capped {
-            if let Some((h, _)) = self.sections.last() {
-                cap(self.sections.len() as u32 - 1, def.base_height + h);
+        let wall = self.wall(def);
+        let rows: Vec<u32> = wall
+            .iter()
+            .map(|(h, r)| ring(&mut points, *h, *r))
+            .collect();
+        for pair in rows.windows(2) {
+            band(&mut tris, pair[0], pair[1]);
+        }
+        // the base: the drum of its own cube, its underside flat, and the floor inside the wall at
+        // `FairingStartHeight` (what the camera sees down an open wall)
+        let (centre, height, radius) = def.base_cube.unwrap_or((0.0, 0.0, def.base_radius));
+        let (low, high) = (centre - height * 0.5, centre + height * 0.5);
+        let bottom = ring(&mut points, low, radius);
+        let top = ring(&mut points, high, radius);
+        if high > low {
+            band(&mut tris, bottom, top);
+        }
+        let floor_y = def.start_height.clamp(low, high);
+        let floor = ring(
+            &mut points,
+            floor_y,
+            radius.max(wall.first().map_or(0.0, |s| s.1)),
+        );
+        // the flat discs (rings are rows of `sides` points; the centres follow them)
+        let base_points = points.len() as u32;
+        for (k, (row, y)) in [(bottom, low), (floor, floor_y)].into_iter().enumerate() {
+            points.push([0.0, y, 0.0]);
+            let c = base_points + k as u32;
+            for j in 0..w {
+                tris.push([c, row * w + j, row * w + (j + 1) % w]);
             }
         }
         crate::procedural::render_drag_cube("FairingProcedural", &points, &tris)
@@ -239,8 +289,9 @@ mod tests {
         );
     }
 
-    /// A straight wall seen side on is a rectangle; end on, a disc; a cylinder's side meets the air at the mean
-    /// cosine pi/4.
+    /// A straight wall on its base seen side on is a rectangle from the base's underside to the top of the
+    /// wall; end on, a disc; a cylinder's side meets the air at the mean cosine pi/4. `IsCapped` builds nothing:
+    /// looking down the open wall, the floor.
     #[test]
     fn a_cylinder_walls_drag_cube_is_its_silhouettes() {
         let d = def("fairing_2v_procedural").unwrap();
@@ -251,7 +302,10 @@ mod tests {
             ejection_force: 100.0,
         };
         let c = s.drag_cube(d);
-        let side = 2.5 * 4.0;
+        let (centre, height, _) = d.base_cube.unwrap();
+        let tall = 4.0 - (centre - height * 0.5);
+        assert!((c.size.y - tall).abs() < 1e-6, "{:?}", c.size);
+        let side = 2.5 * tall;
         let end = std::f64::consts::PI * 1.25 * 1.25;
         assert!((c.area[0] - side).abs() / side < 0.02, "{:?}", c.area);
         assert!((c.area[2] - end).abs() / end < 0.02, "{:?}", c.area);
@@ -261,7 +315,11 @@ mod tests {
             c.drag
         );
         assert!((c.drag[2] - 1.0).abs() < 0.01, "{:?}", c.drag);
-        assert!((c.size.y - 4.0).abs() < 1e-6);
+        assert!(
+            (c.depth[2] - (4.0 + 0.1 - d.start_height)).abs() < 0.03,
+            "{:?}",
+            c.depth
+        );
     }
 
     #[test]
