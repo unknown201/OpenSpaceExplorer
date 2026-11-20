@@ -5228,6 +5228,9 @@ async fn session(mut socket: WebSocket, s: AppState, ip: std::net::IpAddr) {
                         }
                         break id;
                     }
+                    // A view hint before signing in carries nothing to act on; clients from before this
+                    // check sent one as soon as the socket opened.
+                    Ok(ClientMessage::Viewing { .. }) => {}
                     Ok(_) => {
                         send(
                             &mut socket,

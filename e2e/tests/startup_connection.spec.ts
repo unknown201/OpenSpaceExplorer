@@ -51,6 +51,7 @@ test('sign-in waits safely for a slow connection without opening another socket'
     await expect(page.locator('[data-ose="menu"]')).toHaveAttribute('data-ose-connection','connecting');
     await page.locator('[data-ose="player-name"]').fill('impatient pilot');
     await page.locator('[data-ose="login"]').click();
+    await expect(page.locator('#login-status')).toHaveText('Connecting to server…');
     await page.locator('[data-ose="login"]').click();
     await expect(page.locator('#screen-login')).toHaveClass(/open/);
     expect(connections).toBe(1);
@@ -129,4 +130,78 @@ test('keydown events without a key or code (browser autofill) do not break sign-
   await page.locator('[data-ose="login"]').click();
   await expect(page.locator('#screen-name')).toHaveClass(/open/);
   expect(errors).toEqual([]);
+});
+
+test('a sign-in click while the client loads continues once it is ready',async({page,baseURL})=>{
+  let release!:()=>void;
+  const held=new Promise<void>(resolve=>{release=resolve;});
+  await page.route('**/*.wasm',async route=>{await held;await route.continue();});
+  const messages:Buffer[]=[];
+  await page.routeWebSocket('**/ws',socket=>{
+    const server=socket.connectToServer();
+    socket.onMessage(message=>{if(Buffer.isBuffer(message))messages.push(message);server.send(message);});
+  });
+  try {
+    await page.goto(baseURL!,{waitUntil:'domcontentloaded'});
+    await page.locator('#login-email').fill('pilot@example.com');
+    await page.locator('#login').click();
+    await expect(page.locator('#login-status')).toContainText('Your request will continue when ready');
+    expect(messages).toHaveLength(0);
+    release();
+    await expect(page.locator('#login-status')).toContainText('not set up');
+    expect(messages).toHaveLength(1);
+    expect(messages[0].includes(Buffer.from('pilot@example.com'))).toBe(true);
+    await expect(page.locator('#login-reload')).toBeHidden();
+  } finally {release();}
+});
+
+test('a client that cannot finish loading offers a visible recovery action',async({page,baseURL})=>{
+  await page.clock.install();
+  await page.route('**/*.wasm',route=>route.abort());
+  await page.goto(baseURL!,{waitUntil:'domcontentloaded'});
+  await page.clock.fastForward(30_001);
+  await expect(page.locator('#login-status')).toContainText('could not finish loading');
+  await expect(page.locator('#login-reload')).toBeVisible();
+});
+
+test('a stalled connection times out and the next sign-in click reconnects',async({page,baseURL})=>{
+  await page.clock.install();
+  let connections=0;
+  let release!:()=>void;
+  const held=new Promise<void>(resolve=>{release=resolve;});
+  await page.routeWebSocket('**/ws',async socket=>{
+    connections++;
+    if(connections===1)await held;
+    socket.connectToServer();
+  });
+  try {
+    await page.goto(baseURL!);
+    await expect(page.locator('#menu')).toHaveAttribute('data-ose-connection','connecting');
+    await page.locator('#login').click();
+    await expect(page.locator('#login-status')).toHaveText('Connecting to server…');
+    await page.clock.fastForward(15_001);
+    await expect(page.locator('#login-status')).toContainText('Sign in to reconnect');
+    await page.locator('#login').click();
+    await expect(page.locator('#screen-name')).toHaveClass(/open/);
+    expect(connections).toBe(2);
+  } finally {release();}
+});
+
+test('a sign-in with no server reply can retry instead of ignoring later clicks',async({page,baseURL})=>{
+  await page.clock.install();
+  let connections=0;
+  await page.routeWebSocket('**/ws',socket=>{
+    connections++;
+    const server=socket.connectToServer();
+    if(connections===1)server.onMessage(()=>{});
+  });
+  await page.goto(baseURL!);
+  await expect(page.locator('#menu')).toHaveAttribute('data-ose-connection','open');
+  await page.locator('#login').click();
+  await expect(page.locator('#menu')).toHaveAttribute('data-ose-connection','authenticating');
+  await page.clock.fastForward(20_001);
+  await expect(page.locator('#login-status')).toContainText('server did not respond');
+  await page.locator('#login').click();
+  await expect(page.locator('#screen-name')).toHaveClass(/open/);
+  expect(connections).toBe(2);
 });
