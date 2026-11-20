@@ -5,5 +5,6 @@
 //! depots, and when a player finishes or reverts.
 pub mod book;
 pub mod recording;
+pub mod route;
 
 pub use book::Routes;

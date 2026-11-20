@@ -197,6 +197,7 @@ fn open(s: &Shared) -> AppState {
         shelf: s.shelf.clone(),
         playing: Mutex::new(Default::default()),
         revert: Mutex::new(None),
+        route_pilots: Mutex::new(Default::default()),
         kerbals: s.kerbals.clone(),
         last_roster: Mutex::new(None),
         flying: Mutex::new(HashMap::new()),
