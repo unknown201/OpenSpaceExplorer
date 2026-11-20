@@ -66,16 +66,38 @@ test('planning modifier arrows preserve the burn, warp can be stopped, and the o
   // navball and speed gauge canvases), read
   // afresh each time since the view follows the vessel
   const canvas = page.locator('#gpu');
+  // After a node is cleared its planned orbit stays on the map until the server's new prediction arrives,
+  // which a slow browser (Firefox in CI) can see well after the node is gone: a click picked from the old
+  // orbit then lands beside the new one. Wait for the single patch of the coasting orbit, and for the view to
+  // hold still, before picking from it.
+  const readOrbit = () =>
+    canvas.evaluate(c => [c.getAttribute('data-ose-orbit-points') ?? '', c.getAttribute('data-ose-orbit-vessel') ?? '']);
+  const parse = (s: string) => s.split(';').filter(Boolean).map(p => p.split(' ').map(Number));
+  const settled = async () => {
+    let last = parse((await readOrbit())[0]);
+    await expect
+      .poll(async () => {
+        await page.waitForTimeout(250);
+        const now = parse((await readOrbit())[0]);
+        const still =
+          now.length > 1 &&
+          now.length === last.length &&
+          now.every(([x, y], i) => Math.abs(x - last[i][0]) <= 2 && Math.abs(y - last[i][1]) <= 2);
+        last = now;
+        return still;
+      }, { timeout: 15_000 })
+      .toBe(true);
+    return readOrbit();
+  };
   const orbitPoint = async () => {
     await expect(canvas).toHaveAttribute('data-ose-orbit-points', /\d+ \d+;/);
-    const [vesX, vesY] = (await canvas.getAttribute('data-ose-orbit-vessel'))!.split(' ').map(Number);
+    await expect(canvas).toHaveAttribute('data-ose-orbit-patches', '1', { timeout: 15_000 });
+    const [pointsAttr, vesselAttr] = await settled();
+    const [vesX, vesY] = vesselAttr.split(' ').map(Number);
     // the 2D fallback map draws on #map (the WebGPU canvas is hidden then)
     const rect = (await canvas.boundingBox()) ?? (await page.locator('#map').boundingBox())!;
     const vessel = { x: rect.x + vesX, y: rect.y + vesY };
-    const points = (await canvas.getAttribute('data-ose-orbit-points'))!
-      .split(';')
-      .map(p => p.split(' ').map(Number))
-      .map(([x, y]) => ({ x: rect.x + x, y: rect.y + y }));
+    const points = parse(pointsAttr).map(([x, y]) => ({ x: rect.x + x, y: rect.y + y }));
     const clear = await page.evaluate(ps => ps.map(p => ['gpu', 'map'].includes(document.elementFromPoint(p.x, p.y)?.id ?? '')), points);
     const dist = (p: { x: number; y: number }) => Math.hypot(p.x - vessel.x, p.y - vessel.y);
     const at = points.filter((_, i) => clear[i]).sort((a, b) => dist(b) - dist(a))[0];
