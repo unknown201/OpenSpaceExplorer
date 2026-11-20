@@ -77,6 +77,13 @@
     #node-panel { position: fixed; top: 160px; left: 50%; transform: translateX(-50%); z-index: 12; width: 280px; padding: 8px 10px; border-radius: 6px;
       background: #0b1020e6; border: 1px solid #2c3d63; font-size: 12px; display: none; }
     #node-panel.open { display: block; }
+    /* The original's orbit click: time to the point, Add maneuver, Warp to. */
+    #orbit-popup { position: fixed; z-index: 12; display: none; gap: 6px; align-items: center; padding: 6px 8px; border-radius: 6px;
+      background: #0b1020e6; border: 1px solid #2c3d63; font-size: 12px; }
+    #orbit-popup.open { display: flex; }
+    #orbit-popup button { background: #16213a; color: #cfd6e6; border: 1px solid #2c3d63; border-radius: 4px;
+      padding: 2px 8px; font: inherit; cursor: pointer; }
+    #menu:not(.hidden) ~ #orbit-popup { display: none; }
     #node-panel label { display: grid; grid-template-columns: 70px 1fr 70px; gap: 6px; align-items: center; margin: 4px 0; }
     #node-panel input[type=range] { width: 100%; }
     #node-panel .reason { color: #f0a070; min-height: 1em; }
@@ -1839,8 +1846,9 @@
     <div class="reason" id="node-reason"></div>
     <button id="node-warp" data-ose="node-warp" title="Coast with engines off to just before the maneuver">Warp to</button>
     <button id="clear-node" data-ose="clear-node" title="Delete this maneuver node (the others stay)">Delete node</button>
-    <button id="add-next-node" data-ose="add-next-node" title="Plan another node after the last one; or click the orbit after a node">Add next</button>
+    <button id="add-next-node" data-ose="add-next-node" title="Plan another node after the last one; or click the orbit, then Add maneuver">Add next</button>
   </div>
+  <div id="orbit-popup" data-ose="orbit-popup"><span id="orbit-popup-t" data-ose="orbit-popup-time">T-0:00</span><button id="orbit-add-node" data-ose="orbit-add-node" title="Plan a maneuver at this point of the orbit">Add maneuver</button><button id="orbit-warp" data-ose="orbit-warp" title="Coast with engines off to this point of the orbit">Warp to</button></div>
   <div id="help">drag to pan, wheel to zoom, click a name to focus, F to frame the system</div>
 </body>
 </html>
