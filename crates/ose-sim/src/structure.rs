@@ -1105,7 +1105,24 @@ impl Structure {
             craft_controls: craft
                 .parts
                 .iter()
-                .map(|p| p.control.filter(|c| c.valid()))
+                .enumerate()
+                .map(|(i, p)| {
+                    p.control
+                        .map(|mut c| {
+                            // A KSP2 craft file states `AuthorityLimiter` in degrees of the part's range and
+                            // seldom carries the range; the importer leaves such a limit negative for the part
+                            // definition to resolve. Resolve it here, or the whole of the part's settings
+                            // (the limit, which axes it answers) would be dropped as invalid.
+                            if c.surface_authority < 0.0 {
+                                c.surface_authority = def_of(i)
+                                    .map(|d| d.ctrl_range_deg)
+                                    .filter(|r| *r > 0.0)
+                                    .map_or(1.0, |r| (-c.surface_authority / r).clamp(0.0, 1.0));
+                            }
+                            c
+                        })
+                        .filter(|c| c.valid())
+                })
                 .collect(),
             chute_packed: (0..n)
                 .map(|i| {
@@ -2573,6 +2590,18 @@ impl Structure {
         (self.rigid.rest_position(i) + offset, half)
     }
 
+    /// How far a folded-out leg's suspension gives under the craft at rest, m: its spring
+    /// (`surface::suspension_force`) carries its share at half its travel. KSP2's legs settle under load
+    /// (landingleg_1v at 0.44 m of 0.80), so a craft resting on them stands that much lower than their
+    /// extended feet, down to any part that reaches the ground first (the run-1 lander rests on its
+    /// engine bell, at the height it stood before the legs came out).
+    pub fn rest_sag_m(&self, i: usize) -> f64 {
+        match (&self.gear_defs[i], self.gear_out[i]) {
+            (Some(g), true) if g.leg => 0.5 * g.suspension_m.max(0.0),
+            _ => 0.0,
+        }
+    }
+
     /// Part `i`'s model hull, when it has one and is not folded out.
     pub(crate) fn model_hull(&self, i: usize) -> Option<&crate::collide::ModelHull> {
         self.model_hulls.get(i)?.as_ref()
@@ -2868,6 +2897,11 @@ impl Structure {
             .iter()
             .map(|&i| bottom(i))
             .fold(f64::INFINITY, f64::min);
+        // at rest the legs give under the craft; a blow still lands on their extended feet
+        let resting = present
+            .iter()
+            .map(|&i| bottom(i) + self.rest_sag_m(i))
+            .fold(f64::INFINITY, f64::min);
         // the parts within half a metre of the lowest point carry it
         let feet: Vec<usize> = present
             .iter()
@@ -2900,7 +2934,7 @@ impl Structure {
             .filter(|t| *t > 0.0)
             .fold(f64::INFINITY, f64::min);
         (
-            (c.dot(u) - lowest).max(0.0),
+            (c.dot(u) - resting).max(0.0),
             footprint,
             if tolerance.is_finite() {
                 tolerance
@@ -5430,6 +5464,11 @@ impl Structure {
         out
     }
 
+    /// A control surface's current deflection, rad.
+    pub fn surface_angle(&self, part: usize) -> f64 {
+        self.surface_angles[part]
+    }
+
     /// Drop the airflow kept for the next tick (`airflow_one_tick_late`).
     pub fn forget_last_airflow(&mut self) {
         self.airflow_last_tick = None;
@@ -7712,9 +7751,25 @@ mod tests {
         assert_eq!(s.deploy_gear(true), 3);
         assert_eq!(s.deploy_gear(true), 0, "already out");
         let (clear_out, foot_out, tol_out) = s.ground_profile();
+        // the feet reach half a metre below the bell; under the craft the legs give half their travel
+        // (0.475 m), so it stands on them just clear of the bell
         assert!(
-            clear_out > clear_in + 0.3,
-            "legs reach below the bell: {clear_in} -> {clear_out}"
+            clear_out > clear_in && clear_out < clear_in + 0.1,
+            "stands on its legs: {clear_in} -> {clear_out}"
+        );
+        let feet = (0..s.rigid.len())
+            .filter(|&i| s.rest_sag_m(i) > 0.0)
+            .map(|i| {
+                let (c, h) = s.part_box(i);
+                c.y - h.y
+            })
+            .fold(f64::INFINITY, f64::min);
+        let (bell, h) = s.part_box(3);
+        assert!(
+            feet < bell.y - h.y - 0.4,
+            "legs reach below the bell: {} vs {}",
+            feet,
+            bell.y - h.y
         );
         assert!(
             foot_out > foot_in + 0.5,
