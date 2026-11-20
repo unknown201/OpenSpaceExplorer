@@ -96,3 +96,20 @@ store. The public release is based on production commit `6d1c6d7` (save format 2
 cd crates/ose-client && trunk build --release --dist ../../target/web && cd ../..
 cargo run -p ose-server -- --listen 127.0.0.1:7777 --static-dir target/web
 ```
+
+## Running on a Mac
+
+`python tools/package_mac.py` makes `dist/ose-mac-<commit>.zip`: a universal (Apple Silicon + Intel)
+`ose-server` cross-compiled with cargo-zigbuild, the trunk-built web client, and `deploy/mac/`
+(`start.command`, `fetch-assets.sh`, `README.txt`), plus `assets-manifest.txt` listing the exported
+assets (from `assets/web`, or `--manifest` for a ready-made listing). The zip is handed over through
+the project's shared files, never GitHub.
+
+On the Mac, `bash start.command` (later a double-click) clears the download quarantine, re-signs the
+binary ad hoc if needed, and on first run has `fetch-assets.sh` download the manifest's files (about
+3.8 GB in November 2026) from `https://ose.jfly.dev/assets/` into the package's `assets/`; it resumes
+and skips complete files. `./fetch-assets.sh <dir>` copies a local export instead. The server then
+listens on `127.0.0.1:7777` (`OSE_PORT`) and the browser opens. There is no mail locally, so it runs
+with `--allow-guest-accounts --guest-ttl-s 0`: leave the email empty and sign in with a pilot name.
+Accounts and saves live in `~/Library/Application Support/OpenSpaceExplorer` (`OSE_DATA`), the working
+directory, so replacing the package keeps them.
