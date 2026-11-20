@@ -471,6 +471,7 @@ impl Structure {
                         - h.x * f.0.dot(up).abs()
                         - h.y * f.1.dot(up).abs()
                         - h.z * f.2.dot(up).abs()
+                        + self.rest_sag_m(i)
                 })
                 .fold(f64::INFINITY, f64::min);
             let radius = support(p.r, ut + dt) - lowest;

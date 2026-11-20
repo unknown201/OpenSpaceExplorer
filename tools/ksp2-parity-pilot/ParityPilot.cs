@@ -6,6 +6,7 @@ using BepInEx;
 using KSP;
 using KSP.Game;
 using KSP.IO;
+using KSP.Modules;
 using KSP.OAB;
 using KSP.Sim;
 using KSP.Sim.impl;
@@ -74,7 +75,7 @@ namespace OpenSpaceExplorer.Validation
     {
         const string Campaign = "OSE Parity";
         string dir;
-        StreamWriter trace, comLog;
+        StreamWriter trace, comLog, wheels;
         double start, last;
         string vesselId;
         bool done;
@@ -632,6 +633,9 @@ namespace OpenSpaceExplorer.Validation
             SetGroup(KSPActionGroup.Gear, true);
             vessel.SetAutopilotEnableDisable(true);
             Begin(vessel, "legs-trace.csv");
+            // every part's height and each leg's wheel contact, per tick (why KSP2's lander tips after landing)
+            wheels = new StreamWriter(Path.Combine(dir, "out", "legs-wheels.csv"), false) { AutoFlush = true };
+            wheels.WriteLine("t,index,part,height_m,grounded,contact_depth,compression,suspension_load,vertical_force,spring_force,damper_force,tire_fx,tire_fy,wheel_vx,wheel_vy,deployed,sprung_mass_gravity,easing,spring_rate,damper_rate,auto_boost,spring_tweak,damper_tweak,spring,boost,landed");
             yield return new WaitForSeconds(8f);
             yield return Shot("15-legs-deployed");
             yield return new WaitForSeconds(2f);
@@ -655,6 +659,8 @@ namespace OpenSpaceExplorer.Validation
             int left = 0;
             if (vessel != null) foreach (var part in vessel.SimulationObject.PartOwner.Parts) left++;
             Mark("parts left " + left);
+            wheels?.Dispose();
+            wheels = null;
             Stop();
             File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
             yield return new WaitForSeconds(2f);
@@ -1020,6 +1026,7 @@ namespace OpenSpaceExplorer.Validation
                     vessel.flightCtrlState.wheelThrottle, vessel.flightCtrlState.wheelSteer, tmax, tpod, teng };
                 trace.WriteLine(string.Join(",", Array.ConvertAll(v, x => x.ToString("R", CultureInfo.InvariantCulture))) + "," + vessel.Situation + "," + ut.ToString("R", CultureInfo.InvariantCulture));
                 if (comLog != null) LogCom(vessel, ut - start);
+                if (wheels != null) LogWheels(vessel, ut - start);
             }
             catch (Exception e) { Logger.LogError(e); Stop(); }
         }
@@ -1039,6 +1046,50 @@ namespace OpenSpaceExplorer.Validation
             Vector3 c = G.UniverseView.PhysicsSpace.PositionToPhysics(vessel.CenterOfMass);
             var rel = Quaternion.Inverse(root.rotation) * (c - root.position);
             comLog.WriteLine(t.ToString("R", inv) + "," + vessel.totalMass.ToString("R", inv) + "," + n + "," + rel.x.ToString("R", inv) + "," + rel.y.ToString("R", inv) + "," + rel.z.ToString("R", inv) + "," + res.ToString("R", inv));
+        }
+
+        // every part's rigidbody centre of mass, m along local up from the root part's, and each landing leg's
+        // wheel contact (VehiclePhysics WheelState) and deploy state
+        static readonly System.Reflection.FieldInfo SpringField = typeof(Module_WheelSuspension).GetField("spring", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        static readonly System.Reflection.FieldInfo BoostField = typeof(Module_WheelSuspension).GetField("boost", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+        void LogWheels(VesselComponent vessel, double t)
+        {
+            var inv = CultureInfo.InvariantCulture;
+            string F(double x) => x.ToString("R", inv);
+            Vector3 up = Vector3.zero, rootPos = Vector3.zero; bool haveRoot = false;
+            int i = 0;
+            foreach (var part in vessel.SimulationObject.PartOwner.Parts)
+            {
+                if (!G.SpaceSimulation.TryGetViewObject(part.SimulationObject, out var view)) { i++; continue; }
+                var body = view.GetComponent<PartBehavior>()?.Rigidbody?.activeRigidBody;
+                if (body == null) { i++; continue; }
+                if (!haveRoot)
+                {
+                    up = G.UniverseView.PhysicsSpace.VectorToPhysics(vessel.gravityForPos).normalized * -1f;
+                    rootPos = body.worldCenterOfMass; haveRoot = true;
+                }
+                string row = F(t) + "," + i + "," + part.Name + "," + F(Vector3.Dot(body.worldCenterOfMass - rootPos, up));
+                var wb = view.GetComponent<KSP.Modules.Module_WheelBase>();
+                var ws = wb?.Wheel != null ? wb.Wheel.currentState : null;
+                if (ws != null)
+                {
+                    bool deployed = !part.TryGetModuleData<PartComponentModule_Deployable, Data_Deployable>(out var dd) || dd.CurrentDeployState.GetValue() == Data_Deployable.DeployState.Extended;
+                    row += "," + (ws.grounded ? 1 : 0) + "," + F(ws.contactDepth) + "," + F(ws.suspensionCompression) + "," + F(ws.suspensionLoad) + "," + F(ws.verticalForce)
+                        + "," + F(ws.springForce) + "," + F(ws.damperForce) + "," + F(ws.tireForce.x) + "," + F(ws.tireForce.y)
+                        + "," + F(ws.localWheelVelocity.x) + "," + F(ws.localWheelVelocity.y) + "," + (deployed ? 1 : 0);
+                    // Module_WheelSuspension's auto spring: the mass share it springs, the collider's rates, the boost
+                    var su = view.GetComponent<Module_WheelSuspension>();
+                    var sd = su != null && su.DataModules.Contains(typeof(Data_WheelSuspension)) ? (Data_WheelSuspension)su.DataModules[typeof(Data_WheelSuspension)] : null;
+                    var col = wb.Wheel.WheelCollider;
+                    row += "," + F(su?.sprungMassGravity ?? 0) + "," + (su != null && su.sprungMassEasing ? 1 : 0) + "," + F(col?.springRate ?? 0) + "," + F(col?.damperRate ?? 0)
+                        + "," + F(sd?.autoBoost ?? 0) + "," + F(sd?.springTweakable.GetValue() ?? 0) + "," + F(sd?.damperTweakable.GetValue() ?? 0)
+                        + "," + F(su != null ? (float)SpringField.GetValue(su) : 0) + "," + F(su != null ? (float)BoostField.GetValue(su) : 0);
+                }
+                else row += ",,,,,,,,,,,,,,,,,,,,,";
+                wheels.WriteLine(row + "," + (vessel.Landed ? 1 : 0));
+                i++;
+            }
         }
 
         // T11/T15 heat shield: the Mk1 pod over a 1.25 m heat shield, held upright by SAS, put 70 km above the
