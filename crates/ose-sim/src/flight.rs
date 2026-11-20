@@ -16,6 +16,30 @@ use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
 pub const IDEAL_GAS_CONSTANT: f64 = 8.31447;
+/// Below this height above the body's highest terrain KSP2 flies physics in the body's rotating frame
+/// (`PhysicsSpaceProvider`: `20000 + mainBody.MaxTerrainHeight`, the body frame instead of the celestial one).
+pub const ROTATING_FRAME_ABOVE_TERRAIN_M: f64 = 20_000.0;
+
+/// What KSP2's rotating physics frame adds to a craft's acceleration near the ground, m/s². Below
+/// `ROTATING_FRAME_ABOVE_TERRAIN_M` over the highest terrain, PhysX integrates in the body's rotating frame
+/// and `InertialFrame.LocalInertialAcceleration` adds nothing for it, so the Coriolis and centrifugal
+/// accelerations a rotating frame needs are missing: relative to true motion the craft gains
+/// `2 ω × v_surface + ω × (ω × r)`. Traced on a heat-shielded Mk1 pod coming down through 21.5 km at
+/// 1,100 m/s eastward: from there KSP2's pod sinks about 0.25 m/s² faster than gravity and drag alone
+/// make it, and with this OSE's speed against height matches KSP2's to 0.05% down to the ground.
+pub fn rotating_frame_error(
+    body: &crate::bodies::Body,
+    omega: DVec3,
+    r: DVec3,
+    v_surface: DVec3,
+) -> DVec3 {
+    if omega.length_squared() == 0.0
+        || r.length() - body.radius_m >= ROTATING_FRAME_ABOVE_TERRAIN_M + body.max_terrain_height_m
+    {
+        return DVec3::ZERO;
+    }
+    omega.cross(v_surface) * 2.0 + omega.cross(omega.cross(r))
+}
 /// The fastest a craft spins, rad/s: KSP2 gives every part's rigidbody `maxAngularVelocity =
 /// PhysicsSettings.MaxAngularVelocity` (`RigidbodyBehavior`; 50, read live), and PhysX clamps the solved spin
 /// to it each tick. Without it an attitude hold chasing a target that jumps every tick could spin the wheels'
@@ -2354,7 +2378,8 @@ pub fn integrate_with_propulsion(
     } else {
         DVec3::ZERO
     };
-    let acc = g_acc + thrust_acc + drag_acc + lift_acc + push_acc;
+    let frame_acc = rotating_frame_error(body, omega_v, p.r, v_surf);
+    let acc = g_acc + thrust_acc + drag_acc + lift_acc + push_acc + frame_acc;
     p.accel_ng_mps2 = thrust_acc + drag_acc + lift_acc + push_acc;
     p.v = p.v + acc * dt;
     let top = vessel_top(p);
@@ -3055,6 +3080,37 @@ mod tests {
         assert_eq!(d.speed_mps, 0.0);
     }
 
+    #[test]
+    fn below_twenty_km_over_the_terrain_ksp2s_rotating_frame_drops_coriolis_and_centrifugal() {
+        let body = Body {
+            max_terrain_height_m: 1498.875,
+            ..kerbin()
+        };
+        let omega = DVec3::new(0.0, 0.0, std::f64::consts::TAU / body.rotation_period_s);
+        let east = DVec3::new(0.0, 1.0, 0.0);
+        let at = |alt: f64| DVec3::new(600_000.0 + alt, 0.0, 0.0);
+        // above 21.5 km KSP2 flies in the non-rotating frame: true motion
+        assert_eq!(
+            rotating_frame_error(&body, omega, at(21_600.0), east * 1000.0),
+            DVec3::ZERO
+        );
+        // below it, moving east at 1,000 m/s, the craft sinks by 2 ω v + ω² r
+        let w = omega.z;
+        let a = rotating_frame_error(&body, omega, at(21_400.0), east * 1000.0);
+        let expected = -(2.0 * w * 1000.0 + w * w * 621_400.0);
+        assert!((a.x - expected).abs() < 1e-9, "{a:?} vs {expected}");
+        assert!(a.y.abs() < 1e-12 && a.z.abs() < 1e-12);
+        // a body that does not turn has no rotating frame to lose
+        let still = Body {
+            rotation_period_s: 0.0,
+            ..body.clone()
+        };
+        assert_eq!(
+            rotating_frame_error(&still, DVec3::ZERO, at(1_000.0), east * 1000.0),
+            DVec3::ZERO
+        );
+    }
+
     fn kerbin() -> Body {
         let mu = 1.00034160493135 * G0 * 600_000.0 * 600_000.0;
         Body {
@@ -3065,6 +3121,7 @@ mod tests {
             soi_radius_m: Some(84_159_286.0),
             rotation_period_s: 21_549.425,
             initial_rotation_deg: 0.0,
+            max_terrain_height_m: 0.0,
             is_star: false,
             ocean: None,
             site: None,

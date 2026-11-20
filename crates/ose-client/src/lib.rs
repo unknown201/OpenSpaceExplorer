@@ -16584,8 +16584,8 @@ impl App {
 }
 
 /// For tests that click the orbit away from the vessel's own marker and label and from the HUD: every tenth
-/// pick point (canvas pixels, `x y;x y;...`) as `data-ose-orbit-points`, and the planning vessel's own place
-/// as `data-ose-orbit-vessel`, on the map canvas.
+/// pick point (canvas pixels, `x y;x y;...`) as `data-ose-orbit-points`, the number of patches they cover as
+/// `data-ose-orbit-patches`, and the planning vessel's own place as `data-ose-orbit-vessel`, on the map canvas.
 fn publish_orbit_points(
     canvas: &HtmlCanvasElement,
     pick: &[(f64, f64, f64)],
@@ -16603,6 +16603,10 @@ fn publish_orbit_points(
         .map(|(x, y, _)| format!("{x:.0} {y:.0}"))
         .collect();
     set("data-ose-orbit-points", points.join(";"));
+    // how many patches the points cover: a cleared node's planned orbit lingers until the server's new
+    // prediction arrives, and a test must not click it in that gap
+    let patches = pick.iter().filter(|p| p.0.is_nan()).count();
+    set("data-ose-orbit-patches", patches.to_string());
     set(
         "data-ose-orbit-vessel",
         vessel

@@ -163,6 +163,7 @@ pub fn celestial_body(
         "gravityASL",
         "rotationPeriod",
         "initialRotation",
+        "MaxTerrainHeight",
         "isTidallyLocked",
         "hasSolidSurface",
         "hasOcean",
@@ -194,6 +195,7 @@ pub fn celestial_body(
         soi_radius_m: None, // filled in by `resolve_soi` once every body is known
         rotation_period_s: f(d, "rotationPeriod"),
         initial_rotation_deg: f(d, "initialRotation"),
+        max_terrain_height_m: f(d, "MaxTerrainHeight"),
         is_tidally_locked: b(d, "isTidallyLocked"),
         has_solid_surface: b(d, "hasSolidSurface"),
         ocean: b(d, "hasOcean").then(|| Ocean {

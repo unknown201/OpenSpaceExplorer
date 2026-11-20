@@ -119,6 +119,7 @@ mod tests {
             soi_radius_m: soi,
             rotation_period_s: 21_549.425,
             initial_rotation_deg: 0.0,
+            max_terrain_height_m: 0.0,
             is_tidally_locked: false,
             has_solid_surface: true,
             ocean: None,

@@ -69,7 +69,7 @@ namespace OpenSpaceExplorer.Validation
             double ut0 = G.UniverseModel.UniverseTime;
             using (var w = new StreamWriter(Path.Combine(dir, "out", "reentryorbit-parts.csv"), false))
             using (var ev = new StreamWriter(Path.Combine(dir, "out", "reentryorbit-events.csv"), false) { AutoFlush = true })
-            using (var fw = free ? new StreamWriter(Path.Combine(dir, "out", "reentryorbit-forces.csv"), false) : null)
+            using (var fw = new StreamWriter(Path.Combine(dir, "out", "reentryorbit-forces.csv"), false))
             {
                 w.WriteLine("t,alt_m,srf_speed,mach,density,part,index,temp_k,max_temp_k,reentry_flux,ablator_units,exposed,env_flux,atm_flux,local_flux,surface_flux,thermal_mass,wetted_m2");
                 mark("PhysicsSettings occlude area " + PhysicsSettings.OccludeConvectionAreaMultiplier.ToString("R", Inv) + " temp " + PhysicsSettings.OccludeConvectionTemperatureMultiplier.ToString("R", Inv)
@@ -127,8 +127,8 @@ namespace OpenSpaceExplorer.Validation
         // T11 tumble: every aerodynamic force on each part this tick in the part's own frame (KSP2's IForce lists:
         // force and where it acts), with the part's spin, airflow, mass, centre of mass, inertia and angular drag
         // as PhysX has them (Unity frame, part-local).
-        static bool forcesHeader;
-        static void LogForces(VesselComponent v, StreamWriter w, float t)
+        public static bool forcesHeader;
+        public static void LogForces(VesselComponent v, StreamWriter w, float t)
         {
             string F(double x) => x.ToString("R", Inv);
             string V(Vector3 x) => F(x.x) + "," + F(x.y) + "," + F(x.z);

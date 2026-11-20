@@ -182,6 +182,7 @@ mod tests {
             soi_radius_m: None,
             rotation_period_s: 0.0,
             initial_rotation_deg: 0.0,
+            max_terrain_height_m: 0.0,
             is_star: false,
             ocean: None,
             site: None,
