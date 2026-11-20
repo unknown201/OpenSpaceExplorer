@@ -127,8 +127,8 @@ namespace OpenSpaceExplorer.Validation
         // T11 tumble: every aerodynamic force on each part this tick in the part's own frame (KSP2's IForce lists:
         // force and where it acts), with the part's spin, airflow, mass, centre of mass, inertia and angular drag
         // as PhysX has them (Unity frame, part-local).
-        static bool forcesHeader;
-        static void LogForces(VesselComponent v, StreamWriter w, float t)
+        public static bool forcesHeader;
+        public static void LogForces(VesselComponent v, StreamWriter w, float t)
         {
             string F(double x) => x.ToString("R", Inv);
             string V(Vector3 x) => F(x.x) + "," + F(x.y) + "," + F(x.z);

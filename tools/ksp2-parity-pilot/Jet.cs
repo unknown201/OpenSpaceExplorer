@@ -117,7 +117,13 @@ namespace OpenSpaceExplorer.Validation
             IEnumerator Log()
             {
                 using (var w = new StreamWriter(Path.Combine(dir, "out", "jetfly-trace.csv"), false))
+                using (var fw = new StreamWriter(Path.Combine(dir, "out", "jetfly-forces.csv"), false))
+                using (var dw = new StreamWriter(Path.Combine(dir, "out", "jetfly-surfaces.csv"), false))
                 {
+                    // every part's airflow forces (part frame) and each control surface's deflection, per tick
+                    ReentryOrbit.forcesHeader = false;
+                    dw.WriteLine("t,part,index,deflection_deg,qx,qy,qz,qw,vx,vy,vz,gx,gy,gz");
+                    var deflection = typeof(Module_ControlSurface).GetField("_deflection", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                     w.WriteLine("t,phase,srf_speed,vspeed,alt_m,pitch_deg,roll_deg,heading_deg,in_pitch,in_roll,in_yaw,final_thrust_kn,mach,situation,ut");
                     double start = G.UniverseModel.UniverseTime, last = double.NegativeInfinity;
                     while (logging)
@@ -133,6 +139,24 @@ namespace OpenSpaceExplorer.Validation
                             if (part.TryGetModuleData<PartComponentModule_Engine, Data_Engine>(out var de)) thrust += de.FinalThrustValue;
                         string F(double x) => x.ToString("R", Inv);
                         var c = v.flightCtrlState;
+                        float tt = (float)(ut - start);
+                        ReentryOrbit.LogForces(v, fw, tt);
+                        var frame = G.UniverseModel.inertialReferenceFrame.bodyMotionFrame;
+                        var q = frame.localFrame.ToLocalRotation(v.ControlTransform.Rotation);
+                        var sv = Vector.Reframed(v.SurfaceVelocity, frame.localFrame).vector;
+                        var gv = Vector.Reframed(v.gravityForPos, frame.localFrame).vector;
+                        int pi = 0;
+                        foreach (var part in v.SimulationObject.PartOwner.Parts)
+                        {
+                            if (G.SpaceSimulation.TryGetViewObject(part.SimulationObject, out var view))
+                            {
+                                var cs = view.GetComponent<Module_ControlSurface>();
+                                if (cs != null)
+                                    dw.WriteLine(string.Join(",", new[] { tt.ToString("F3", Inv), part.Name, pi.ToString(Inv), F((float)deflection.GetValue(cs)),
+                                        F(q.x), F(q.y), F(q.z), F(q.w), F(sv.x), F(sv.y), F(sv.z), F(gv.x), F(gv.y), F(gv.z) }));
+                            }
+                            pi++;
+                        }
                         w.WriteLine(string.Join(",", new[] {
                             F(ut - start), phase, F(v.SrfSpeedMagnitude), F(v.VerticalSrfSpeed), F(v.AltitudeFromSeaLevel),
                             F(v.Pitch_HorizonRelative), F(v.Roll_HorizonRelative), F(v.Heading), F(c.pitch), F(c.roll), F(c.yaw),

@@ -1105,7 +1105,24 @@ impl Structure {
             craft_controls: craft
                 .parts
                 .iter()
-                .map(|p| p.control.filter(|c| c.valid()))
+                .enumerate()
+                .map(|(i, p)| {
+                    p.control
+                        .map(|mut c| {
+                            // A KSP2 craft file states `AuthorityLimiter` in degrees of the part's range and
+                            // seldom carries the range; the importer leaves such a limit negative for the part
+                            // definition to resolve. Resolve it here, or the whole of the part's settings
+                            // (the limit, which axes it answers) would be dropped as invalid.
+                            if c.surface_authority < 0.0 {
+                                c.surface_authority = def_of(i)
+                                    .map(|d| d.ctrl_range_deg)
+                                    .filter(|r| *r > 0.0)
+                                    .map_or(1.0, |r| (-c.surface_authority / r).clamp(0.0, 1.0));
+                            }
+                            c
+                        })
+                        .filter(|c| c.valid())
+                })
                 .collect(),
             chute_packed: (0..n)
                 .map(|i| {
@@ -5428,6 +5445,11 @@ impl Structure {
         out.torque_knm = self.airflow_moment(flow.frame, &forces);
         self.resolved_aero_forces = Some(forces);
         out
+    }
+
+    /// A control surface's current deflection, rad.
+    pub fn surface_angle(&self, part: usize) -> f64 {
+        self.surface_angles[part]
     }
 
     /// Drop the airflow kept for the next tick (`airflow_one_tick_late`).
