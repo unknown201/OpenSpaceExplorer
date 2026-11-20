@@ -9,9 +9,9 @@ publish.workspace = true
 bevy_ecs = { workspace = true }
 ose-data = { workspace = true }
 ose-math = { workspace = true }
+ose-pilot = { workspace = true }
 ose-sim = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
-ose-pilot = { workspace = true }
 serde_json = { workspace = true }

@@ -232,6 +232,7 @@ struct App {
     ws: Option<WebSocket>,
     /// Campaign was requested; send Hello once the background socket opens.
     login_requested: bool,
+    login_attempt: u64,
     otp_challenge: Option<(String, String)>,
     player_id: Option<u64>,
     drag: Option<(f64, f64)>,
@@ -961,6 +962,7 @@ pub fn start() -> Result<(), JsValue> {
         camera: Camera::new(0),
         ws: None,
         login_requested: false,
+        login_attempt: 0,
         otp_challenge: None,
         player_id: None,
         drag: None,
@@ -2329,6 +2331,8 @@ fn request_sign_in(a: &Shared) {
         set_text(&app.doc, "pilot-chip", &name);
         app.player_name = name;
         app.login_requested = true;
+        app.login_attempt = app.login_attempt.wrapping_add(1);
+        app.login_status("Connecting to server…", false);
     }
     if let Err(e) = connect(a) {
         log(&format!("connection failed: {e:?}"));
@@ -2346,6 +2350,32 @@ fn request_sign_in(a: &Shared) {
         {
             app.sign_in(ws);
         }
+    }
+    // An open socket can also stop receiving replies without closing (for example after a network
+    // change). Never leave the active button ignoring every later click indefinitely.
+    let attempt = a.borrow().login_attempt;
+    let app = a.clone();
+    let timeout = Closure::once_into_js(move || {
+        let mut a = app.borrow_mut();
+        if a.login_requested && a.login_attempt == attempt && a.player_id.is_none() {
+            a.login_requested = false;
+            if let Some(ws) = a.ws.take() {
+                ws.set_onopen(None);
+                ws.set_onclose(None);
+                ws.set_onerror(None);
+                ws.set_onmessage(None);
+                ws.close().ok();
+            }
+            a.connection_status(
+                "disconnected",
+                "The server did not respond. Sign in to try again.",
+            );
+        }
+    });
+    if let Some(window) = web_sys::window() {
+        window
+            .set_timeout_with_callback_and_timeout_and_arguments_0(timeout.unchecked_ref(), 20_000)
+            .ok();
     }
 }
 
@@ -4614,8 +4644,21 @@ fn send(ws: &WebSocket, msg: &ClientMessage) {
 }
 
 fn connect(app: &Shared) -> Result<(), JsValue> {
-    if app.borrow().ws.is_some() {
+    if app
+        .borrow()
+        .ws
+        .as_ref()
+        .is_some_and(|ws| matches!(ws.ready_state(), WebSocket::CONNECTING | WebSocket::OPEN))
+    {
         return Ok(());
+    }
+    // A close event may still be queued when the pilot retries. Its old handlers must not clear
+    // the new connection, or leave the sign-in request waiting on a closed socket.
+    if let Some(ws) = app.borrow_mut().ws.take() {
+        ws.set_onopen(None);
+        ws.set_onclose(None);
+        ws.set_onerror(None);
+        ws.set_onmessage(None);
     }
     let url = ws_url()?;
     let ws = WebSocket::new(&url)?;
@@ -4709,10 +4752,43 @@ fn connect(app: &Shared) -> Result<(), JsValue> {
     {
         let app = app.clone();
         let on_error = Closure::<dyn FnMut()>::new(move || {
-            app.borrow().set_status("connection error");
+            app.borrow().connection_status(
+                "disconnected",
+                "Could not connect to the server. Sign in to try again.",
+            );
         });
         ws.set_onerror(Some(on_error.as_ref().unchecked_ref()));
         on_error.forget();
+    }
+    // Browsers can leave a failed handshake CONNECTING for minutes. A close during the handshake
+    // need not deliver on_close promptly, so release the pending request here as well.
+    {
+        let ws = ws.clone();
+        let app = app.clone();
+        let timeout = Closure::once_into_js(move || {
+            if ws.ready_state() == WebSocket::CONNECTING {
+                ws.set_onopen(None);
+                ws.set_onclose(None);
+                ws.set_onerror(None);
+                ws.set_onmessage(None);
+                ws.close().ok();
+                let mut a = app.borrow_mut();
+                if a.ws.as_ref() == Some(&ws) {
+                    a.ws = None;
+                    a.login_requested = false;
+                    a.connection_status(
+                        "disconnected",
+                        "Connection timed out. Sign in to reconnect.",
+                    );
+                }
+            }
+        });
+        web_sys::window()
+            .ok_or("no window")?
+            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                timeout.unchecked_ref(),
+                15_000,
+            )?;
     }
     app.borrow_mut().ws = Some(ws);
     app.borrow_mut().viewing_sent = None;
@@ -6200,6 +6276,9 @@ impl App {
             menu.set_attribute("data-ose-connection", state).ok();
         }
         set_text(&self.doc, "menu-note", note);
+        if self.screen_open("login") {
+            self.login_status(note, state == "disconnected");
+        }
     }
 
     fn input_value(&self, id: &str) -> String {
@@ -11132,7 +11211,9 @@ impl App {
     /// detail, the rest without their per-part lists.
     fn sync_viewing(&mut self) {
         let now = self.flying.or(self.follow);
-        if self.viewing_sent == Some(now) {
+        // Only a signed-in session may send it: before Hello the server refuses any other message and
+        // closes the socket (which used to drop the sign-in screen's preconnection).
+        if self.viewing_sent == Some(now) || self.player_id.is_none() {
             return;
         }
         if let Some(ws) = &self.ws {

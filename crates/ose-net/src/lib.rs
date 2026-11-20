@@ -14,7 +14,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 72;
+pub const PROTOCOL_VERSION: u16 = 73;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -482,6 +482,22 @@ pub enum ClientMessage {
     },
     /// The campaign's depots and recordings. Answers `Routes`.
     RoutesInfo,
+    /// Make a route from a finished one-way recording (protocol 73): at each launch window the server
+    /// launches a fresh copy of the craft and flies it to the depot. `name` empty: craft and depot names.
+    /// Answers `Routes`.
+    CreateRoute {
+        recording: u64,
+        name: String,
+    },
+    /// Pause a route (its run in flight carries on) or resume it. Answers `Routes`.
+    PauseRoute {
+        id: u64,
+        paused: bool,
+    },
+    /// Delete a route; its run in flight is left where it is. Answers `Routes`.
+    DeleteRoute {
+        id: u64,
+    },
 }
 
 /// A science report (the original's research report).
@@ -1391,8 +1407,45 @@ pub enum ServerMessage {
     Routes {
         depots: Vec<DepotInfo>,
         recordings: Vec<RecordingInfo>,
+        /// Protocol 73.
+        routes: Vec<RouteInfo>,
         reason: Option<String>,
     },
+}
+
+/// A delivery route (`ServerMessage::Routes`, protocol 73).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RouteInfo {
+    pub id: u64,
+    pub name: String,
+    pub owner: u64,
+    /// The recording it was made from.
+    pub recording: u64,
+    pub depot: u64,
+    /// What it is doing or waiting for ("Next launch in 1200 s", "Waiting: no free port at Station").
+    pub status: String,
+    pub paused: Option<String>,
+    pub next_launch_ut: Option<f64>,
+    /// The run in flight: its vessel, if it is still one of its own.
+    pub run_vessel: Option<u64>,
+    /// What each run pumps into the depot.
+    pub cargo: Vec<(String, f64)>,
+    /// Finished runs, oldest first.
+    pub runs: Vec<RouteRunInfo>,
+}
+
+/// A finished run of a route.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RouteRunInfo {
+    pub n: u32,
+    pub vessel_name: String,
+    pub launched_ut: f64,
+    pub ended_ut: f64,
+    /// Delivered, Short, Missed or Lost.
+    pub outcome: String,
+    /// Why it missed or was lost.
+    pub reason: Option<String>,
+    pub delivered: Vec<(String, f64)>,
 }
 
 /// A vessel marked as a depot (`ServerMessage::Routes`).

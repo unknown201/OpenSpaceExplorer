@@ -8,6 +8,7 @@
   <link data-trunk rel="copy-file" href="asset-worker.js" />
   <link data-trunk rel="copy-file" href="asset-packages.js" />
   <link data-trunk rel="copy-file" href="report-bug.js" />
+  <link data-trunk rel="copy-file" href="login-bootstrap.js" />
   <script src="asset-packages.js" defer></script>
   <script src="report-bug.js" defer></script>
   <style>
@@ -1459,10 +1460,12 @@
           <input id="login-email" data-ose="login-email" type="email" maxlength="254" autocomplete="email" placeholder="you@example.com" />
           <label for="login-otp" class="code-only">6-digit code</label>
           <input id="login-otp" class="code-only" data-ose="login-otp" type="text" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="000000" />
-          <button id="login" data-ose="login" type="submit" disabled>Email me a code</button>
+          <button id="login" data-ose="login" type="submit">Email me a code</button>
           <button id="otp-resend" class="code-only" data-ose="otp-resend" type="button">Resend code</button>
           <div id="login-status" data-ose="login-status" role="status" aria-live="polite"></div>
+          <button id="login-reload" type="button" hidden>Reload sign-in</button>
         </form>
+        <script src="login-bootstrap.js"></script>
         <div id="login-version">OpenSpaceExplorer, a shared Kerbol system in the browser</div>
       </div>
       <div class="screen" id="screen-name" data-ose="menu-name">

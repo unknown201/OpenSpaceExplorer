@@ -239,6 +239,17 @@ Colonies, cargo inventory, a funds economy, crew rotation, landed depots (decisi
    checkbox itself is the client's (step 3); it sends `RecordRoute` right after `CraftLaunched`.*
 2. **Route scheduler**: spawned runs and shuttles, windows from rendezvous v2, pad and port checks,
    outcomes, auto-pause, end-of-run modes, warp rules (3.5), restart resume, take control.
+   *Step 2a is done (`crates/ose-routes/src/route.rs`, protocol 73: `CreateRoute`, `PauseRoute`,
+   `DeleteRoute`, routes in `Routes`): one-way routes from KSC that stay docked. A route is made from a
+   one-way recording. The scheduler waits while the recorded depot port is taken, picks the launch window
+   from the proving flight's ascent (time to orbit and downrange angle), and asks the server for a pad
+   launch, which goes through the player launch path (a busy pad makes it wait). The pilot
+   (`ose_pilot::mission`) flies the run into the depot's plane and docks at the recorded port, then pumps
+   what the proving flight delivered, one resource at a time. Each run ends Delivered, Short, Missed or
+   Lost, and a Lost run pauses the route. The test flies the proving flight, frees the port, and a route
+   run launches at the next window and delivers the same monopropellant. Still to do: Return, Rotate and
+   Let go, warp rules, restart resume (a run interrupted by a restart or reload ends as Missed and its
+   vessel stays), take control, and depot-to-depot shuttles.*
 3. **Client**: launch checkbox, routes panel, depot toggle, map tags, toasts.
 4. **Browser e2e** against a local server, never prod: record a run with the bot, create the route,
    and watch two runs. Plus a collision test: two routes into one port at the same window.

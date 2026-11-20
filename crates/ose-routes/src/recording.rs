@@ -113,7 +113,8 @@ pub struct Recording {
     pub site_body: String,
     pub site_lat_deg: f64,
     pub site_lon_deg: f64,
-    /// The depot's name, and its port and ours, once docked.
+    /// The depot's name, and its port and ours, once docked. Our port is named as in `craft`; the depot's
+    /// as the depot was marked (`book::Depot::original`), once the routes book has seen the docking.
     pub depot: Option<String>,
     pub depot_port: Option<String>,
     pub own_port: Option<String>,
@@ -418,20 +419,18 @@ impl Recorder {
             if self.near_guids.is_empty() || theirs.len() != self.near_guids.len() {
                 return self.drop_it("docked with something that is not its depot");
             }
-            self.ours = guids[mine].iter().cloned().collect();
-            let foreign: BTreeSet<String> = guids[theirs].iter().cloned().collect();
+            self.ours = guids[mine.clone()].iter().cloned().collect();
+            let foreign: BTreeSet<String> = guids[theirs.clone()].iter().cloned().collect();
+            // our port by its name in the craft as launched (docking may have renamed it), the
+            // depot's by its name in the docked vessel
             let mut depot_port = None;
             let mut own_port = None;
             for (a, c) in u.docked_links(e) {
-                let (Some(x), Some(y)) = (guids.get(a), guids.get(c)) else {
-                    continue;
-                };
-                if self.ours.contains(x) && foreign.contains(y) {
-                    own_port = Some(x.clone());
-                    depot_port = Some(y.clone());
-                } else if self.ours.contains(y) && foreign.contains(x) {
-                    own_port = Some(y.clone());
-                    depot_port = Some(x.clone());
+                for (x, y) in [(a, c), (c, a)] {
+                    if mine.contains(&x) && theirs.contains(&y) {
+                        own_port = prev.get(x - mine.start).cloned();
+                        depot_port = guids.get(y).cloned();
+                    }
                 }
             }
             self.depot_guids = foreign.clone();

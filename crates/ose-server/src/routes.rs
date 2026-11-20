@@ -1,12 +1,15 @@
-//! Delivery routes on the server (`docs/delivery-routes-design.md`, step 1): depot flags and proving flights.
-//! The state is `ose_routes::Routes`, kept in the campaign (`save::Campaign::routes`), so the save, the
-//! quicksave and revert carry it. The recorder follows each flight every simulation step.
+//! Delivery routes on the server (`docs/delivery-routes-design.md`, steps 1 and 2): depot flags, proving
+//! flights and routes. The state is `ose_routes::Routes`, kept in the campaign (`save::Campaign::routes`),
+//! so the save, the quicksave and revert carry it. The recorder follows each flight every simulation step,
+//! the route pilots (`Shared::route_pilots`, not saved) fly the runs, and once a second the scheduler may
+//! ask for a launch, which goes through the same pad launch as a player's.
 
 use bevy_ecs::entity::Entity;
-use ose_net::{ClientMessage, DepotInfo, RecordingInfo, ServerMessage};
+use ose_net::{ClientMessage, DepotInfo, RecordingInfo, RouteInfo, RouteRunInfo, ServerMessage};
 use ose_routes::recording::State;
+use ose_routes::route::Outcome;
 
-use crate::{owned_vessel, Shared};
+use crate::{flight_spec_for, owned_vessel, Shared};
 
 /// The campaign's depots and recordings, with `reason` for a refusal.
 pub fn info(s: &Shared, reason: Option<String>) -> ServerMessage {
@@ -62,9 +65,49 @@ pub fn info(s: &Shared, reason: Option<String>) -> ServerMessage {
             }
         })
         .collect();
+    let pilots = s.route_pilots.lock().expect("route pilots lock");
+    let routes = c
+        .routes
+        .routes
+        .iter()
+        .map(|r| RouteInfo {
+            id: r.id,
+            name: r.name.clone(),
+            owner: r.owner,
+            recording: r.proving,
+            depot: r.depot,
+            status: r.status.clone(),
+            paused: r.paused.clone(),
+            next_launch_ut: r.next_launch,
+            run_vessel: pilots.vessel(r.id).and_then(id_of),
+            cargo: r.cargo.clone().into_iter().collect(),
+            runs: r
+                .runs
+                .iter()
+                .map(|x| {
+                    let (outcome, reason) = match &x.outcome {
+                        Outcome::Delivered => ("Delivered", None),
+                        Outcome::Short => ("Short", None),
+                        Outcome::Missed(why) => ("Missed", Some(why.clone())),
+                        Outcome::Lost(why) => ("Lost", Some(why.clone())),
+                    };
+                    RouteRunInfo {
+                        n: x.n,
+                        vessel_name: x.vessel_name.clone(),
+                        launched_ut: x.launched_ut,
+                        ended_ut: x.ended_ut,
+                        outcome: outcome.into(),
+                        reason,
+                        delivered: x.delivered.clone().into_iter().collect(),
+                    }
+                })
+                .collect(),
+        })
+        .collect();
     ServerMessage::Routes {
         depots,
         recordings,
+        routes,
         reason,
     }
 }
@@ -117,28 +160,117 @@ pub fn handle(s: &Shared, player: u64, msg: &ClientMessage) -> ServerMessage {
         }
         ClientMessage::ForgetRecording { id } => {
             let mut c = s.campaign.lock().expect("campaign lock");
-            c.routes.forget(player, id)
+            if c.routes.routes.iter().any(|r| r.proving == id) {
+                Err("a route is made from this recording".into())
+            } else {
+                c.routes.forget(player, id)
+            }
+        }
+        ClientMessage::CreateRoute {
+            recording,
+            ref name,
+        } => {
+            let mut c = s.campaign.lock().expect("campaign lock");
+            c.routes.create_route(player, recording, name).map(|id| {
+                tracing::info!(player, recording, route = id, "route created");
+            })
+        }
+        ClientMessage::PauseRoute { id, paused } => {
+            let mut c = s.campaign.lock().expect("campaign lock");
+            c.routes.pause_route(id, paused)
+        }
+        ClientMessage::DeleteRoute { id } => {
+            let mut c = s.campaign.lock().expect("campaign lock");
+            let mut pilots = s.route_pilots.lock().expect("route pilots lock");
+            c.routes.delete_route(&mut pilots, id).map(|_| {
+                tracing::info!(player, route = id, "route deleted");
+            })
         }
         _ => Ok(()),
     };
     info(s, result.err())
 }
 
-/// After each simulation step: follow the flights being recorded, and tell their players what moved on.
-pub fn after_step(s: &Shared) {
-    let changes = {
+/// After each simulation step: follow the flights being recorded, fly the route runs, launch what is due
+/// (once a second), and tell the players concerned what moved on.
+pub fn after_step(s: &Shared, step: u64) {
+    let (mut players, requests) = {
         let mut u = s.universe.lock().expect("sim lock");
         let mut c = s.campaign.lock().expect("campaign lock");
-        c.routes.tick(&mut u)
+        let mut pilots = s.route_pilots.lock().expect("route pilots lock");
+        let mut players: Vec<u64> = c.routes.tick(&mut u).iter().map(|c| c.player).collect();
+        let spec = |craft: &ose_data::craft::Craft| flight_spec_for(s, craft);
+        let catalog = ose_pilot::mission::Catalog {
+            defs: &s.parts,
+            resources: &s.resources,
+            spec: &spec,
+        };
+        players.extend(
+            c.routes
+                .fly(&mut u, &mut pilots, &catalog)
+                .iter()
+                .map(|c| c.owner),
+        );
+        let requests =
+            if step.is_multiple_of(ose_sim::TICKS_PER_SECOND) && !c.routes.routes.is_empty() {
+                c.routes.schedule(&mut u, &pilots)
+            } else {
+                Vec::new()
+            };
+        (players, requests)
     };
-    if changes.is_empty() {
+    for req in requests {
+        launch_run(s, &req);
+        players.push(req.owner);
+    }
+    if players.is_empty() {
         return;
     }
     let msg = info(s, None);
-    let mut players: Vec<u64> = changes.iter().map(|c| c.player).collect();
+    players.sort_unstable();
     players.dedup();
     let mut pending = s.pending.lock().expect("pending lock");
     for p in players {
         pending.push((p, msg.clone()));
+    }
+}
+
+/// Launch a route's run on the pad, as a player's launch, and hand it to the route pilot.
+fn launch_run(s: &Shared, req: &ose_routes::route::LaunchRequest) {
+    let reply = crate::launch_on_pad_now(s, req.owner, &req.craft, None, None);
+    let launched = match reply {
+        ServerMessage::CraftLaunched {
+            vessel: Some(id), ..
+        } => s
+            .vessels
+            .lock()
+            .expect("vessels lock")
+            .iter()
+            .find(|v| v.1 == id)
+            .map(|v| (v.0, id)),
+        ServerMessage::CraftLaunched {
+            reason: Some(why), ..
+        } => {
+            let mut c = s.campaign.lock().expect("campaign lock");
+            c.routes.launch_failed(req.route, &why);
+            return;
+        }
+        _ => None,
+    };
+    let Some((e, id)) = launched else {
+        let mut c = s.campaign.lock().expect("campaign lock");
+        c.routes.launch_failed(req.route, "the launch failed");
+        return;
+    };
+    let mut u = s.universe.lock().expect("sim lock");
+    u.rename_vessel(e, &req.vessel_name);
+    let mut c = s.campaign.lock().expect("campaign lock");
+    let mut pilots = s.route_pilots.lock().expect("route pilots lock");
+    match c
+        .routes
+        .launched(&u, &mut pilots, req.route, e, &req.vessel_name)
+    {
+        Ok(()) => tracing::info!(route = req.route, vessel = id, "route run launched"),
+        Err(why) => c.routes.launch_failed(req.route, &why),
     }
 }
