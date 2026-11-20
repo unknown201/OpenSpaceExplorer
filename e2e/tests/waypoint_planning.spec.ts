@@ -62,7 +62,8 @@ test('planning modifier arrows preserve the burn, warp can be stopped, and the o
   // A click on the orbit offers the original's popup there: time to the point, Add maneuver, Warp to.
   await page.locator('[data-ose="clear-node"]').click();
   await expect(node).toHaveCount(0);
-  // the point of the orbit farthest from the vessel that nothing covers (its marker and label, the HUD), read
+  // the point of the orbit farthest from the vessel that nothing covers (its marker and label, the HUD and its
+  // navball and speed gauge canvases), read
   // afresh each time since the view follows the vessel
   const canvas = page.locator('#gpu');
   const orbitPoint = async () => {
@@ -75,7 +76,7 @@ test('planning modifier arrows preserve the burn, warp can be stopped, and the o
       .split(';')
       .map(p => p.split(' ').map(Number))
       .map(([x, y]) => ({ x: rect.x + x, y: rect.y + y }));
-    const clear = await page.evaluate(ps => ps.map(p => document.elementFromPoint(p.x, p.y)?.tagName === 'CANVAS'), points);
+    const clear = await page.evaluate(ps => ps.map(p => ['gpu', 'map'].includes(document.elementFromPoint(p.x, p.y)?.id ?? '')), points);
     const dist = (p: { x: number; y: number }) => Math.hypot(p.x - vessel.x, p.y - vessel.y);
     const at = points.filter((_, i) => clear[i]).sort((a, b) => dist(b) - dist(a))[0];
     expect(at).toBeDefined();
@@ -99,7 +100,7 @@ test('planning modifier arrows preserve the burn, warp can be stopped, and the o
   await expect(popup).toBeVisible();
   // a point part of the way across from it toward the vessel: off the orbit, and not under the popup or a label
   const offs = [0.25, 0.35, 0.5, 0.65].map(f => ({ x: at.x + (vessel.x - at.x) * f, y: at.y + (vessel.y - at.y) * f }));
-  const free = await page.evaluate(ps => ps.map(p => document.elementFromPoint(p.x, p.y)?.tagName === 'CANVAS'), offs);
+  const free = await page.evaluate(ps => ps.map(p => ['gpu', 'map'].includes(document.elementFromPoint(p.x, p.y)?.id ?? '')), offs);
   const off = offs.find((_, i) => free[i])!;
   expect(off).toBeDefined();
   await page.mouse.click(off.x, off.y);
