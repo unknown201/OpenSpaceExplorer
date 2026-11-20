@@ -1,13 +1,15 @@
 //! Delivery routes on the server (`docs/delivery-routes-design.md`, steps 1 and 2): depot flags, proving
 //! flights and routes. The state is `ose_routes::Routes`, kept in the campaign (`save::Campaign::routes`),
 //! so the save, the quicksave and revert carry it. The recorder follows each flight every simulation step,
-//! the route pilots (`Shared::route_pilots`, not saved) fly the runs, and once a second the scheduler may
-//! ask for a launch, which goes through the same pad launch as a player's.
+//! the route pilots (`Shared::route_pilots`, not saved, made again from the routes after a restart or a
+//! reload) fly the runs, and once a second the scheduler may ask for a launch, which goes through the same
+//! pad launch as a player's.
 
 use bevy_ecs::entity::Entity;
+use ose_net::RouteEnd;
 use ose_net::{ClientMessage, DepotInfo, RecordingInfo, RouteInfo, RouteRunInfo, ServerMessage};
 use ose_routes::recording::State;
-use ose_routes::route::Outcome;
+use ose_routes::route::{Outcome, WhenDelivered};
 
 use crate::{flight_spec_for, owned_vessel, Shared};
 
@@ -81,6 +83,13 @@ pub fn info(s: &Shared, reason: Option<String>) -> ServerMessage {
             next_launch_ut: r.next_launch,
             run_vessel: pilots.vessel(r.id).and_then(id_of),
             cargo: r.cargo.clone().into_iter().collect(),
+            when_delivered: match r.when_delivered {
+                WhenDelivered::Stay => RouteEnd::Stay,
+                WhenDelivered::Rotate => RouteEnd::Rotate,
+                WhenDelivered::Return => RouteEnd::Return,
+                WhenDelivered::LetGo => RouteEnd::LetGo,
+            },
+            stayed: r.stayed,
             runs: r
                 .runs
                 .iter()
@@ -99,6 +108,7 @@ pub fn info(s: &Shared, reason: Option<String>) -> ServerMessage {
                         outcome: outcome.into(),
                         reason,
                         delivered: x.delivered.clone().into_iter().collect(),
+                        after: x.after.clone(),
                     }
                 })
                 .collect(),
@@ -174,6 +184,18 @@ pub fn handle(s: &Shared, player: u64, msg: &ClientMessage) -> ServerMessage {
             c.routes.create_route(player, recording, name).map(|id| {
                 tracing::info!(player, recording, route = id, "route created");
             })
+        }
+        ClientMessage::SetRouteEnd { id, when } => {
+            let mut c = s.campaign.lock().expect("campaign lock");
+            c.routes.set_when_delivered(
+                id,
+                match when {
+                    RouteEnd::Stay => WhenDelivered::Stay,
+                    RouteEnd::Rotate => WhenDelivered::Rotate,
+                    RouteEnd::Return => WhenDelivered::Return,
+                    RouteEnd::LetGo => WhenDelivered::LetGo,
+                },
+            )
         }
         ClientMessage::PauseRoute { id, paused } => {
             let mut c = s.campaign.lock().expect("campaign lock");

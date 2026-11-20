@@ -4953,7 +4953,8 @@ fn handle_message(
             | ClientMessage::RoutesInfo
             | ClientMessage::CreateRoute { .. }
             | ClientMessage::PauseRoute { .. }
-            | ClientMessage::DeleteRoute { .. }),
+            | ClientMessage::DeleteRoute { .. }
+            | ClientMessage::SetRouteEnd { .. }),
         ) => out.push(routes::handle(s, player_id, &msg)),
         Ok(ClientMessage::Viewing { vessel }) => interest::set_viewing(s, player_id, vessel),
         Ok(ClientMessage::TakeControl { vessel }) => {

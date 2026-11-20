@@ -14,7 +14,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 73;
+pub const PROTOCOL_VERSION: u16 = 74;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -498,6 +498,24 @@ pub enum ClientMessage {
     DeleteRoute {
         id: u64,
     },
+    /// What a route's runs do once they have delivered (protocol 74). Answers `Routes`.
+    SetRouteEnd {
+        id: u64,
+        when: RouteEnd,
+    },
+}
+
+/// What a route's run does once it has delivered (`ClientMessage::SetRouteEnd`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RouteEnd {
+    /// Stay docked for good: each run takes a port.
+    Stay,
+    /// Stay docked until the next run is in orbit, then fly home, freeing the port for it.
+    Rotate,
+    /// Undock and fly home to KSC, where it is recovered.
+    Return,
+    /// Undock, back off, and leave it there.
+    LetGo,
 }
 
 /// A science report (the original's research report).
@@ -1430,6 +1448,9 @@ pub struct RouteInfo {
     pub run_vessel: Option<u64>,
     /// What each run pumps into the depot.
     pub cargo: Vec<(String, f64)>,
+    /// Protocol 74: what its runs do once delivered, and the run left docked at the depot.
+    pub when_delivered: RouteEnd,
+    pub stayed: Option<u32>,
     /// Finished runs, oldest first.
     pub runs: Vec<RouteRunInfo>,
 }
@@ -1446,6 +1467,8 @@ pub struct RouteRunInfo {
     /// Why it missed or was lost.
     pub reason: Option<String>,
     pub delivered: Vec<(String, f64)>,
+    /// Protocol 74: what it did after: "docked", "let go", "flying home", "recovered", or what went wrong.
+    pub after: Option<String>,
 }
 
 /// A vessel marked as a depot (`ServerMessage::Routes`).
