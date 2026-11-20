@@ -666,7 +666,7 @@ pub use crate::camera_modes::{is_stable_orbit, CameraMode};
 /// the right on screen (east) and W tips it away from the camera.
 pub const DEFAULT_YAW: f64 = std::f64::consts::PI - 0.4;
 
-use crate::orientation::{fit_distance, MAX_DISTANCE, MIN_DISTANCE};
+use crate::orientation::fit_distance;
 
 pub struct FlightView {
     pub mode: CameraMode,
@@ -686,6 +686,8 @@ pub struct FlightView {
     /// to the craft's size again, refined while its models and part list arrive, until the player zooms.
     framed: Option<(u64, usize, bool)>,
     auto_fit: bool,
+    /// The camera context's zoom and pitch limits (`camera_modes::flight_camera_limits`).
+    limits: crate::camera_modes::CameraLimits,
     spins: HashMap<String, Spin>,
     ksc: Option<(DVec3, DQuat)>,
     ksc_scene_req: bool,
@@ -834,6 +836,7 @@ impl FlightView {
             distance: 35.0,
             framed: None,
             auto_fit: true,
+            limits: crate::camera_modes::flight_camera_limits(false, false),
             spins: body_spins(),
             ksc: None,
             ksc_scene_req: false,
@@ -926,7 +929,8 @@ impl FlightView {
     /// Turn the camera round the vessel by `dyaw` and `dpitch` radians (`interaction::flight_orbit_degrees`).
     pub fn orbit(&mut self, dyaw: f64, dpitch: f64) {
         self.yaw -= dyaw;
-        self.pitch = (self.pitch + dpitch).clamp(-1.45, 1.45);
+        let p = self.limits.max_pitch_rad;
+        self.pitch = (self.pitch + dpitch).clamp(-p, p);
     }
 
     /// The craft part under a pixel of the last frame (nearest box along the camera ray).
@@ -943,7 +947,8 @@ impl FlightView {
     }
 
     pub fn zoom(&mut self, f: f64) {
-        self.distance = (self.distance * f).clamp(MIN_DISTANCE, MAX_DISTANCE);
+        self.distance =
+            (self.distance * f).clamp(self.limits.min_distance_m, self.limits.max_distance_m);
         self.auto_fit = false;
     }
 
@@ -1264,6 +1269,17 @@ impl FlightView {
             inp.atmosphere_m,
             inp.soi_m,
         );
+        // the camera context's limits, held every frame as KSP2's `ClampGimbalState` holds them
+        self.limits = crate::camera_modes::flight_camera_limits(
+            stable,
+            inp.vessel.flight.as_ref().is_some_and(|f| f.eva),
+        );
+        self.distance = self
+            .distance
+            .clamp(self.limits.min_distance_m, self.limits.max_distance_m);
+        self.pitch = self
+            .pitch
+            .clamp(-self.limits.max_pitch_rad, self.limits.max_pitch_rad);
         let mode = match self.mode {
             CameraMode::Auto if stable => CameraMode::Celestial,
             CameraMode::Auto => CameraMode::Horizon,
