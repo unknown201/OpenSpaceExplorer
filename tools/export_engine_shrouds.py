@@ -1,4 +1,6 @@
-"""Export KSP2's engine shrouds (an engine's `Data_Fairing`) to assets/own/engine-shrouds.json.
+"""Export KSP2's part shrouds (`Data_Fairing` with `IsShroud`) to assets/own/engine-shrouds.json.
+
+Engines and heat shields carry one: KSP2 wraps the part down to whatever hangs from its bottom node.
 
 KSP2 does not draw an engine's shroud from a mesh in the engine's prefab: `Module_Fairing` builds it as a
 procedural shroud when a part hangs from the engine's floating node (`FloatingAttachNodeTag`, the bottom
@@ -35,7 +37,7 @@ def shroud_of(part_json: dict) -> dict | None:
         (md["DataObject"] for m in data["serializedPartModules"] for md in m["ModuleData"] if md["Name"] == "Data_Fairing"),
         None,
     )
-    if f is None or not stored(f["FairingEnabled"]):
+    if f is None or not stored(f["FairingEnabled"]) or not f.get("IsShroud"):
         return None
     tag = f["FloatingAttachNodeTag"]
     node = next((n for n in data.get("attachNodes", []) if n["nodeID"] == tag), None)
@@ -64,12 +66,21 @@ def main() -> None:
         stack = {n["id"]: n["size"] for n in p["attach_nodes"] if n["node_type"] == "Stack"}
         if stack:
             nodes[p["id"]] = stack
-        if not (p["engines"] and "PartComponentModule_Fairing" in p["module_names"]):
+        # the procedural fairings, tubes and engine mounts are shaped by the player, not shrouds
+        if "PartComponentModule_Fairing" not in p["module_names"] or p["id"].endswith("_procedural"):
             continue
         part = json.loads((args.parts_dir / f"{p['id']}.json").read_text(encoding="utf-8-sig"))
         s = shroud_of(part)
-        if s is not None:
-            shrouds[p["id"]] = s
+        if s is None:
+            continue
+        # Every shroud runs from its top ring down to its bottom node, except the inflatable heat shield's
+        # (it stops 0.48 m short, its stowed model hiding the gap). Leave out any shroud that does not, until
+        # a KSP2 capture shows how it is drawn; its prefab mesh stays.
+        node_y = next(n["position"]["y"] for n in p["attach_nodes"] if n["id"] == s["node"])
+        if abs(s["start_height"] - s["height"] - node_y) > 0.03:
+            print(f"skipped {p['id']}: shroud ends {s['start_height'] - s['height']:.3f}, node at {node_y:.3f}")
+            continue
+        shrouds[p["id"]] = s
     out = {"shrouds": shrouds, "stack_node_sizes": nodes}
     path = ROOT / "assets/own/engine-shrouds.json"
     path.write_text(json.dumps(out, indent=1, sort_keys=True) + "\n", encoding="utf-8")

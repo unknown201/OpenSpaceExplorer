@@ -189,6 +189,56 @@
    "node_size": 3,
    "side_count": 36,
    "start_height": 1.412
+  },
+  "heatshield_0v": {
+   "base_radius": 0.3125,
+   "height": 0.0789,
+   "max_target": -1,
+   "min_target": 1,
+   "node": "bottom",
+   "node_size": 0,
+   "side_count": 24,
+   "start_height": 0.0219
+  },
+  "heatshield_1v": {
+   "base_radius": 0.625,
+   "height": 0.1597,
+   "max_target": -1,
+   "min_target": 2,
+   "node": "bottom",
+   "node_size": 1,
+   "side_count": 24,
+   "start_height": 0.052
+  },
+  "heatshield_2v": {
+   "base_radius": 1.25,
+   "height": 0.3149,
+   "max_target": -1,
+   "min_target": 3,
+   "node": "bottom",
+   "node_size": 2,
+   "side_count": 36,
+   "start_height": 0.0649
+  },
+  "heatshield_3v": {
+   "base_radius": 1.875,
+   "height": 0.4819,
+   "max_target": -1,
+   "min_target": 4,
+   "node": "bottom",
+   "node_size": 3,
+   "side_count": 36,
+   "start_height": 0.123
+  },
+  "heatshield_4v": {
+   "base_radius": 2.5,
+   "height": 0.6559,
+   "max_target": -1,
+   "min_target": 5,
+   "node": "bottom",
+   "node_size": 4,
+   "side_count": 48,
+   "start_height": 0.172
   }
  },
  "stack_node_sizes": {
