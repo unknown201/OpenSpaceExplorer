@@ -39,6 +39,7 @@ fn main() {
         soi_radius_m: d.soi_radius_m,
         rotation_period_s: d.rotation_period_s,
         initial_rotation_deg: d.initial_rotation_deg,
+        max_terrain_height_m: d.max_terrain_height_m,
         is_star: false,
         ocean: d.ocean.clone(),
         site: None,
