@@ -340,9 +340,9 @@ fn at(f: &Flight, t: f64) -> Option<&Sample> {
 }
 
 /// Fly OSE alongside KSP2's run and hold the two to each other every 10 s: the same height (within 2%, and
-/// 400 m: a tumbling craft replayed from attitude sampled every 0.1 s, or a second's lag after the transonic
-/// stretch, moves it a few hundred metres), the falling speed at each height (within 3%: from Mach 2 down to 1
-/// OSE runs up to 2.5% slow, elsewhere within 0.5%), every part's temperature (within 4% + 8 K), and the
+/// 400 m: a tumbling craft replayed from attitude sampled every 0.1 s moves it a few hundred metres), the
+/// falling speed at each height (within 1%; below 21.5 km that takes KSP2's rotating physics frame,
+/// `flight::rotating_frame_error`), every part's temperature (within 4% + 8 K), and the
 /// same parts lost at about the same time.
 fn compare(name: &str, c: &ose_data::craft::Craft, run: &Run) {
     let n = c.parts.len();
@@ -381,7 +381,7 @@ fn compare(name: &str, c: &ose_data::craft::Craft, run: &Run) {
         // the falling speed against height: OSE's speed where it passed KSP2's height (nearest in time)
         let at_height = speed_at_height(&ose, k.alt, t).unwrap_or(o.speed);
         assert!(
-            (k.speed - at_height).abs() < 0.03 * k.speed.max(100.0),
+            (k.speed - at_height).abs() < 0.01 * k.speed.max(100.0),
             "{name} t {t}: {:.0} m at {at_height:.1} m/s, KSP2 {:.1} m/s",
             k.alt,
             k.speed
