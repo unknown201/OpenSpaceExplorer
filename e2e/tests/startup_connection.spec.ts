@@ -143,13 +143,18 @@ test('a sign-in click while the client loads continues once it is ready',async({
   });
   try {
     await page.goto(baseURL!,{waitUntil:'domcontentloaded'});
+    // The bootstrap script is in charge while the client is held back.
+    await expect(page.locator('#login-status')).toHaveText('Loading sign-in…');
     await page.locator('#login-email').fill('pilot@example.com');
-    await page.locator('#login').click();
+    // Dispatch the click rather than waiting on Playwright's actionability checks: in Firefox those can
+    // stall for the whole action timeout while the page is still loading (seen in CI), and this test is
+    // about the queued request, not hit testing.
+    await page.locator('#login').dispatchEvent('click');
     await expect(page.locator('#login-status')).toContainText('Your request will continue when ready');
     expect(messages).toHaveLength(0);
     release();
     await expect(page.locator('#login-status')).toContainText('not set up');
-    expect(messages).toHaveLength(1);
+    await expect.poll(()=>messages.length).toBe(1);
     expect(messages[0].includes(Buffer.from('pilot@example.com'))).toBe(true);
     await expect(page.locator('#login-reload')).toBeHidden();
   } finally {release();}
