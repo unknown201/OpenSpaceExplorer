@@ -21,6 +21,9 @@ pub struct Depot {
     pub name: String,
     /// Its parts in the vessel carrying it (with what was left docked to it).
     pub parts: BTreeSet<String>,
+    /// Each part's name when marked, and its name now: docking renames repeated names.
+    #[serde(default)]
+    pub names: Vec<(String, String)>,
     /// That vessel's parts last tick, in order, to tell its half of a docking.
     #[serde(default)]
     prev_parts: Vec<String>,
@@ -44,6 +47,22 @@ fn place(u: &Universe, e: Entity) -> Option<(String, DVec3, f64, f64)> {
 }
 
 impl Depot {
+    /// A part's name now, from its name when the depot was marked.
+    pub fn current_name(&self, original: &str) -> Option<&str> {
+        self.names
+            .iter()
+            .find(|(o, _)| o == original)
+            .map(|(_, n)| n.as_str())
+    }
+
+    /// A part's name when the depot was marked, from its name now.
+    pub fn original_name(&self, now: &str) -> Option<&str> {
+        self.names
+            .iter()
+            .find(|(_, n)| n == now)
+            .map(|(o, _)| o.as_str())
+    }
+
     /// The vessel carrying it now, if it is still there.
     pub fn vessel(&self) -> Option<Entity> {
         (self.vessel != Entity::PLACEHOLDER).then_some(self.vessel)
@@ -94,6 +113,14 @@ impl Depot {
             return;
         };
         let guids: Vec<String> = craft.parts.iter().map(|p| p.guid.clone()).collect();
+        if self.names.is_empty() {
+            // marked before names were kept
+            self.names = self
+                .prev_parts
+                .iter()
+                .map(|g| (g.clone(), g.clone()))
+                .collect();
+        }
         let (n, m) = (self.prev_parts.len(), guids.len());
         if n > 0 && m > n {
             // docked: the vessel kept comes first, the one joined to it after
@@ -102,10 +129,16 @@ impl Depot {
             } else {
                 m - n..m
             };
+            for (_, now) in &mut self.names {
+                if let Some(k) = self.prev_parts.iter().position(|g| g == now) {
+                    *now = guids[block.start + k].clone();
+                }
+            }
             self.parts = guids[block].iter().cloned().collect();
         } else {
             let here: BTreeSet<&String> = guids.iter().collect();
             self.parts.retain(|g| here.contains(g));
+            self.names.retain(|(_, now)| here.contains(now));
         }
         self.prev_parts = guids;
         self.last_seen = place(u, self.vessel);
@@ -118,12 +151,18 @@ pub struct Proving {
     pub id: u64,
     pub player: u64,
     pub recorder: Recorder,
+    /// The depot it docked at (`Depot::id`).
+    #[serde(default)]
+    pub depot: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Routes {
     pub depots: Vec<Depot>,
     pub provings: Vec<Proving>,
+    /// Routes made from finished proving flights (`route.rs`).
+    #[serde(default)]
+    pub routes: Vec<crate::route::Route>,
     #[serde(default)]
     next_id: u64,
 }
@@ -136,6 +175,10 @@ pub struct Change {
 }
 
 impl Routes {
+    pub(crate) fn bump_id(&mut self) -> u64 {
+        self.fresh_id()
+    }
+
     fn fresh_id(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id
@@ -175,6 +218,7 @@ impl Routes {
                     owner,
                     name,
                     parts: guids.iter().cloned().collect(),
+                    names: guids.iter().map(|g| (g.clone(), g.clone())).collect(),
                     prev_parts: guids,
                     last_seen: place(u, vessel),
                     vessel,
@@ -205,6 +249,7 @@ impl Routes {
             id,
             player,
             recorder,
+            depot: None,
         });
         Ok(id)
     }
@@ -279,6 +324,17 @@ impl Routes {
             let before = (p.recorder.phase(), p.recorder.recording.markers.len());
             p.recorder.observe(u, &is_depot);
             let after = (p.recorder.phase(), p.recorder.recording.markers.len());
+            if before.0 != Phase::Docked && after.0 == Phase::Docked {
+                // which depot, and its port by the name it had when marked
+                let at = p.recorder.vessel();
+                if let Some(d) = self.depots.iter().find(|d| d.vessel == at) {
+                    p.depot = Some(d.id);
+                    let r = &mut p.recorder.recording;
+                    if let Some(name) = r.depot_port.as_deref().and_then(|n| d.original_name(n)) {
+                        r.depot_port = Some(name.to_string());
+                    }
+                }
+            }
             if before != after || !p.recorder.is_recording() {
                 out.push(Change {
                     player: p.player,
