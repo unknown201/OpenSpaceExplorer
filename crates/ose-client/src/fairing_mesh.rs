@@ -95,18 +95,6 @@ pub fn piece_mesh(
     (pos, uv, tris)
 }
 
-/// Panel `k` as a GLB with `base`'s material.
-pub fn piece_glb(
-    base: &[u8],
-    shape: &FairingShape,
-    def: &FairingDef,
-    k: usize,
-) -> Result<Vec<u8>, String> {
-    let (pos, uv, tris) = piece_mesh(shape, def, k);
-    let src = crate::wing_mesh::read_json(base)?;
-    Ok(mesh_glb(&pos, &uv, &tris, k, &src))
-}
-
 /// KSP2's `FairingsProceduralMat` (proceduralparts-shared_assets_all, shader OAB_Procedural_Fairings) as a
 /// glTF material: near-white albedo, fully metallic with smoothness from its gloss map, flat normals. Its
 /// paint mask is full on both channels; the base colour tint comes from `shroud_item`.
@@ -149,65 +137,165 @@ const GUTTER_GREY: f64 = 0.36792;
 /// `_FairingGutterWidth`, in texture v (3 m of slant per unit): the seam band's width up the wall.
 const GUTTER_WIDTH_V: f64 = 0.008;
 
-/// The seam rings at the shroud's top and bottom edges (`UpdateMeshGutters` bounds the panel in v; u is
-/// unbounded on a shroud, so no vertical seams): thin bands a hair outside the wall.
-pub fn shroud_gutters(
-    shape: &FairingShape,
-    def: &FairingDef,
-) -> (Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<u32>) {
-    let (lo, hi) = (shape.sections[0], shape.sections[shape.sections.len() - 1]);
-    let slant = ((hi.0 - lo.0).powi(2) + (hi.1 - lo.1).powi(2))
-        .sqrt()
-        .max(1e-6);
-    let f = (GUTTER_WIDTH_V * 3.0 / slant).min(0.5);
-    let at = |t: f64| (lo.0 + (hi.0 - lo.0) * t, (lo.1 + (hi.1 - lo.1) * t) + 0.004);
-    let band = |a: f64, b: f64| FairingShape {
-        sections: vec![at(a), at(b)],
-        capped: false,
-        pieces: 0,
-        ejection_force: 0.0,
-    };
-    let (mut pos, mut uv, mut tris) = piece_mesh(&band(0.0, f), def, 0);
-    let (p2, u2, t2) = piece_mesh(&band(1.0 - f, 1.0), def, 0);
-    let off = pos.len() as u32;
-    pos.extend(p2);
-    uv.extend(u2);
-    tris.extend(t2.iter().map(|i| i + off));
-    (pos, uv, tris)
+/// Slant length up the wall at each section, m, from the base ring.
+fn section_slant(shape: &FairingShape) -> Vec<f64> {
+    let mut acc = 0.0;
+    let mut out = Vec::with_capacity(shape.sections.len());
+    for (i, (h, r)) in shape.sections.iter().enumerate() {
+        if i > 0 {
+            let (h0, r0) = shape.sections[i - 1];
+            acc += ((h - h0).powi(2) + (r - r0).powi(2)).sqrt();
+        }
+        out.push(acc);
+    }
+    out
 }
 
-/// The shroud's texture coordinates as `FairingPanel.SetArcPoints` lays them: u runs a ninth of the texture
-/// round the panel (`(panel + t) * 0.11111`), v is the slant length up the wall in metres over 3.
-pub fn shroud_uvs(shape: &FairingShape, def: &FairingDef) -> Vec<[f32; 2]> {
-    let (pos, uv, _) = piece_mesh(shape, def, 0);
-    let (lo, hi) = (shape.sections[0], shape.sections[shape.sections.len() - 1]);
-    let slant = ((hi.0 - lo.0).powi(2) + (hi.1 - lo.1).powi(2)).sqrt() as f32;
-    let height = (hi.0 - lo.0).max(1e-6) as f32;
-    pos.iter()
-        .zip(uv)
-        .map(|(p, t)| {
-            let up = (p[1] - (def.base_height + lo.0) as f32) / height;
-            [t[0] / 9.0, up * slant / 3.0]
+/// Panel `k`'s texture coordinates as `FairingPanel.SetArcPoints` lays them: u runs a ninth of the texture
+/// across each panel (`(panel + t) * 0.11111`), v is the slant length up the wall in metres over 3; a capped
+/// wall's apex sits a last ring's radius further up.
+pub fn panel_uvs(shape: &FairingShape, def: &FairingDef, k: usize) -> Vec<[f32; 2]> {
+    let (pos, uv, _) = piece_mesh(shape, def, k);
+    let slant = section_slant(shape);
+    let w = uv.len() / shape.sections.len().max(1);
+    let apex = slant.last().copied().unwrap_or(0.0) + shape.sections.last().map_or(0.0, |s| s.1);
+    uv.iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let row = i / w.max(1);
+            let v = slant.get(row).copied().unwrap_or(apex);
+            [((k as f32) + t[0]) / 9.0, (v / 3.0) as f32]
         })
+        .take(pos.len())
         .collect()
 }
 
-/// An engine's shroud as a GLB in KSP2's procedural fairing material.
-pub fn shroud_glb(shape: &FairingShape, def: &FairingDef) -> Vec<u8> {
-    let (pos, _, tris) = piece_mesh(shape, def, 0);
-    let uv = shroud_uvs(shape, def);
-    let (gp, gu, gt) = shroud_gutters(shape, def);
+/// A thin strip a hair outside the wall over `rows` (height above the base, radius), between the angles
+/// `arc(radius)` gives, in the part's glTF frame as `piece_mesh` lays the wall.
+fn strip(
+    rows: &[(f64, f64)],
+    def: &FairingDef,
+    arc: impl Fn(f64) -> (f64, f64),
+    steps: usize,
+) -> (Vec<[f32; 3]>, Vec<u32>) {
+    let mut pos = Vec::new();
+    let mut tris = Vec::new();
+    for (h, r) in rows {
+        let (a0, a1) = arc(*r);
+        let r = r + 0.004;
+        for s in 0..=steps {
+            let a = a0 + (a1 - a0) * s as f64 / steps as f64;
+            pos.push([
+                -(r * a.cos()) as f32,
+                (def.base_height + h) as f32,
+                (r * a.sin()) as f32,
+            ]);
+        }
+    }
+    let w = (steps + 1) as u32;
+    for row in 0..rows.len().saturating_sub(1) as u32 {
+        for s in 0..steps as u32 {
+            let (a, b) = (row * w + s, row * w + s + 1);
+            let (c, d) = (a + w, b + w);
+            tris.extend_from_slice(&[a, c, b, b, c, d]);
+        }
+    }
+    if let Some(t) = tris.get(0..3) {
+        let [a, b, c] = [t[0], t[1], t[2]].map(|i| glam::Vec3::from_array(pos[i as usize]));
+        let n = (b - a).cross(c - a);
+        if n.dot(glam::Vec3::new(a.x, 0.0, a.z)) < 0.0 {
+            for t in tris.as_chunks_mut::<3>().0 {
+                t.swap(1, 2);
+            }
+        }
+    }
+    (pos, tris)
+}
+
+/// Panel `k`'s seam lines (`UpdateMeshGutters`): rings at the bottom edge, at the top edge of an open wall
+/// and every 3 m of slant (each whole v), and on a clamshell the two vertical edges where it parts. A shroud
+/// is unbounded in u, so it has no vertical seams.
+pub fn panel_gutters(
+    shape: &FairingShape,
+    def: &FairingDef,
+    k: usize,
+) -> (Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<u32>) {
+    let n = piece_count(shape);
+    let (a0, a1) = (
+        k as f64 / n as f64 * std::f64::consts::TAU,
+        (k + 1) as f64 / n as f64 * std::f64::consts::TAU,
+    );
+    let width = GUTTER_WIDTH_V * 3.0;
+    let slant = section_slant(shape);
+    let total = slant.last().copied().unwrap_or(0.0);
+    // the wall's (height, radius) at slant length `t`
+    let at = |t: f64| -> (f64, f64) {
+        let t = t.clamp(0.0, total);
+        let i = slant
+            .partition_point(|s| *s < t)
+            .clamp(1, slant.len().max(2) - 1);
+        let (s0, s1) = (slant[i - 1], slant[i]);
+        let f = if s1 > s0 { (t - s0) / (s1 - s0) } else { 0.0 };
+        let (p, q) = (shape.sections[i - 1], shape.sections[i]);
+        (p.0 + (q.0 - p.0) * f, p.1 + (q.1 - p.1) * f)
+    };
+    let steps = (def.side_count as usize).max(8) / n.max(1);
+    let mut bands: Vec<(f64, f64)> = vec![(0.0, width)];
+    let mut m = 3.0;
+    while m < total - width {
+        bands.push((m - width * 0.5, m + width * 0.5));
+        m += 3.0;
+    }
+    if !shape.capped {
+        bands.push((total - width, total));
+    }
+    let mut pos = Vec::new();
+    let mut tris = Vec::new();
+    let mut add = |(p, t): (Vec<[f32; 3]>, Vec<u32>)| {
+        let off = pos.len() as u32;
+        pos.extend(p);
+        tris.extend(t.iter().map(|i| i + off));
+    };
+    for (lo, hi) in bands {
+        add(strip(&[at(lo), at(hi)], def, |_| (a0, a1), steps.max(2)));
+    }
+    if shape.pieces > 0 {
+        let rows: Vec<(f64, f64)> = shape.sections.clone();
+        add(strip(&rows, def, |r| (a0, a0 + width / r.max(0.05)), 1));
+        add(strip(&rows, def, |r| (a1 - width / r.max(0.05), a1), 1));
+    }
+    let uv = vec![[0.0, 0.0]; pos.len()];
+    (pos, uv, tris)
+}
+
+/// Panel `k` as a GLB in KSP2's procedural fairing material, its seams in the gutter grey.
+pub fn panel_glb(shape: &FairingShape, def: &FairingDef, k: usize) -> Vec<u8> {
+    let (pos, _, tris) = piece_mesh(shape, def, k);
+    let uv = panel_uvs(shape, def, k);
+    let (gp, gu, gt) = panel_gutters(shape, def, k);
     prims_glb(
         &[(&pos, &uv, &tris, Some(0)), (&gp, &gu, &gt, Some(1))],
-        0,
+        k,
         &procedural_fairing_material(),
     )
 }
 
-/// One panel's mesh as a GLB, with `src`'s materials, textures, images and samplers.
-fn mesh_glb(pos: &[[f32; 3]], uv: &[[f32; 2]], tris: &[u32], k: usize, src: &Value) -> Vec<u8> {
-    let material = src.get("materials").map(|_| 0);
-    prims_glb(&[(pos, uv, tris, material)], k, src)
+/// The shroud's seam rings at its top and bottom edges.
+pub fn shroud_gutters(
+    shape: &FairingShape,
+    def: &FairingDef,
+) -> (Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<u32>) {
+    panel_gutters(shape, def, 0)
+}
+
+/// The shroud's texture coordinates (`panel_uvs` of its one panel).
+pub fn shroud_uvs(shape: &FairingShape, def: &FairingDef) -> Vec<[f32; 2]> {
+    panel_uvs(shape, def, 0)
+}
+
+/// An engine's shroud as a GLB in KSP2's procedural fairing material.
+pub fn shroud_glb(shape: &FairingShape, def: &FairingDef) -> Vec<u8> {
+    panel_glb(shape, def, 0)
 }
 
 /// A GLB of one node whose mesh holds `prims` (positions, uvs, triangles, material index).
@@ -309,7 +397,7 @@ pub fn models_for(
         .collect();
     for (k, name) in names.iter().enumerate() {
         let (s, d) = (shape.clone(), def.clone());
-        gpu.request_built_model(name, BASE_URL, move |base| piece_glb(base, &s, &d, k));
+        gpu.request_built_model(name, BASE_URL, move |_| Ok(panel_glb(&s, &d, k)));
     }
     names.iter().all(|n| gpu.has_model(n)).then_some(names)
 }
@@ -452,5 +540,52 @@ mod tests {
         assert!(ys
             .iter()
             .all(|y| (y + 1.0).abs() < 0.03 || (y - 0.6801).abs() < 0.03));
+    }
+
+    #[test]
+    fn payload_panels_use_ksp2_procedural_fairing_material_and_seams() {
+        let d = ose_data::fairing::def("fairing_1v_procedural").unwrap();
+        let s = FairingShape::cylinder(d, d.height_max.min(7.0));
+        assert!(s.pieces > 0 && s.capped);
+        let k = 1;
+        // u runs a ninth of the texture per panel, offset by the panel's index (FairingPanel.SetArcPoints)
+        let uv = panel_uvs(&s, d, k);
+        let umin = uv.iter().map(|t| t[0]).fold(f32::INFINITY, f32::min);
+        let umax = uv.iter().map(|t| t[0]).fold(0.0, f32::max);
+        assert!((umin - 1.0 / 9.0).abs() < 1e-5 && (umax - 2.0 / 9.0).abs() < 1e-5);
+        // v is the slant up the wall over 3, the apex a last ring's radius past the top section
+        let slant = section_slant(&s);
+        let vmax = uv.iter().map(|t| t[1]).fold(0.0, f32::max);
+        let apex = slant.last().unwrap() + s.sections.last().unwrap().1;
+        assert!((vmax as f64 - apex / 3.0).abs() < 1e-4, "{vmax}");
+        let glb = panel_glb(&s, d, k);
+        let doc = crate::wing_mesh::read_json(&glb).unwrap();
+        assert_eq!(doc["materials"][0]["name"], "FairingsProceduralMat");
+        assert_eq!(doc["meshes"][0]["primitives"][0]["material"], 0);
+        assert_eq!(doc["meshes"][0]["primitives"][1]["material"], 1);
+        // seams: a ring at the base, one every 3 m of slant, and the panel's two parting edges
+        let (gp, _, _) = panel_gutters(&s, d, k);
+        let ys: Vec<f32> = gp.iter().map(|p| p[1] - def_base(d)).collect();
+        assert!(ys.iter().any(|y| y.abs() < 1e-3));
+        if *slant.last().unwrap() > 3.1 {
+            assert!(ys.iter().any(|y| (y - 3.0).abs() < 0.02), "no 3 m seam");
+        }
+        let n = piece_count(&s) as f32;
+        let ang =
+            |p: &[f32; 3]| (p[2].atan2(-p[0]) + std::f32::consts::TAU) % std::f32::consts::TAU;
+        let (a0, a1) = (
+            k as f32 / n * std::f32::consts::TAU,
+            (k + 1) as f32 / n * std::f32::consts::TAU,
+        );
+        assert!(gp.iter().any(|p| (ang(p) - a0).abs() < 1e-3));
+        assert!(gp.iter().any(|p| (ang(p) - a1).abs() < 1e-3));
+        // every seam sits a hair outside the wall and inside the panel's arc
+        assert!(gp
+            .iter()
+            .all(|p| ang(p) >= a0 - 1e-3 && ang(p) <= a1 + 1e-3));
+    }
+
+    fn def_base(d: &FairingDef) -> f32 {
+        d.base_height as f32
     }
 }
