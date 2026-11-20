@@ -20,6 +20,8 @@ pub struct Body {
     pub soi_radius_m: Option<f64>,
     pub rotation_period_s: f64,
     pub initial_rotation_deg: f64,
+    /// The highest the terrain reaches above the radius, m (`MaxTerrainHeight`).
+    pub max_terrain_height_m: f64,
     pub is_star: bool,
     /// Ocean density is authored in tonnes per cubic metre.
     pub ocean: Option<ose_data::Ocean>,
@@ -55,6 +57,7 @@ pub fn spawn_bodies(world: &mut World, defs: &[BodyDef]) -> BodyIndex {
                 soi_radius_m: d.soi_radius_m,
                 rotation_period_s: d.rotation_period_s,
                 initial_rotation_deg: d.initial_rotation_deg,
+                max_terrain_height_m: d.max_terrain_height_m,
                 is_star: d.is_star,
                 ocean: d.ocean.clone(),
                 site: None,
@@ -193,6 +196,7 @@ mod tests {
             soi_radius_m: None,
             rotation_period_s: 21_549.425,
             initial_rotation_deg: 0.0,
+            max_terrain_height_m: 0.0,
             is_tidally_locked: false,
             has_solid_surface: true,
             ocean: None,

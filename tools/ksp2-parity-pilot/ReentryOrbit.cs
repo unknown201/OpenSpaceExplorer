@@ -69,7 +69,7 @@ namespace OpenSpaceExplorer.Validation
             double ut0 = G.UniverseModel.UniverseTime;
             using (var w = new StreamWriter(Path.Combine(dir, "out", "reentryorbit-parts.csv"), false))
             using (var ev = new StreamWriter(Path.Combine(dir, "out", "reentryorbit-events.csv"), false) { AutoFlush = true })
-            using (var fw = free ? new StreamWriter(Path.Combine(dir, "out", "reentryorbit-forces.csv"), false) : null)
+            using (var fw = new StreamWriter(Path.Combine(dir, "out", "reentryorbit-forces.csv"), false))
             {
                 w.WriteLine("t,alt_m,srf_speed,mach,density,part,index,temp_k,max_temp_k,reentry_flux,ablator_units,exposed,env_flux,atm_flux,local_flux,surface_flux,thermal_mass,wetted_m2");
                 mark("PhysicsSettings occlude area " + PhysicsSettings.OccludeConvectionAreaMultiplier.ToString("R", Inv) + " temp " + PhysicsSettings.OccludeConvectionTemperatureMultiplier.ToString("R", Inv)
