@@ -51,6 +51,9 @@ pub struct MissionParams {
     pub accept_miss_m: f64,
     /// Hand over to the approach once braking leaves the target this close (m).
     pub approach_range_m: f64,
+    /// A correction to a pass already inside approach range may cost at most this (m/s); a dearer one
+    /// means the planner has jumped to another path, so the mission brakes at the encounter instead.
+    pub max_close_correction_mps: f64,
     pub max_corrections: u32,
 }
 
@@ -70,6 +73,7 @@ impl MissionParams {
             plan_lead_s: 360.0,
             accept_miss_m: 1_500.0,
             approach_range_m: 8_000.0,
+            max_close_correction_mps: 10.0,
             max_corrections: 12,
         }
     }
@@ -110,6 +114,8 @@ pub struct Mission {
     vessel: Entity,
     phase: Phase,
     encounter: Option<f64>,
+    /// How far from the target the last transfer burn left the predicted pass (m).
+    last_miss: Option<f64>,
     corrections: u32,
     flown_profile: Option<LaunchProfile>,
     /// One line per notable event, for logs and tests.
@@ -129,6 +135,7 @@ impl Mission {
             vessel,
             phase,
             encounter: None,
+            last_miss: None,
             corrections: 0,
             flown_profile: None,
             log: Vec::new(),
@@ -253,6 +260,7 @@ impl Mission {
                             ));
                         }
                         self.encounter = None;
+                        self.last_miss = None;
                         self.phase = Phase::Plan;
                         Status::Running
                     }
@@ -269,8 +277,11 @@ impl Mission {
                             return self.fail("lost the target".into());
                         };
                         let miss = (own.state_at(arrival).0 - target.state_at(arrival).0).length();
-                        self.log
-                            .push(format!("TRANSFER done, predicted pass {miss:.0} m"));
+                        self.log.push(format!(
+                            "TRANSFER done, predicted pass {miss:.0} m in {:.0} s",
+                            arrival - u.ut()
+                        ));
+                        self.last_miss = Some(miss);
                         if miss > self.params.accept_miss_m
                             && self.corrections + 1 < self.params.max_corrections
                         {
@@ -304,6 +315,7 @@ impl Mission {
                             return self.fail(format!("still {range:.0} m away after braking"));
                         }
                         self.encounter = None;
+                        self.last_miss = None;
                         self.phase = Phase::Plan;
                     }
                     Status::Running
@@ -424,6 +436,21 @@ impl Mission {
                 own.frame.z.dot(target.frame.z).clamp(-1.0, 1.0).acos().to_degrees()
             ));
         };
+        // Small corrections near a good pass can stall a few kilometres out; one that suddenly
+        // costs far more is a different path altogether. Keep the pass we have and brake at it.
+        if let (Some(arrival), Some(miss)) = (self.encounter, self.last_miss) {
+            if miss < self.params.approach_range_m
+                && plan.delta_v.length() > self.params.max_close_correction_mps
+            {
+                self.log.push(format!(
+                    "KEEP pass {miss:.0} m: a correction would cost {:.1} m/s",
+                    plan.delta_v.length()
+                ));
+                let dv = target.state_at(arrival).1 - own.state_at(arrival).1;
+                self.phase = Phase::Brake(Burn::new(dv, arrival - 10.0));
+                return Status::Running;
+            }
+        }
         self.encounter = Some(plan.arrival_ut);
         self.log.push(format!(
             "PLAN {}: depart in {:.0} s, {:.1} m/s + braking {:.1} m/s",

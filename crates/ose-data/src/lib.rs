@@ -110,6 +110,10 @@ pub struct CelestialBody {
     pub soi_radius_m: Option<f64>,
     pub rotation_period_s: f64,
     pub initial_rotation_deg: f64,
+    /// The highest the terrain reaches above the radius, m (`MaxTerrainHeight`). KSP2 flies physics in the
+    /// body's rotating frame below 20 km above it.
+    #[serde(default)]
+    pub max_terrain_height_m: f64,
     pub is_tidally_locked: bool,
     pub has_solid_surface: bool,
     pub ocean: Option<Ocean>,
@@ -1142,6 +1146,7 @@ mod tests {
             soi_radius_m: Some(84_159_286.0),
             rotation_period_s: 21_549.425,
             initial_rotation_deg: 90.0,
+            max_terrain_height_m: 0.0,
             is_tidally_locked: false,
             has_solid_surface: true,
             ocean: Some(Ocean {

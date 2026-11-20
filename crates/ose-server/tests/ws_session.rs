@@ -264,6 +264,27 @@ fn response_window() -> impl Iterator<Item = ()> {
 }
 
 #[tokio::test]
+async fn a_view_hint_before_hello_does_not_end_the_handshake() {
+    // Clients sent `Viewing` as soon as the socket opened, before signing in; the server must keep the
+    // connection for the Hello that follows.
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    for msg in [
+        ClientMessage::Viewing { vessel: None },
+        ClientMessage::Hello {
+            protocol: PROTOCOL_VERSION,
+            token: None,
+            display_name: "early viewer".into(),
+        },
+    ] {
+        ws.send(Message::Binary(ose_net::encode(&msg).unwrap().into()))
+            .await
+            .unwrap();
+    }
+    assert!(matches!(recv(&mut ws).await, ServerMessage::Welcome { .. }));
+}
+
+#[tokio::test]
 async fn hello_catalog_and_snapshots() {
     let (_server, addr) = spawn_server().await;
     let mut ws = connect_ws(&addr).await;
@@ -4589,6 +4610,7 @@ async fn a_route_is_recorded_from_the_pad_and_survives_revert_to_launch() {
                 depots,
                 recordings,
                 reason,
+                ..
             } => Some((depots, recordings, reason)),
             _ => None,
         }
@@ -4602,6 +4624,7 @@ async fn a_route_is_recorded_from_the_pad_and_survives_revert_to_launch() {
                 depots,
                 recordings,
                 reason,
+                ..
             } = recv(ws).await
             {
                 let r = (depots, recordings, reason);
@@ -4702,6 +4725,19 @@ async fn a_route_is_recorded_from_the_pad_and_survives_revert_to_launch() {
     let (_, recs, _) = until(&mut ws, |r| r.1.iter().any(|x| x.state == "Dropped")).await;
     assert_eq!(recs[0].dropped.as_deref(), Some("stopped"));
     let id = recs[0].id;
+    // only a finished one-way recording makes a route
+    send_msg(
+        &mut ws,
+        &ClientMessage::CreateRoute {
+            recording: id,
+            name: String::new(),
+        },
+    )
+    .await;
+    until(&mut ws, |r| {
+        r.2.as_deref().is_some_and(|w| w.contains("one-way"))
+    })
+    .await;
     send_msg(&mut ws, &ClientMessage::ForgetRecording { id }).await;
     until(&mut ws, |r| r.1.is_empty()).await;
     send_msg(
