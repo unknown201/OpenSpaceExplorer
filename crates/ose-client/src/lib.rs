@@ -512,6 +512,8 @@ struct App {
     /// Screen points (CSS px) along the planning vessel's current orbit with their UT, from the last map
     /// frame: a click near one adds a maneuver node there, as clicking an orbit does in the original.
     orbit_pick: Vec<(f64, f64, f64)>,
+    /// The point on the orbit last clicked in the map (its UT), offered as Add maneuver / Warp to.
+    orbit_popup: Option<f64>,
     /// The pointer over the 3D view (CSS px from its corner), for lighting up the path a click would put a
     /// node on.
     #[cfg(target_arch = "wasm32")]
@@ -1165,6 +1167,7 @@ pub fn start() -> Result<(), JsValue> {
         eva_walk_base: None,
         eva_jump: false,
         orbit_pick: Vec::new(),
+        orbit_popup: None,
         #[cfg(target_arch = "wasm32")]
         map_cursor: None,
         mnv_dirs: [(0.0, 0.0); 6],
@@ -5415,7 +5418,6 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 && app.in_session
                 && !menu_open
                 && !app.flight_active()
-                && app.is_3d()
             {
                 let rect = app.gpu_canvas.get_bounding_client_rect();
                 if app.map_click(nx - rect.left(), ny - rect.top()) {
@@ -6089,6 +6091,21 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         });
         btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
+    }
+    for (id, add) in [("orbit-add-node", true), ("orbit-warp", false)] {
+        if let Some(btn) = doc.get_element_by_id(id) {
+            let a = app.clone();
+            let cb = Closure::<dyn FnMut()>::new(move || {
+                let mut a = a.borrow_mut();
+                if add {
+                    a.orbit_popup_add_node();
+                } else {
+                    a.orbit_popup_warp();
+                }
+            });
+            btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+            cb.forget();
+        }
     }
     if let Some(btn) = doc.get_element_by_id("add-next-node") {
         let a = app.clone();
@@ -14684,10 +14701,53 @@ impl App {
     /// A click on the map near the planning vessel's orbit puts a maneuver node there (CSS px).
     fn map_click(&mut self, x: f64, y: f64) -> bool {
         let best = maneuver::pick_time(&self.orbit_pick, x, y, None, None);
-        let Some((d2, t)) = best else { return false };
-        if d2 > 14.0 * 14.0 {
+        let hit = best.filter(|(d2, _)| *d2 <= 14.0 * 14.0);
+        let Some((_, t)) = hit else {
+            // a click off the orbit closes the point's popup, as the original's
+            self.close_orbit_popup();
             return false;
+        };
+        self.open_orbit_popup(t, x, y);
+        true
+    }
+
+    /// The original's orbit click (`OrbitClickedMessage`): a popup at the clicked point with the time to it,
+    /// Add maneuver and Warp to. `x`, `y` are canvas pixels.
+    fn open_orbit_popup(&mut self, ut: f64, x: f64, y: f64) {
+        self.orbit_popup = Some(ut);
+        self.lesson_event("OrbitClickedMessage");
+        let Some(el) = self
+            .doc
+            .get_element_by_id("orbit-popup")
+            .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+        else {
+            return;
+        };
+        let rect = self.gpu_canvas.get_bounding_client_rect();
+        let style = el.style();
+        style
+            .set_property("left", &format!("{:.0}px", rect.left() + x + 12.0))
+            .ok();
+        style
+            .set_property("top", &format!("{:.0}px", rect.top() + y + 12.0))
+            .ok();
+        el.set_attribute("data-ose-ut", &format!("{ut:.1}")).ok();
+        el.class_list().add_1("open").ok();
+        self.update_node_eta();
+    }
+
+    fn close_orbit_popup(&mut self) {
+        if self.orbit_popup.take().is_some() {
+            if let Some(el) = self.doc.get_element_by_id("orbit-popup") {
+                el.class_list().remove_1("open").ok();
+            }
         }
+    }
+
+    /// Add maneuver on the orbit popup: a node at the clicked point.
+    fn orbit_popup_add_node(&mut self) {
+        let Some(t) = self.orbit_popup else { return };
+        self.close_orbit_popup();
         // Keep the view where it is: add_node frames the vessel's orbit.
         let (dist, focus, offset) = (self.orbit_dist_km, self.camera.focus, self.camera.offset);
         let m_per_px = self.camera.m_per_px;
@@ -14701,7 +14761,13 @@ impl App {
             set_input_value(&self.doc, "node-dt", hud::node_dt_to_slider(dt));
         }
         self.send_node();
-        true
+    }
+
+    /// Warp to on the orbit popup: coast to the clicked point.
+    fn orbit_popup_warp(&mut self) {
+        let Some(t) = self.orbit_popup else { return };
+        self.close_orbit_popup();
+        self.start_warp_to(t, "the orbit point");
     }
 
     /// A node the engines have flown (its time passed, no burn under way and none stopped short) is done:
@@ -14901,13 +14967,24 @@ impl App {
 
     /// The node panel's countdown to the node being edited. Every frame, in flight as well as in the map: it used
     /// to be refreshed only by the map's drawing, so in flight it froze at the value the map last showed.
-    fn update_node_eta(&self) {
-        let Some(node) = self.node else { return };
+    fn update_node_eta(&mut self) {
         let ut = self.time.ut_at(now_ms());
-        let text = hud::fmt_dt(node.ut - ut);
-        if let Some(el) = self.doc.get_element_by_id("node-dt-text") {
-            if el.text_content().as_deref() != Some(text.as_str()) {
-                el.set_text_content(Some(&text));
+        let set = |id: &str, text: &str| {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                if el.text_content().as_deref() != Some(text) {
+                    el.set_text_content(Some(text));
+                }
+            }
+        };
+        if let Some(node) = self.node {
+            set("node-dt-text", &hud::fmt_dt(node.ut - ut));
+        }
+        // The orbit point's popup counts down too, and goes with the map or once the point is passed.
+        if let Some(t) = self.orbit_popup {
+            if self.flight_active() || t <= ut {
+                self.close_orbit_popup();
+            } else {
+                set("orbit-popup-t", &hud::fmt_dt(t - ut));
             }
         }
     }
@@ -15475,6 +15552,17 @@ impl App {
             }
         }
         self.draw_vessels(ut, &positions, centre);
+        if let Some(scene) = &self.scene {
+            let planner = self.my_vessel().map(|(id, _)| id);
+            let cam = self.camera;
+            self.orbit_pick = orbit_pick_points(scene, planner, self.node, ut, &positions, |p| {
+                Some(cam.to_screen(p, centre))
+            });
+            let vessel_px = planner
+                .and_then(|id| scene.vessel(id))
+                .map(|v| cam.to_screen(scene.vessel_position(v, ut), centre));
+            publish_orbit_points(&self.gpu_canvas, &self.orbit_pick, vessel_px);
+        }
         self.draw_node(&positions, centre);
         self.update_breadcrumbs();
     }
@@ -16017,50 +16105,13 @@ impl App {
         // Pick points along the planning vessel's path (one orbit of each patch at most): a click puts a node
         // there, also after another node (protocol 46 chains them). The patch that ends at the node being
         // edited runs on past it, so the node slides along its orbit.
-        self.orbit_pick.clear();
-        if let Some(v) = planner.and_then(|id| scene.vessel(id)) {
-            let edited = self.node.filter(|n| n.vessel == v.id).map(|n| n.ut);
-            let spans: Vec<(usize, ose_net::OrbitElements, f64, f64)> =
-                match scene.trajectories.get(&v.id) {
-                    Some(ps) if !ps.is_empty() => ps
-                        .iter()
-                        .take(8)
-                        .map(|p| {
-                            let open = p.end == PatchEnd::Maneuver
-                                && edited.is_some_and(|e| (e - p.end_ut).abs() < 1.0);
-                            (
-                                p.body as usize,
-                                p.orbit,
-                                p.start_ut.max(ut),
-                                if open { f64::INFINITY } else { p.end_ut },
-                            )
-                        })
-                        .collect(),
-                    _ => vec![(v.reference_body as usize, v.orbit, ut, f64::INFINITY)],
-                };
-            for (bi, elements, start, end) in spans {
-                let Some(body) = scene.bodies.get(bi) else {
-                    continue;
-                };
-                let orbit = scene::orbit_from(body.mu, &elements);
-                let span = if orbit.period.is_finite() {
-                    orbit.period.min(end - start)
-                } else {
-                    (end - start).min(6.0 * 3600.0)
-                };
-                if span.is_finite() && span > 0.0 {
-                    for k in 0..=360 {
-                        let t = start + span * k as f64 / 360.0;
-                        if let Some((x, y)) = project(to_km(positions[bi] + orbit.position_at(t))) {
-                            self.orbit_pick.push((x, y, t));
-                        }
-                    }
-                    // A truncated closed patch can end many revolutions before the next
-                    // patch starts. Never interpolate a straight line through that gap.
-                    self.orbit_pick.push((f64::NAN, f64::NAN, f64::NAN));
-                }
-            }
-        }
+        self.orbit_pick = orbit_pick_points(scene, planner, self.node, ut, positions, |p| {
+            project(to_km(p))
+        });
+        let vessel_px = planner
+            .and_then(|id| scene.vessel(id))
+            .and_then(|v| project(to_km(scene.vessel_position(v, ut))));
+        publish_orbit_points(&self.gpu_canvas, &self.orbit_pick, vessel_px);
         // Closest approach to the target over the next orbit (the original's ClosestApproach event), when both
         // go around the same body: a marker on each orbit with the separation and the time.
         let approach = (|| {
@@ -16530,6 +16581,97 @@ impl App {
             }
         }
     }
+}
+
+/// For tests that click the orbit away from the vessel's own marker and label and from the HUD: every tenth
+/// pick point (canvas pixels, `x y;x y;...`) as `data-ose-orbit-points`, the number of patches they cover as
+/// `data-ose-orbit-patches`, and the planning vessel's own place as `data-ose-orbit-vessel`, on the map canvas.
+fn publish_orbit_points(
+    canvas: &HtmlCanvasElement,
+    pick: &[(f64, f64, f64)],
+    vessel: Option<(f64, f64)>,
+) {
+    let set = |name: &str, value: String| {
+        if canvas.get_attribute(name).as_deref() != Some(value.as_str()) {
+            canvas.set_attribute(name, &value).ok();
+        }
+    };
+    let points: Vec<String> = pick
+        .iter()
+        .step_by(10)
+        .filter(|p| p.0.is_finite() && p.1.is_finite())
+        .map(|(x, y, _)| format!("{x:.0} {y:.0}"))
+        .collect();
+    set("data-ose-orbit-points", points.join(";"));
+    // how many patches the points cover: a cleared node's planned orbit lingers until the server's new
+    // prediction arrives, and a test must not click it in that gap
+    let patches = pick.iter().filter(|p| p.0.is_nan()).count();
+    set("data-ose-orbit-patches", patches.to_string());
+    set(
+        "data-ose-orbit-vessel",
+        vessel
+            .map(|(x, y)| format!("{x:.0} {y:.0}"))
+            .unwrap_or_default(),
+    );
+}
+
+/// Pick points along the planning vessel's path (one orbit of each patch at most), as screen pixels with
+/// their UT: a click there offers a maneuver node or a warp (`map_click`), also after another node (protocol
+/// 46 chains them). The patch that ends at the node being edited runs on past it, so the node slides along
+/// its orbit. NaN entries separate patches. `project` maps a world position (metres) to the screen.
+fn orbit_pick_points(
+    scene: &scene::Scene,
+    planner: Option<u64>,
+    node: Option<Node>,
+    ut: f64,
+    positions: &[ose_math::DVec3],
+    project: impl Fn(ose_math::DVec3) -> Option<(f64, f64)>,
+) -> Vec<(f64, f64, f64)> {
+    let mut pick = Vec::new();
+    if let Some(v) = planner.and_then(|id| scene.vessel(id)) {
+        let edited = node.filter(|n| n.vessel == v.id).map(|n| n.ut);
+        let spans: Vec<(usize, ose_net::OrbitElements, f64, f64)> =
+            match scene.trajectories.get(&v.id) {
+                Some(ps) if !ps.is_empty() => ps
+                    .iter()
+                    .take(8)
+                    .map(|p| {
+                        let open = p.end == PatchEnd::Maneuver
+                            && edited.is_some_and(|e| (e - p.end_ut).abs() < 1.0);
+                        (
+                            p.body as usize,
+                            p.orbit,
+                            p.start_ut.max(ut),
+                            if open { f64::INFINITY } else { p.end_ut },
+                        )
+                    })
+                    .collect(),
+                _ => vec![(v.reference_body as usize, v.orbit, ut, f64::INFINITY)],
+            };
+        for (bi, elements, start, end) in spans {
+            let Some(body) = scene.bodies.get(bi) else {
+                continue;
+            };
+            let orbit = scene::orbit_from(body.mu, &elements);
+            let span = if orbit.period.is_finite() {
+                orbit.period.min(end - start)
+            } else {
+                (end - start).min(6.0 * 3600.0)
+            };
+            if span.is_finite() && span > 0.0 {
+                for k in 0..=360 {
+                    let t = start + span * k as f64 / 360.0;
+                    if let Some((x, y)) = project(positions[bi] + orbit.position_at(t)) {
+                        pick.push((x, y, t));
+                    }
+                }
+                // A truncated closed patch can end many revolutions before the next
+                // patch starts. Never interpolate a straight line through that gap.
+                pick.push((f64::NAN, f64::NAN, f64::NAN));
+            }
+        }
+    }
+    pick
 }
 
 fn body_colour(id: &str, is_star: bool) -> &'static str {
