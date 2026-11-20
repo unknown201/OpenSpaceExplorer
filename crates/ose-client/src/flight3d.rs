@@ -2314,6 +2314,10 @@ impl FlightView {
                         let wpos = pos + vessel_rot * (*flp + drift + origin);
                         let mut it =
                             DrawItem::lit(name, wpos - cam, vessel_rot * *flq * tumble, 1.0, sun);
+                        crate::fairing_mesh::tint_base(
+                            &mut it.color,
+                            part_paint(craft, *fi, inp.paint),
+                        );
                         it.ambient = part_ambient;
                         it.fill_dir = up;
                         it.fill = 0.25;
