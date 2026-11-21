@@ -1,6 +1,7 @@
 # Colonies: design and plan
 
-Status: **step 1 and the colony panel built** (2026-11-21, protocol 75), with Josh's answers to the first questions (section 5).
+Status: **step 1, the colony panel and routes to colonies built** (2026-11-21, protocols 75 and 78), with Josh's
+answers to the first questions (section 5).
 Later steps follow the agreed order in section 4.
 
 ## 1. Why colonies, and what KSP2 had
@@ -76,9 +77,7 @@ Code: `crates/ose-colonies` (rules, tested on the Mun in `tests/found_and_launch
    card of the one picked shows its body and site, residents, vessels, launches and stock (Metal first, in
    units and tonnes), and its founder can abandon it there. Still to come: a colony icon on the map and in
    the flight view.
-2. **Delivery routes to colonies**: `Endpoint::Colony(id)` (routes design 3.1). A run lands within the
-   colony's radius instead of docking, and its tanks become stock (or are pumped into the colony's tanks).
-   Needs the route pilot to land at a site, which ose-pilot's descent (R6) nearly does.
+2. ~~**Delivery routes to colonies**~~ (built, protocol 78): see section 6.
 3. **Colony CommNet**: a colony with an antenna is a ground station (KSP2's `IsCommNetSource`).
 4. ~~Building costs parts too~~: done in step 1 (Metal).
 5. **In-situ resources**: an abundance map per body (KSP2's `AbundanceRequest`), drills and converters
@@ -95,3 +94,31 @@ Code: `crates/ose-colonies` (rules, tested on the Mun in `tests/found_and_launch
 4. **The order of section 4 is agreed**: colony panel, routes to colonies, CommNet, then resources and
    population.
 5. **Colony research has its own path in the tech tree.**
+
+## 6. Routes to colonies (built)
+
+A route's endpoint is a depot or a colony (`ose_routes::route::Endpoint`, saved with the route; routes saved
+before it load as depot routes).
+
+- **Proving flight**: the player records a flight from the pad as for a depot route, lands within a colony
+  and stops the recording there (`StopRecording`). The server sees the vessel is landed and one of the
+  colony's members, and ends the recording **Landed** (`Routes::finish_at_colony`): what the vessel still
+  holds (all but electric charge and intake air) is the cargo. Only airless bodies yet, where the route
+  pilot can land; a colony under an atmosphere refuses with a reason.
+- **Route**: `CreateRoute` from a Landed recording makes a colony route (`RouteInfo::colony`). Its runs
+  always stay (`SetRouteEnd` refuses anything else): the run is the delivery.
+- **Runs**: no launch window is needed (the trip phases its own transfer), so a run launches 30 s after the
+  last one ends. The route pilot (`ose_pilot::trip`) climbs to orbit, moves sphere of influence by sphere of
+  influence to the colony's body into a low circular orbit, then lands (`ose_pilot::landing`): it rounds the
+  orbit out if the capture left it eccentric, turns the plane over the aim point, lowers periapsis just
+  over it, brakes under closed-loop guidance and settles. Each run aims 120 m from the site, a golden angle
+  further round than the last, so the runs do not land on each other. A run that lands within the colony's
+  300 m is **Delivered** (or **Short** if it holds less than the proving flight did) and its vessel joins
+  the colony's stock; one that lands further away **Missed**.
+- **Restart**: a run in flight is found by its name and its trip is planned again from where it is (on the
+  ground at KSC it climbs, in orbit it carries on); one that landed in the colony meanwhile is Delivered.
+- **Abandon**: abandoning a colony pauses its routes.
+
+Tested on the Mun: `crates/ose-pilot/tests/landing.rs` (landings within 30 m of two sites from a 25 km
+orbit, and from low Kerbin orbit to a Mun site, 12 m off) and `crates/ose-routes/tests/colony_route.rs`
+(record, create, restart, land, abandon).

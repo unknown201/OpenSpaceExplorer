@@ -114,6 +114,8 @@ pub fn handle(s: &Shared, player: u64, msg: &ClientMessage) -> ServerMessage {
             let mut c = s.campaign.lock().expect("campaign lock");
             c.colonies.abandon(id, player).map(|()| {
                 tracing::info!(player, colony = id, "colony abandoned");
+                // routes to it stop launching
+                c.routes.colony_abandoned(id);
                 true
             })
         }

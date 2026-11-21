@@ -55,8 +55,12 @@ enum Phase {
     PlanDeorbit,
     Deorbit(Burn),
     Coast,
-    Brake { end_ut: f64 },
-    Settle { still_s: f64 },
+    Brake {
+        end_ut: f64,
+    },
+    Settle {
+        still_s: f64,
+    },
     Down,
 }
 
@@ -268,7 +272,14 @@ impl Landing {
                 self.log.push(format!(
                     "site {:.0} m up, {:.1} deg off the plane",
                     s_now.length() - body(u, e).map_or(0.0, |x| x.2),
-                    (90.0 - s_now.normalized().dot(o.frame.z).clamp(-1.0, 1.0).acos().to_degrees()).abs()
+                    (90.0
+                        - s_now
+                            .normalized()
+                            .dot(o.frame.z)
+                            .clamp(-1.0, 1.0)
+                            .acos()
+                            .to_degrees())
+                    .abs()
                 ));
                 self.log.push(format!(
                     "deorbit {:.1} m/s at {:.0} s, periapsis {:.2} deg from the site",

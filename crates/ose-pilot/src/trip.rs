@@ -127,6 +127,8 @@ impl Trip {
                 }
             },
             Phase::Soi(s) => {
+                // a booster that ran dry on the way up goes before the transfer burns
+                crate::stage_if_spent(u, e);
                 let status = s.update(u, e);
                 self.log.append(&mut s.log);
                 match status {
@@ -198,9 +200,5 @@ fn hop(u: &Universe, e: Entity, to: &str) -> Result<Option<(Entity, f64, DVec3)>
     if u.world.get::<Body>(up).is_none() {
         return Err("no route between these bodies".into());
     }
-    Ok(Some((
-        up,
-        safe_altitude(u, up) + 30_000.0,
-        sense_of(here),
-    )))
+    Ok(Some((up, safe_altitude(u, up) + 30_000.0, sense_of(here))))
 }

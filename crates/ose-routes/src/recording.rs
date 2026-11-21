@@ -102,6 +102,8 @@ pub enum State {
     RoundTrip,
     /// Finished while docked at the depot: the vessel stays (design 3.10).
     OneWay,
+    /// Finished landed at a colony: the vessel stays, and what it carries is the colony's stock.
+    Landed,
     Dropped(String),
 }
 
@@ -617,6 +619,27 @@ impl Recorder {
         let ut = u.ut();
         self.close_phase(ut, &craft, Phase::Docked);
         self.recording.state = State::OneWay;
+        Ok(())
+    }
+
+    /// End the recording landed (at a colony, the caller has checked): what our parts still hold is what
+    /// was delivered, except electric charge and intake air, which are free.
+    pub fn finish_landed(&mut self, u: &mut Universe) -> Result<(), String> {
+        if !self.is_recording() {
+            return Err("not recording".into());
+        }
+        let craft = self.follow(u).ok_or("the vessel is gone")?;
+        let (p, _) = flight_state(u, self.vessel).ok_or("the vessel is gone")?;
+        if !p.landed || p.crashed {
+            return Err("land first".into());
+        }
+        let mut held = sum_tanks(&craft, &|g| self.with_us(g));
+        held.retain(|k, v| !ose_colonies::FREE.contains(&k.as_str()) && *v > 1e-6);
+        self.recording.delivered = held;
+        let ut = u.ut();
+        let phase = self.phase;
+        self.close_phase(ut, &craft, phase);
+        self.recording.state = State::Landed;
         Ok(())
     }
 
