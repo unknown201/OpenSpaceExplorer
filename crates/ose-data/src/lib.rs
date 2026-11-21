@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod colony;
 pub mod craft;
 pub mod engine_shroud;
 pub mod fairing;

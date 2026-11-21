@@ -14,7 +14,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 74;
+pub const PROTOCOL_VERSION: u16 = 75;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -503,6 +503,18 @@ pub enum ClientMessage {
         id: u64,
         when: RouteEnd,
     },
+    /// Found a colony where the player's `vessel` stands (protocol 75, `docs/colonies-design.md`): landed,
+    /// crewed and carrying a colony trunk. Answers `Colonies`; the launch sites gain the colony's pad.
+    FoundColony {
+        vessel: u64,
+        name: String,
+    },
+    /// Give up one of the player's colonies; its vessels stay. Answers `Colonies`.
+    AbandonColony {
+        id: u64,
+    },
+    /// The campaign's colonies. Answers `Colonies`.
+    ColoniesInfo,
 }
 
 /// What a route's run does once it has delivered (`ClientMessage::SetRouteEnd`).
@@ -1044,6 +1056,12 @@ pub struct LaunchSite {
     pub lon_deg: f64,
     /// Which way a plane faces there, compass degrees (90 = east).
     pub heading_deg: f64,
+    /// Protocol 75: the body it stands on (`None`: the home body), and the colony whose pad it is. A craft
+    /// launched there is paid for out of the colony's stock and crewed by its residents.
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub colony: Option<u64>,
 }
 
 /// One planned impulsive burn (a maneuver node), in the orbital frame at `ut`.
@@ -1429,6 +1447,33 @@ pub enum ServerMessage {
         routes: Vec<RouteInfo>,
         reason: Option<String>,
     },
+    /// The campaign's colonies (protocol 75): the answer to the colony messages, and sent to everyone when
+    /// one is founded or abandoned. `reason` says why a request was refused.
+    Colonies {
+        colonies: Vec<ColonyInfo>,
+        reason: Option<String>,
+    },
+}
+
+/// A colony (`ServerMessage::Colonies`, protocol 75): a site on a body whose landed vessels belong to it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ColonyInfo {
+    pub id: u64,
+    pub name: String,
+    pub owner: u64,
+    pub owner_name: String,
+    pub body: String,
+    pub lat_deg: f64,
+    pub lon_deg: f64,
+    pub founded_ut: f64,
+    /// Crafts launched from its pad.
+    pub launches: u32,
+    /// Its vessels, as streamed (vessels in another player's time are left out).
+    pub vessels: Vec<u64>,
+    /// The Kerbals aboard its vessels.
+    pub residents: Vec<String>,
+    /// What its vessels' tanks hold: (resource, stored, capacity).
+    pub stock: Vec<(String, f64, f64)>,
 }
 
 /// A delivery route (`ServerMessage::Routes`, protocol 73).

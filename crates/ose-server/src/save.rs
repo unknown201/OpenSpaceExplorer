@@ -119,6 +119,9 @@ pub struct Campaign {
     /// Delivery routes: depots and proving flights (`routes.rs`).
     #[serde(default)]
     pub routes: ose_routes::Routes,
+    /// Colonies: sites whose landed vessels are their stock and residents (`colonies.rs`).
+    #[serde(default)]
+    pub colonies: ose_colonies::Colonies,
 }
 
 fn shared_id() -> String {
@@ -145,6 +148,7 @@ impl Default for Campaign {
             roster: Vec::new(),
             quicksave: None,
             routes: Default::default(),
+            colonies: Default::default(),
         }
     }
 }
