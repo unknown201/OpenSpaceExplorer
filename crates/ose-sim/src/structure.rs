@@ -163,12 +163,15 @@ pub struct Structure {
     engine_spool: Vec<f64>,
     /// Every mode of each engine (`Data_Engine.engineModes`), the one it runs in, and a switch under way:
     /// the mode it is changing to and the seconds left (Module_Engine.SwitchingEngineMode's waits).
-    engine_modes: Vec<Vec<ose_data::EngineMode>>,
+    pub(crate) engine_modes: Vec<Vec<ose_data::EngineMode>>,
     pub engine_mode: Vec<usize>,
     engine_switch: Vec<Option<(usize, f64)>>,
     /// Engines flamed out (Module_Engine `Flameout`): a jet starved of intake air or below its
     /// `flameoutBar`. A flamed-out engine has no throttle and no spool until it can breathe again.
     pub engine_flameout: Vec<bool>,
+    /// `EngineAutoSwitchMode` (the part window's Auto Switch, on by default): a multi-mode engine that
+    /// flames out changes to a mode it can feed.
+    pub engine_auto_switch: Vec<bool>,
     /// Each engine's thrust last tick, kN: while it changes mode an engine keeps it (the original holds
     /// FinalThrustValue on the stale propellant state and freezes the spool).
     engine_thrust_last: Vec<f64>,
@@ -1015,6 +1018,7 @@ impl Structure {
             engine_mode: vec![0; n],
             engine_switch: vec![None; n],
             engine_flameout: vec![false; n],
+            engine_auto_switch: vec![true; n],
             engine_thrust_last: vec![0.0; n],
             intakes: (0..n)
                 .map(|i| def_of(i).and_then(|d| d.intake.clone()))
@@ -1484,6 +1488,11 @@ impl Structure {
                 self.change_engine_mode(i, usize::from(on), running);
                 true
             }
+            // the part window's Auto Switch
+            "automode" if self.engine_modes[i].len() > 1 => {
+                self.engine_auto_switch[i] = on;
+                true
+            }
             "deploy" => {
                 let panel =
                     self.electric[i].solar_deployable && self.electric[i].solar_output > 0.0;
@@ -1923,6 +1932,16 @@ impl Structure {
         true
     }
 
+    /// How many modes engine `i` has (0 for a part that is no engine).
+    pub fn engine_mode_count(&self, i: usize) -> usize {
+        self.engine_modes.get(i).map_or(0, Vec::len)
+    }
+
+    /// The mode engine `i` is changing to, while it waits out a mode change (`EngineState.ChangingMode`).
+    pub fn engine_changing_to(&self, i: usize) -> Option<usize> {
+        self.engine_switch.get(i).copied().flatten().map(|(m, _)| m)
+    }
+
     /// Engine `i` takes up `mode`'s rated thrust, Isp, mixture, response, jet curves and nozzles.
     fn take_engine_mode(&mut self, i: usize, mode: usize) {
         let Some(m) = self.engine_modes[i].get(mode).cloned() else {
@@ -1982,7 +2001,10 @@ impl Structure {
     /// An engine that flames out with more than one mode switches, as Module_Engine.AutoSwitchModes does,
     /// to a mode burning another mixture whose every ingredient it can reach (intake air included).
     fn auto_switch_mode(&mut self, i: usize, running: bool) {
-        if self.engine_modes[i].len() <= 1 || self.engine_switch[i].is_some() {
+        if self.engine_modes[i].len() <= 1
+            || self.engine_switch[i].is_some()
+            || !self.engine_auto_switch[i]
+        {
             return;
         }
         let current = self.engine_modes[i][self.engine_mode[i]]
@@ -7398,6 +7420,50 @@ mod tests {
         assert_eq!(s.engine_thrust_kn[engine], 180.0);
         assert_eq!(s.engine_mixture[engine].as_deref(), Some("Methalox"));
         assert!(s.engine_jet[engine].is_none() && s.engine_response[engine].is_none());
+    }
+
+    #[test]
+    fn a_rapier_with_auto_switch_off_stays_flamed_out_in_its_mode() {
+        let (mut s, p, engine, nose) = jet_on_the_runway();
+        let (_, defs, _) = assets();
+        let rapier = defs
+            .iter()
+            .find(|d| d.id == "engine_1v_methane-methalox_rapier")
+            .unwrap();
+        s.engine_modes[engine] = rapier.engines.clone();
+        s.take_engine_mode(engine, 0);
+        assert!(s.engine_auto_switch[engine], "Auto Switch is on by default");
+        assert_eq!(s.engine_mode_count(engine), 2);
+        let ox = s.net.resource("Oxidizer").unwrap();
+        s.net.tanks.push(crate::resources::Tank {
+            part: engine,
+            resource: ox,
+            stored: 100.0,
+            capacity: 100.0,
+        });
+        // the part window's Auto Switch, off: Module_Engine skips AutoSwitchModes
+        assert!(s.part_action(engine, "automode", false));
+        let dt = 0.02;
+        for _ in 0..(5.0 / dt) as usize {
+            s.propulsion(&p, runway_air(nose * 100.0), dt);
+        }
+        for _ in 0..10 {
+            s.propulsion(&p, Default::default(), dt);
+        }
+        assert!(s.engine_flameout[engine]);
+        assert_eq!(s.engine_mode[engine], 0, "still Air Breathing");
+        assert_eq!(s.engine_changing_to(engine), None);
+        // the pilot picks Closed Cycle by hand
+        assert!(s.part_action(engine, "mode", true));
+        assert_eq!(s.engine_changing_to(engine), Some(1));
+        s.propulsion(&p, Default::default(), dt);
+        s.propulsion(&p, Default::default(), dt);
+        assert_eq!(s.engine_mode[engine], 1);
+        // a single-mode engine has no Auto Switch
+        let other = (0..s.engine_modes.len()).find(|&i| i != engine && s.engine_mode_count(i) == 1);
+        if let Some(i) = other {
+            assert!(!s.part_action(i, "automode", false));
+        }
     }
 
     #[test]
