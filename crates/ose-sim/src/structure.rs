@@ -1605,7 +1605,12 @@ impl Structure {
                 if vacuum_isp <= 0.0 {
                     return None;
                 }
-                if lagged && (self.engine_flameout[part] || self.engine_switch[part].is_some()) {
+                // a flamed-out jet waits for air (the flow check relights it); a flamed-out rocket keeps
+                // asking for propellant and lights again once enough arrives (CheckDeprived)
+                if lagged
+                    && ((self.engine_flameout[part] && self.engine_jet[part].is_some())
+                        || self.engine_switch[part].is_some())
+                {
                     return None;
                 }
                 // stepped: the flow multiplier alone (the intakes' air limits the burn after it);
@@ -2079,9 +2084,19 @@ impl Structure {
                 self.engine_flameout[i] = false;
             }
         }
+        // an ignited engine asking for propellant that cannot reach any flames out
+        // (PartComponentModule_Engine.CheckDeprived); one shut down, unstaged or idle at zero throttle
+        // asks for nothing and keeps its state, as KSP2's sends no request then
+        let live = if p.ignited && !p.crashed {
+            self.live_engines(p.stage)
+        } else {
+            Vec::new()
+        };
         for i in 0..self.engine_flameout.len() {
-            if !fed.contains(&i) {
+            if !live.contains(&i) {
                 self.engine_flameout[i] = false;
+            } else if !fed.contains(&i) && self.engine_duty(i, p.throttle) > 0.0 {
+                self.engine_flameout[i] = true;
             }
         }
         self.respond_engines(p, dt);
@@ -2139,15 +2154,25 @@ impl Structure {
             let mut pushes: Vec<(usize, f64)> = Vec::new();
             for (demand, fraction) in active.iter().zip(fractions) {
                 let fraction = fraction.clamp(0.0, 1.0);
-                if demand.air_units_per_s > 0.0 {
+                let share = if demand.air_units_per_s > 0.0 {
                     air -= demand.air_units_per_s * dt * air_share * fraction;
-                    // starved: less than its ignition threshold of the mixture it asked for arrives
-                    // (intake air and fuel together), PartComponentModule_Engine.CheckDeprived
-                    let mode = &self.engine_modes[demand.part][self.engine_mode[demand.part]];
-                    if air_share * fraction < mode.ignition_threshold {
-                        starved.push(demand.part);
-                        continue;
-                    }
+                    air_share * fraction
+                } else {
+                    fraction
+                };
+                // starved: less than its ignition threshold of the mixture it asked for arrives (intake air
+                // and fuel together), PartComponentModule_Engine.CheckDeprived; a flamed-out rocket fed
+                // again lights (UnFlameout) and pushes from the next tick
+                let threshold = self.engine_modes[demand.part]
+                    .get(self.engine_mode[demand.part])
+                    .map_or(0.0, |m| m.ignition_threshold);
+                if share < threshold {
+                    starved.push(demand.part);
+                    continue;
+                }
+                if self.engine_flameout[demand.part] {
+                    self.engine_flameout[demand.part] = false;
+                    continue;
                 }
                 pushes.push((demand.part, demand.thrust_kn * fraction));
             }
@@ -7420,6 +7445,55 @@ mod tests {
         assert_eq!(s.engine_thrust_kn[engine], 180.0);
         assert_eq!(s.engine_mixture[engine].as_deref(), Some("Methalox"));
         assert!(s.engine_jet[engine].is_none() && s.engine_response[engine].is_none());
+    }
+
+    #[test]
+    fn a_rocket_that_runs_dry_flames_out_and_lights_again_when_fed() {
+        let (crafts, defs, res) = assets();
+        let c = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap();
+        let mut s = Structure::build(c, &defs, &res);
+        let mut p = flying(DVec3::new(0.0, 1.0, 0.0));
+        p.throttle = 1.0;
+        p.ignited = true;
+        p.stage = 0;
+        s.sync(&mut p);
+        let engine = s.live_engines(p.stage)[0];
+        let dt = 0.02;
+        let first = s.propulsion(&p, Default::default(), dt);
+        assert!(first.thrust_kn > 0.0 && !s.engine_flameout[engine]);
+        // drain the tanks, keeping a copy to pour back
+        let full: Vec<f64> = s.net.tanks.iter().map(|t| t.stored).collect();
+        for t in &mut s.net.tanks {
+            t.stored = 0.0;
+        }
+        let dry = s.propulsion(&p, Default::default(), dt);
+        assert_eq!(dry.thrust_kn, 0.0);
+        assert!(s.engine_flameout[engine], "out of propellant: Flameout");
+        // cutting the throttle asks for nothing and keeps the state; shutting it down clears it
+        p.throttle = 0.0;
+        s.propulsion(&p, Default::default(), dt);
+        assert!(s.engine_flameout[engine]);
+        p.throttle = 1.0;
+        // fed again (a transfer, a docking): it lights on the first delivery and pushes after
+        for (t, &u) in s.net.tanks.iter_mut().zip(&full) {
+            t.stored = u;
+        }
+        let relit = s.propulsion(&p, Default::default(), dt);
+        assert!(!s.engine_flameout[engine]);
+        assert_eq!(relit.thrust_kn, 0.0);
+        assert!(s.propulsion(&p, Default::default(), dt).thrust_kn > 0.0);
+        assert!(s.part_action(engine, "engine", false));
+        for t in &mut s.net.tanks {
+            t.stored = 0.0;
+        }
+        s.propulsion(&p, Default::default(), dt);
+        assert!(
+            !s.engine_flameout[engine],
+            "a shut-down engine is Off, not flamed out"
+        );
     }
 
     #[test]
