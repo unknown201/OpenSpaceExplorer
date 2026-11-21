@@ -38,6 +38,17 @@ pub const PUMP_STALL_S: f64 = 10.0;
 /// How far ahead the scheduler looks for a launch window (s).
 pub const WINDOW_HORIZON_S: f64 = 2.0 * 86_400.0;
 
+/// What to do with the run a route left docked at the depot (design 3.10, "cleaning up by hand").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StayedCommand {
+    /// Undock it and fly it home.
+    SendHome,
+    /// Undock it and leave it drifting.
+    LetGo,
+    /// Keep it as part of the depot: the route no longer counts it.
+    Keep,
+}
+
 /// What a run does once it has pumped its cargo (design 3.10).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WhenDelivered {
@@ -78,6 +89,9 @@ pub struct RunLog {
     /// Leaving the depot now (undocking, backing off or flying home), and whether it flies home.
     #[serde(default)]
     pub leaving: Option<bool>,
+    /// The players who took control of it on the way (design 3.11).
+    #[serde(default)]
+    pub flown_by: Vec<u64>,
 }
 
 /// The run in flight now, as saved.
@@ -89,6 +103,12 @@ pub struct ActiveRun {
     /// Pumped into the depot so far, by resource.
     #[serde(default)]
     pub delivered: BTreeMap<String, f64>,
+    /// The player flying it by hand now, if one is (design 3.11): the route pilot stands aside.
+    #[serde(default)]
+    pub manual: Option<u64>,
+    /// Everyone who took control of it on the way.
+    #[serde(default)]
+    pub flown_by: Vec<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -167,6 +187,8 @@ pub struct Pilots {
     homebound: Vec<Homebound>,
     /// The pilots were made again from the saved routes (`Routes::resume`).
     resumed: bool,
+    /// The vessels players fly by hand now, and who flies each (`set_manual`).
+    manual: BTreeMap<Entity, u64>,
 }
 
 impl Pilots {
@@ -190,15 +212,23 @@ impl Pilots {
     pub fn suggested_warp(&self, u: &Universe) -> Option<u32> {
         self.runs
             .values()
-            .map(|s| match s {
-                Stage::Flying(m) => m.suggested_warp(u),
-                Stage::Pumping { .. } => 1,
+            .filter_map(|s| match s {
+                // a run flown by hand is the player's to warp
+                Stage::Flying(m) if self.manual.contains_key(&m.vessel()) => None,
+                Stage::Flying(m) => Some(m.suggested_warp(u)),
+                Stage::Pumping { .. } => Some(1),
             })
             .chain(self.homebound.iter().map(|h| match &h.leave {
                 Leave::Undock(d, _) => d.suggested_warp(),
                 Leave::Descend(d, e) => d.suggested_warp(u, *e),
             }))
             .min()
+    }
+
+    /// The vessels players are flying now, each with its player (design 3.11). A route run among them is
+    /// theirs: its pilot stands aside until they let go of it, then picks it up from where it is.
+    pub fn set_manual(&mut self, flown: BTreeMap<Entity, u64>) {
+        self.manual = flown;
     }
 
     /// Forget every pilot (the universe was replaced).
@@ -323,6 +353,46 @@ impl Routes {
         Ok(())
     }
 
+    /// Send home, let go or keep the run the route left docked at the depot.
+    pub fn stayed_command(
+        &mut self,
+        u: &Universe,
+        pilots: &mut Pilots,
+        id: u64,
+        cmd: StayedCommand,
+    ) -> Result<(), String> {
+        let depots = self.depots.clone();
+        let r = self.route_mut(id)?;
+        let n = r
+            .stayed
+            .ok_or("no run of this route is docked at the depot")?;
+        let (after, leaving) = match cmd {
+            StayedCommand::Keep => ("kept at the depot".to_string(), None),
+            StayedCommand::SendHome | StayedCommand::LetGo => {
+                let home = cmd == StayedCommand::SendHome;
+                let d = depots
+                    .iter()
+                    .find(|d| d.id == r.depot)
+                    .ok_or("the depot is gone")?;
+                let (depart, dv) = send_off(u, d, &r.depot_port)?;
+                pilots.homebound.push(Homebound {
+                    route: id,
+                    n,
+                    home,
+                    leave: Leave::Undock(Box::new(depart), dv),
+                });
+                ("undocking".to_string(), Some(home))
+            }
+        };
+        r.stayed = None;
+        r.next_launch = None;
+        if let Some(x) = r.runs.iter_mut().find(|x| x.n == n) {
+            x.after = Some(after);
+            x.leaving = leaving;
+        }
+        Ok(())
+    }
+
     /// Pause a route (its run in flight carries on) or resume it.
     pub fn pause_route(&mut self, id: u64, paused: bool) -> Result<(), String> {
         let r = self.route_mut(id)?;
@@ -362,6 +432,7 @@ impl Routes {
                         delivered: BTreeMap::new(),
                         after: None,
                         leaving: None,
+                        flown_by: a.flown_by,
                     });
                     r.active = None;
                 } else {
@@ -438,6 +509,8 @@ impl Routes {
             vessel_name: vessel_name.into(),
             launched_ut: u.ut(),
             delivered: BTreeMap::new(),
+            manual: None,
+            flown_by: Vec::new(),
         });
         r.next_launch = None;
         r.status = "Run in flight".into();
@@ -473,6 +546,52 @@ impl Routes {
             let depot = depots.iter().find(|d| d.id == r.depot);
             let mut ended: Option<(Outcome, BTreeMap<String, f64>)> = None;
             match stage {
+                Stage::Flying(m)
+                    if pilots.manual.contains_key(&m.vessel()) || active.manual.is_some() =>
+                {
+                    let e = m.vessel();
+                    let gone = u.vessel(e).is_none();
+                    match pilots.manual.get(&e).copied().filter(|_| !gone) {
+                        Some(player) => {
+                            // flown by hand: the pilot stands aside
+                            if active.manual != Some(player) {
+                                if let Some(a) = r.active.as_mut() {
+                                    a.manual = Some(player);
+                                    if !a.flown_by.contains(&player) {
+                                        a.flown_by.push(player);
+                                    }
+                                }
+                                out.push(RouteChange {
+                                    owner: r.owner,
+                                    route: r.id,
+                                });
+                            }
+                            r.status = format!("Run {}: flown by hand", active.n);
+                        }
+                        None => {
+                            // handed back (or docked, or lost, by hand): pick it up from where it is
+                            let found = (!gone).then_some(e);
+                            let mut a = active.clone();
+                            a.manual = None;
+                            match pick_up(u, r, depot, &a, found) {
+                                Ok(next) => {
+                                    *stage = next;
+                                    r.active = Some(a);
+                                    r.status = format!("Run {}: handed back", active.n);
+                                }
+                                Err(outcome) => {
+                                    end_run(r, a, ut, outcome);
+                                    pilots.runs.remove(&r.id);
+                                }
+                            }
+                            out.push(RouteChange {
+                                owner: r.owner,
+                                route: r.id,
+                            });
+                        }
+                    }
+                    continue;
+                }
                 Stage::Flying(m) => {
                     let before = m.leg();
                     let status = m.update(u, catalog);
@@ -620,6 +739,7 @@ impl Routes {
                     delivered,
                     after,
                     leaving: going,
+                    flown_by: active.flown_by.clone(),
                 });
                 r.active = None;
                 r.status = "Run ended".into();
@@ -725,72 +845,13 @@ impl Routes {
             {
                 changed = true;
                 let found = find_by_name(u, &a.vessel_name, &depot_vessels);
-                let docked = r.stayed.is_none()
-                    && depot.is_some_and(|d| {
-                        d.vessel()
-                            .is_some_and(|dv| !port_free(u, d, dv, &r.depot_port))
-                    });
-                let resumed: Result<Stage, Outcome> = match found {
-                    Some(e) => {
-                        let p = u.powered(e).or_else(|| u.dormant(e));
-                        if p.is_some_and(|p| p.crashed) {
-                            Err(Outcome::Lost("crashed".into()))
-                        } else {
-                            // still climbing (or on the pad): ascend again; in orbit: plan from there
-                            let climbing = p.is_some_and(|p| p.landed)
-                                || match (ose_pilot::orbit(u, e), ose_pilot::body(u, e)) {
-                                    (Some(o), Some((b, _, radius))) => {
-                                        o.periapsis()
-                                            < radius + ose_pilot::mission::safe_altitude(u, b)
-                                    }
-                                    _ => true,
-                                };
-                            match depot
-                                .ok_or("the depot is gone".to_string())
-                                .and_then(|d| run_mission(u, r, d, e, climbing))
-                            {
-                                Ok(m) => Ok(Stage::Flying(Box::new(m))),
-                                Err(why) => Err(Outcome::Missed(why)),
-                            }
-                        }
-                    }
-                    // docked: pump what is left
-                    None if docked => Ok(Stage::Pumping {
-                        queue: r
-                            .cargo
-                            .iter()
-                            .map(|(k, v)| {
-                                (k.clone(), v - a.delivered.get(k).copied().unwrap_or(0.0))
-                            })
-                            .filter(|(_, v)| *v > 1e-6)
-                            .collect(),
-                        current: None,
-                        delivered: a.delivered.clone(),
-                    }),
-                    None => Err(Outcome::Missed("the run's vessel is gone".into())),
-                };
+                let resumed = pick_up(u, r, depot, &a, found);
                 match resumed {
                     Ok(stage) => {
                         r.status = format!("Run {}: resumed", a.n);
                         pilots.runs.insert(r.id, stage);
                     }
-                    Err(outcome) => {
-                        if let Outcome::Lost(why) = &outcome {
-                            r.paused = Some(format!("run {} was lost: {why}", a.n));
-                        }
-                        r.runs.push(RunLog {
-                            n: a.n,
-                            vessel_name: a.vessel_name,
-                            launched_ut: a.launched_ut,
-                            ended_ut: ut,
-                            outcome,
-                            delivered: a.delivered,
-                            after: None,
-                            leaving: None,
-                        });
-                        r.active = None;
-                        r.status = "Run ended".into();
-                    }
+                    Err(outcome) => end_run(r, a, ut, outcome),
                 }
             }
             for x in r.runs.iter_mut().filter(|x| x.leaving.is_some()) {
@@ -842,6 +903,75 @@ impl Routes {
     fn fresh_route_id(&mut self) -> u64 {
         self.bump_id()
     }
+}
+
+/// Pick up a run whose pilot is gone or was set aside (a restart, or a player handing it back), from where
+/// its vessel `found` is now: still climbing (or on the pad), it ascends again; in orbit, it plans from
+/// there; with no vessel but the depot port taken, it docked, and pumps what is left of its cargo.
+fn pick_up(
+    u: &mut Universe,
+    r: &Route,
+    depot: Option<&Depot>,
+    a: &ActiveRun,
+    found: Option<Entity>,
+) -> Result<Stage, Outcome> {
+    let docked = r.stayed.is_none()
+        && depot.is_some_and(|d| {
+            d.vessel()
+                .is_some_and(|dv| !port_free(u, d, dv, &r.depot_port))
+        });
+    match found {
+        Some(e) => {
+            let p = u.powered(e).or_else(|| u.dormant(e));
+            if p.is_some_and(|p| p.crashed) {
+                return Err(Outcome::Lost("crashed".into()));
+            }
+            let climbing = p.is_some_and(|p| p.landed)
+                || match (ose_pilot::orbit(u, e), ose_pilot::body(u, e)) {
+                    (Some(o), Some((b, _, radius))) => {
+                        o.periapsis() < radius + ose_pilot::mission::safe_altitude(u, b)
+                    }
+                    _ => true,
+                };
+            depot
+                .ok_or("the depot is gone".to_string())
+                .and_then(|d| run_mission(u, r, d, e, climbing))
+                .map(|m| Stage::Flying(Box::new(m)))
+                .map_err(Outcome::Missed)
+        }
+        None if docked => Ok(Stage::Pumping {
+            queue: r
+                .cargo
+                .iter()
+                .map(|(k, v)| (k.clone(), v - a.delivered.get(k).copied().unwrap_or(0.0)))
+                .filter(|(_, v)| *v > 1e-6)
+                .collect(),
+            current: None,
+            delivered: a.delivered.clone(),
+        }),
+        None => Err(Outcome::Missed("the run's vessel is gone".into())),
+    }
+}
+
+/// End the route's run `a` with `outcome`, without delivering (a delivery ends in `fly`).
+fn end_run(r: &mut Route, a: ActiveRun, ut: f64, outcome: Outcome) {
+    if let Outcome::Lost(why) = &outcome {
+        // don't keep sending craft into the same wreck (design 3.4)
+        r.paused = Some(format!("run {} was lost: {why}", a.n));
+    }
+    r.runs.push(RunLog {
+        n: a.n,
+        vessel_name: a.vessel_name,
+        launched_ut: a.launched_ut,
+        ended_ut: ut,
+        outcome,
+        delivered: a.delivered,
+        after: None,
+        leaving: None,
+        flown_by: a.flown_by,
+    });
+    r.active = None;
+    r.status = "Run ended".into();
 }
 
 /// The route pilot for a run: to the depot's recorded port, climbing first if `ascend`.
