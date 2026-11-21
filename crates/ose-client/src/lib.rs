@@ -436,6 +436,10 @@ struct App {
     raw_rotation_sent: Option<(u64, [f32; 3])>,
     /// Launch sites from the server (protocol 30) and the one chosen (None: launch pad 1), kept per browser.
     launch_sites: Vec<ose_net::LaunchSite>,
+    /// The campaign's colonies as the server last listed them (protocol 75), and the one being founded.
+    colonies: Vec<ose_net::ColonyInfo>,
+    colony_founding: Option<String>,
+    colonies_known: bool,
     /// A craft to roll out once the launch site has been cleared of the player's vessel on it.
     launch_after_clear: Option<u64>,
     launch_site: Option<String>,
@@ -1120,6 +1124,9 @@ pub fn start() -> Result<(), JsValue> {
         precision_sent: None,
         raw_rotation_sent: None,
         launch_sites: Vec::new(),
+        colonies: Vec::new(),
+        colony_founding: None,
+        colonies_known: false,
         launch_after_clear: None,
         launch_site: stored("ose.launchSite"),
         loading_place: None,
@@ -6958,6 +6965,35 @@ impl App {
                 };
                 set_text(&self.doc, "rd-note", &msg);
             }
+            ServerMessage::Colonies { colonies, reason } => {
+                let founding = self.colony_founding.take();
+                match (reason, founding) {
+                    (Some(why), _) => hud::push(&self.doc, &format!("Colony: {why}"), "warning"),
+                    (None, Some(name)) if colonies.iter().any(|c| c.name == name) => {
+                        hud::push(
+                            &self.doc,
+                            &format!("{name} founded: its launch pad is in the VAB's launch sites"),
+                            "passive",
+                        );
+                    }
+                    _ if self.colonies_known => {
+                        // another player's new colony
+                        for c in colonies
+                            .iter()
+                            .filter(|c| !self.colonies.iter().any(|o| o.id == c.id))
+                        {
+                            hud::push(
+                                &self.doc,
+                                &format!("{} founded {} on the {}", c.owner_name, c.name, c.body),
+                                "passive",
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+                self.colonies_known = true;
+                self.colonies = colonies;
+            }
             ServerMessage::AgencyNews { by, event } => {
                 let tech = |id: &str| {
                     let key = self
@@ -9129,6 +9165,13 @@ impl App {
                 } else {
                     self.tr("PartModules/Resources/EnableCrossFeed", "Enable crossfeed")
                 }
+            ));
+        }
+        // Protocol 75: a colony trunk founds a colony where the vessel has landed (`docs/colonies-design.md`).
+        if part.part_id.starts_with("transport_3v_colony_trunk") {
+            html.push_str(&format!(
+                "<div class=\"pam-acts\"><button data-act=\"fh-act-colony\">{}</button></div>",
+                self.tr("OSE/Colony/Found", "Found colony here")
             ));
         }
         // Protocol 57: shut an engine down or start it again, and the part's action-group bindings.
@@ -12945,6 +12988,23 @@ impl App {
                     vessel,
                     part: if here { 0 } else { cur as u16 },
                 }
+            }
+            "fh-act-colony" => {
+                let base = self
+                    .scene
+                    .as_ref()
+                    .and_then(|s| s.vessel(vessel))
+                    .map(|v| format!("{} Colony", v.name))
+                    .unwrap_or_else(|| "Colony".into());
+                let Some(name) = prompt_text("Name the colony", &base) else {
+                    return;
+                };
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    return;
+                }
+                self.colony_founding = Some(name.clone());
+                ClientMessage::FoundColony { vessel, name }
             }
             "fh-act-rename" => {
                 let old = self
