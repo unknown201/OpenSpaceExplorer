@@ -6,10 +6,10 @@
 //! pad launch as a player's.
 
 use bevy_ecs::entity::Entity;
-use ose_net::RouteEnd;
 use ose_net::{ClientMessage, DepotInfo, RecordingInfo, RouteInfo, RouteRunInfo, ServerMessage};
+use ose_net::{RouteEnd, StayedRun};
 use ose_routes::recording::State;
-use ose_routes::route::{Outcome, WhenDelivered};
+use ose_routes::route::{Outcome, StayedCommand, WhenDelivered};
 
 use crate::{flight_spec_for, owned_vessel, Shared};
 
@@ -90,6 +90,7 @@ pub fn info(s: &Shared, reason: Option<String>) -> ServerMessage {
                 WhenDelivered::LetGo => RouteEnd::LetGo,
             },
             stayed: r.stayed,
+            manual: r.active.as_ref().and_then(|a| a.manual),
             runs: r
                 .runs
                 .iter()
@@ -109,6 +110,7 @@ pub fn info(s: &Shared, reason: Option<String>) -> ServerMessage {
                         reason,
                         delivered: x.delivered.clone().into_iter().collect(),
                         after: x.after.clone(),
+                        flown_by: x.flown_by.clone(),
                     }
                 })
                 .collect(),
@@ -197,6 +199,19 @@ pub fn handle(s: &Shared, player: u64, msg: &ClientMessage) -> ServerMessage {
                 },
             )
         }
+        ClientMessage::RouteStayed { id, what } => {
+            let u = s.universe.lock().expect("sim lock");
+            let mut c = s.campaign.lock().expect("campaign lock");
+            let mut pilots = s.route_pilots.lock().expect("route pilots lock");
+            let cmd = match what {
+                StayedRun::SendHome => StayedCommand::SendHome,
+                StayedRun::LetGo => StayedCommand::LetGo,
+                StayedRun::Keep => StayedCommand::Keep,
+            };
+            c.routes
+                .stayed_command(&u, &mut pilots, id, cmd)
+                .map(|_| tracing::info!(player, route = id, ?what, "stayed run"))
+        }
         ClientMessage::PauseRoute { id, paused } => {
             let mut c = s.campaign.lock().expect("campaign lock");
             c.routes.pause_route(id, paused)
@@ -216,10 +231,28 @@ pub fn handle(s: &Shared, player: u64, msg: &ClientMessage) -> ServerMessage {
 /// After each simulation step: follow the flights being recorded, fly the route runs, launch what is due
 /// (once a second), and tell the players concerned what moved on.
 pub fn after_step(s: &Shared, step: u64) {
+    // the vessels players fly by hand: a route run among them is theirs until they let go (design 3.11)
+    let flown: std::collections::BTreeMap<Entity, u64> = {
+        let playing = s.playing.lock().expect("playing lock").clone();
+        let flying: Vec<(u64, u64)> = s
+            .flying
+            .lock()
+            .expect("flying lock")
+            .iter()
+            .filter(|(p, _)| playing.contains(*p))
+            .map(|(&p, &v)| (p, v))
+            .collect();
+        let list = s.vessels.lock().expect("vessels lock");
+        flying
+            .into_iter()
+            .filter_map(|(p, v)| list.iter().find(|x| x.1 == v).map(|x| (x.0, p)))
+            .collect()
+    };
     let (mut players, requests) = {
         let mut u = s.universe.lock().expect("sim lock");
         let mut c = s.campaign.lock().expect("campaign lock");
         let mut pilots = s.route_pilots.lock().expect("route pilots lock");
+        pilots.set_manual(flown);
         let mut players: Vec<u64> = c.routes.tick(&mut u).iter().map(|c| c.player).collect();
         let spec = |craft: &ose_data::craft::Craft| flight_spec_for(s, craft);
         let catalog = ose_pilot::mission::Catalog {
