@@ -26,6 +26,7 @@ pub mod science;
 pub mod structure;
 pub mod struts;
 pub mod surface;
+pub mod swim;
 pub mod thermal;
 pub mod timelines;
 pub mod trajectory;
@@ -3513,6 +3514,17 @@ mod tests {
     /// Kerbin over open sea 200 m deep, with the part catalog, and `name` falling into it from `height` m
     /// above the surface at `speed` m/s, leaning `lean` radians from upright.
     fn into_the_sea(name: &str, lean: f64, speed: f64, height: f64) -> (Universe, Entity) {
+        into_water(name, lean, speed, height, 200.0)
+    }
+
+    /// `name` let go `height` m above a flat sea `depth` m deep, falling at `speed` m/s.
+    fn into_water(
+        name: &str,
+        lean: f64,
+        speed: f64,
+        height: f64,
+        depth: f64,
+    ) -> (Universe, Entity) {
         let bodies: Vec<ose_data::CelestialBody> =
             serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
         let mut kerbin = bodies.into_iter().find(|b| b.id == "Kerbin").unwrap();
@@ -3536,7 +3548,7 @@ mod tests {
                     width: 2,
                     height: 2,
                     scale_m: 0.0,
-                    offset_m: -200.0,
+                    offset_m: -depth,
                     has_ocean: true,
                     body_radius_m: 600_000.0,
                     data: vec![0; 4],
@@ -3563,6 +3575,139 @@ mod tests {
             p.landed = false;
         }
         (u, v)
+    }
+
+    /// A Mk1 pod (Lesson 1.5: pod and chute) afloat on a sea `depth` m deep, and its pilot stepped out onto
+    /// the ladder and let go: the Kerbal in the water beside it.
+    fn kerbal_in_water(depth: f64) -> (Universe, Entity, Entity) {
+        let (mut u, v) = into_water("Lesson 1.5 rocket", 0.0, 2.0, 1.0, depth);
+        for _ in 0..(10 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let jeb = u.go_eva(v, None).expect("out of the hatch");
+        assert!(u.on_ladder(jeb).is_some(), "onto the ladder");
+        assert!(u.set_eva(jeb, false, true), "let go of the ladder");
+        for _ in 0..(5 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        (u, v, jeb)
+    }
+
+    fn surface_speed(p: &flight::Powered) -> DVec3 {
+        p.v - DVec3::new(0.0, 0.0, std::f64::consts::TAU / 21_549.425).cross(p.r)
+    }
+
+    #[test]
+    fn a_kerbal_in_the_sea_floats_and_swims_rather_than_standing_on_the_water() {
+        let (mut u, _, jeb) = kerbal_in_water(200.0);
+        let p = u.powered(jeb).unwrap().clone();
+        let fuel = p.propellant_t;
+        assert!(p.splashed && !p.landed && !p.crashed, "afloat");
+        assert_eq!(u.situation(jeb), Some(flight::Situation::Splashed));
+        // held up by its cube's displacement (0.55 m^3 x 1.2 x 0.25): the bottom of its 1.1 m capsule
+        // floats about 0.63 m under, the head out of the water
+        let under = 600_000.0 - (p.r.length() - p.ground_clearance_m);
+        assert!(
+            (0.58..0.68).contains(&under),
+            "capsule bottom {under} m under"
+        );
+        assert!(surface_speed(&p).length() < 0.05, "settled");
+        // W toward the east: the stroke (0.8 kN) against the water's drag
+        let start = p.r;
+        u.set_controls(
+            jeb,
+            1.0,
+            flight::Attitude::PitchHeading {
+                pitch_deg: 0.0,
+                heading_deg: 90.0,
+            },
+        );
+        for _ in 0..(5 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p = u.powered(jeb).unwrap().clone();
+        let slow = surface_speed(&p).length();
+        assert!((0.6..1.0).contains(&slow), "swims at {slow} m/s");
+        let up = p.r.normalized();
+        let moved = p.r - start;
+        let east = DVec3::new(0.0, 0.0, 1.0).cross(up).normalized();
+        assert!(
+            (moved - up * moved.dot(up)).dot(east) > 2.5,
+            "{moved:?} toward the east"
+        );
+        assert!(p.splashed && !p.landed, "still afloat");
+        // Shift: 1.5 times the push
+        assert!(u.set_eva(jeb, true, false));
+        for _ in 0..(5 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p = u.powered(jeb).unwrap().clone();
+        let fast = surface_speed(&p).length();
+        assert!(fast > slow * 1.1, "faster stroke {fast} vs {slow} m/s");
+        // no jumping out of the water, and no flag planted in it
+        assert!(u.set_eva(jeb, false, true));
+        u.step();
+        u.step();
+        let p = u.powered(jeb).unwrap().clone();
+        assert!(!p.eva_hop && p.splashed, "no jump while swimming");
+        assert!(u.plant_flag(jeb, "Test").is_err());
+        assert_eq!(p.propellant_t, fuel, "swimming burns nothing");
+    }
+
+    #[test]
+    fn a_kerbal_stands_in_shallows_and_floats_where_it_is_deeper() {
+        // 0.15 m of water: under `SwimMinDepth`, so it stands on the bed and walks
+        let (mut u, _, jeb) = kerbal_in_water(0.15);
+        let p = u.powered(jeb).unwrap().clone();
+        assert!(p.landed && !p.splashed, "standing in the shallows");
+        let feet = p.r.length() - p.ground_clearance_m;
+        assert!(
+            (feet - (600_000.0 - 0.15)).abs() < 0.02,
+            "on the bed, {feet}"
+        );
+        u.set_controls(
+            jeb,
+            1.0,
+            flight::Attitude::PitchHeading {
+                pitch_deg: 0.0,
+                heading_deg: 90.0,
+            },
+        );
+        for _ in 0..(2 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p = u.powered(jeb).unwrap().clone();
+        assert!(p.landed && !p.splashed, "wading");
+        assert!(
+            (surface_speed(&p).length() - 0.65).abs() < 0.05,
+            "walks at its pace"
+        );
+        // 0.4 m of water: deeper than `SwimMinDepth`, so it floats off the bed
+        let (u, _, jeb) = kerbal_in_water(0.4);
+        let p = u.powered(jeb).unwrap();
+        assert!(p.splashed, "floating in 0.4 m of water");
+    }
+
+    #[test]
+    fn a_kerbal_striking_the_water_breaks_above_one_point_two_times_its_tolerance() {
+        for (speed, lost) in [(20.0, false), (70.0, true)] {
+            let (mut u, _, jeb) = kerbal_in_water(200.0);
+            {
+                let mut p = u.world.get_mut::<flight::Powered>(jeb).unwrap();
+                let up = p.r.normalized();
+                p.r = up * (600_000.0 + 3.0);
+                p.v = DVec3::new(0.0, 0.0, std::f64::consts::TAU / 21_549.425).cross(p.r)
+                    - up * speed;
+                p.landed = false;
+                p.splashed = false;
+                p.eva_water = None;
+            }
+            for _ in 0..TICKS_PER_SECOND {
+                u.step();
+            }
+            let crashed = u.powered(jeb).is_none_or(|p| p.crashed);
+            assert_eq!(crashed, lost, "into the sea at {speed} m/s");
+        }
     }
 
     #[test]

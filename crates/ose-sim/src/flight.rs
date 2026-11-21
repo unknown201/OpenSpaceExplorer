@@ -405,6 +405,9 @@ pub struct Powered {
     /// What is left of a jump's push, s.
     #[serde(default)]
     pub eva_push_s: f64,
+    /// A Kerbal in the water (`crate::swim`): its water-drag state while it floats, `None` out of the water.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eva_water: Option<crate::swim::InWater>,
     /// Body lift and wings/surfaces this step (including surface drag), kN, inertial, and the
     /// airflow's torque about the centre of mass, kN·m, inertial.
     #[serde(default)]
@@ -936,7 +939,25 @@ pub fn resting_on_ground(
         && (p.drive.wheels.is_empty() || p.drive.brakes || downhill.length() < 1e-6)
 }
 
+/// The ground under a vessel at `r`: the sea surface for a craft, which floats there or strikes it, but the
+/// sea floor for a Kerbal on EVA, who goes into the water and swims (`crate::swim`) or wades.
+fn support_radius(
+    walker: bool,
+    body: &Body,
+    terrain: Option<&ose_data::terrain::TerrainMap>,
+    r: DVec3,
+    ut: f64,
+) -> f64 {
+    if walker {
+        crate::surface::solid_radius(body, terrain, r, ut)
+    } else {
+        ground_radius(body, terrain, r, ut)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn ground_crossing(
+    walker: bool,
     body: &Body,
     terrain: Option<&ose_data::terrain::TerrainMap>,
     from: DVec3,
@@ -958,7 +979,7 @@ fn ground_crossing(
     }
     crate::contact::sweep(distance, |t| {
         let r = from + path * t;
-        r.length() - ground_radius(body, terrain, r, ut + dt * t) - clearance
+        r.length() - support_radius(walker, body, terrain, r, ut + dt * t) - clearance
     })
 }
 
@@ -1075,6 +1096,7 @@ impl Powered {
             eva_hop: false,
             eva_sprint: 0.0,
             eva_push_s: 0.0,
+            eva_water: None,
             rcs: RcsState::default(),
             lift_kn: DVec3::ZERO,
             aero_torque_knm: DVec3::ZERO,
@@ -1986,6 +2008,25 @@ pub fn integrate_with_propulsion(
     } else {
         None
     };
+    // a Kerbal in the water floats and swims (`crate::swim`); the sea surface is no ground to stand on
+    if p.walker {
+        p.splashed = false;
+        if let Some(sea) = crate::swim::sea(body, terrain, p.r, ut)
+            .filter(|sea| propulsion.is_none() && crate::swim::takes(p, sea))
+        {
+            let dir = (p.throttle > 0.0)
+                .then(|| {
+                    let (up, _, _) = surface_frame(p.r);
+                    let d = attitude_direction(p.attitude, p.r, p.v, omega);
+                    let level = d - up * d.dot(up);
+                    (d.dot(up) < 0.7 && level.length() > 1e-6).then(|| level.normalized())
+                })
+                .flatten();
+            crate::swim::step(p, body, &sea, dir, omega, dt, &mut out);
+            return out;
+        }
+        p.eva_water = None;
+    }
     let jetpack = if p.walker && p.jetpack.is_some() && propulsion.is_none() {
         Some(crate::jetpack::resolve(
             p,
@@ -2315,7 +2356,8 @@ pub fn integrate_with_propulsion(
                 rolling.z,
             );
             // standing on its lowest point (or its side once tipped over)
-            let mut ground = ground_radius(body, terrain, p.r, ut + dt) + stand_height(p);
+            let mut ground =
+                support_radius(p.walker, body, terrain, p.r, ut + dt) + stand_height(p);
             // a craft resting on another craft's hull stands on that; it falls once the hull is gone
             if !p.walker {
                 if let Some(deck) = p.deck {
@@ -2392,12 +2434,23 @@ pub fn integrate_with_propulsion(
 
     // surface contact against the terrain (or sea) under the vessel
     if let Some(hit) = (!propulsion.as_ref().is_some_and(|e| e.per_part_contacts))
-        .then(|| ground_crossing(body, terrain, previous_r, p.r, stand_height(p), ut, dt))
+        .then(|| {
+            ground_crossing(
+                p.walker,
+                body,
+                terrain,
+                previous_r,
+                p.r,
+                stand_height(p),
+                ut,
+                dt,
+            )
+        })
         .flatten()
     {
         p.r = previous_r + (p.r - previous_r) * hit;
         let hit_ut = ut + dt * hit;
-        let ground = ground_radius(body, terrain, p.r, hit_ut);
+        let ground = support_radius(p.walker, body, terrain, p.r, hit_ut);
         let v_surf = p.v - omega_v.cross(p.r);
         let (up, _, _) = surface_frame(p.r);
         let speed = v_surf.length();
@@ -2687,7 +2740,7 @@ mod tests {
         for r in [from, to] {
             assert!(r.length() > ground_radius(&body, None, r, 0.0));
         }
-        let hit = ground_crossing(&body, None, from, to, 0.0, 0.0, 0.02).unwrap();
+        let hit = ground_crossing(false, &body, None, from, to, 0.0, 0.0, 0.02).unwrap();
         assert!((hit - 0.4).abs() < 1e-5, "first contact {hit}");
         let mut p = Powered::new(rocket(), from, (to - from) * 50.0, false);
         let out = integrate(&mut p, &body, None, None, 0.0, 0.02);

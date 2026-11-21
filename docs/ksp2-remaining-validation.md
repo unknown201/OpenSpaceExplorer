@@ -79,7 +79,7 @@ numerical result as completed equation coverage, not a live hardware calibration
 
 - Water: compound/asymmetric hulls, other locations/UTs/steps and saved drag history.
 - Services: tracking transients, full-rating illumination and flag interaction reach.
-- EVA: full climbing, obstructed hatches, external seats, swimming and camera alignment.
+- EVA: full climbing, obstructed hatches, external seats, a KSP2 trace of swimming speeds (T47) and camera alignment.
 - Construction: fairing/shroud geometry, authoring and persistent settings across the full journey.
 - Presentation: animation/audio timing, spatial mix, remaining FX and deployment continuity.
 - Content/accessibility: landmarks, tutorial completion, language/font/layout coverage.
