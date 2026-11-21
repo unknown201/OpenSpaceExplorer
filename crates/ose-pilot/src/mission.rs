@@ -91,6 +91,8 @@ pub enum Leg {
     Brake,
     Approach,
     Docked,
+    /// A landing at a site (`trip::Trip`, for routes to colonies).
+    Landing,
     Failed,
 }
 

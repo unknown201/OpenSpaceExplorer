@@ -3,6 +3,10 @@
 //! pilot (`ose_pilot::mission`) flies it to the depot like any vessel: it is simulated, drawn and can hit
 //! things. Docked, it pumps what the proving flight delivered.
 //!
+//! A route may end at a colony instead (`Endpoint::Colony`, `docs/colonies-design.md`): its proving flight
+//! ended landed there, and each run flies from KSC to the colony's body and lands within it
+//! (`ose_pilot::trip`), where it stays and what it carries becomes the colony's stock.
+//!
 //! Routes run one way from KSC. After delivering, a run stays docked, rotates out when the next one reaches
 //! orbit, flies home or is let go (`WhenDelivered`, design 3.10); the route waits while the recorded port is
 //! taken ("no launch when all ports are full"). Depot-to-depot shuttles come next.
@@ -21,7 +25,9 @@ use ose_pilot::{
     ascent::AscentParams,
     depart::Depart,
     descent::{Descent, DescentParams},
+    landing::LandingParams,
     mission::{Catalog, Leg, Mission, MissionParams},
+    trip::{Trip, TripLeg, TripParams},
     window::{self, LaunchProfile},
     Status,
 };
@@ -47,6 +53,30 @@ pub enum StayedCommand {
     LetGo,
     /// Keep it as part of the depot: the route no longer counts it.
     Keep,
+}
+
+/// A run aims this far from the colony's site, a little further round for each run, so the runs do not
+/// land on each other (m). Well inside the colony's radius (`ose_colonies::RADIUS_M`).
+pub const COLONY_AIM_M: f64 = 120.0;
+
+/// A colony as a route's endpoint: the site the runs land at.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ColonySite {
+    pub id: u64,
+    pub name: String,
+    pub body: String,
+    pub lat_deg: f64,
+    pub lon_deg: f64,
+}
+
+/// Where a route's runs go. Routes saved before colonies have no endpoint and load as depot routes.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum Endpoint {
+    /// Dock at a depot: the depot and its port are `Route::depot`, `depot_port` and `own_port`.
+    #[default]
+    Depot,
+    /// Land within a colony and stay as its stock.
+    Colony(ColonySite),
 }
 
 /// What a run does once it has pumped its cargo (design 3.10).
@@ -144,6 +174,19 @@ pub struct Route {
     /// The run left docked at the depot port (Stay and Rotate).
     #[serde(default)]
     pub stayed: Option<u32>,
+    /// Where the runs go: a depot, or a colony.
+    #[serde(default)]
+    pub endpoint: Endpoint,
+}
+
+impl Route {
+    /// The colony the runs land at, if the route ends at one.
+    pub fn colony(&self) -> Option<&ColonySite> {
+        match &self.endpoint {
+            Endpoint::Colony(c) => Some(c),
+            Endpoint::Depot => None,
+        }
+    }
 }
 
 /// The server should launch this route's craft on the pad now.
@@ -157,6 +200,8 @@ pub struct LaunchRequest {
 
 enum Stage {
     Flying(Box<Mission>),
+    /// To a colony, and the landing there.
+    Trip(Box<Trip>),
     Pumping {
         /// What is left to pump, and the one going now with its depot total at the start, the target total,
         /// and the last amount seen moving and when.
@@ -196,6 +241,7 @@ impl Pilots {
     pub fn leg(&self, route: u64) -> Option<Leg> {
         match self.runs.get(&route)? {
             Stage::Flying(m) => Some(m.leg()),
+            Stage::Trip(t) => Some(trip_leg(t)),
             Stage::Pumping { .. } => None,
         }
     }
@@ -204,6 +250,7 @@ impl Pilots {
     pub fn vessel(&self, route: u64) -> Option<Entity> {
         match self.runs.get(&route)? {
             Stage::Flying(m) => Some(m.vessel()),
+            Stage::Trip(t) => Some(t.vessel()),
             Stage::Pumping { .. } => None,
         }
     }
@@ -216,6 +263,8 @@ impl Pilots {
                 // a run flown by hand is the player's to warp
                 Stage::Flying(m) if self.manual.contains_key(&m.vessel()) => None,
                 Stage::Flying(m) => Some(m.suggested_warp(u)),
+                Stage::Trip(t) if self.manual.contains_key(&t.vessel()) => None,
+                Stage::Trip(t) => Some(t.suggested_warp(u)),
                 Stage::Pumping { .. } => Some(1),
             })
             .chain(self.homebound.iter().map(|h| match &h.leave {
@@ -244,6 +293,15 @@ impl Pilots {
 pub struct RouteChange {
     pub owner: u64,
     pub route: u64,
+}
+
+fn trip_leg(t: &Trip) -> Leg {
+    match t.leg() {
+        TripLeg::Ascent => Leg::Ascent,
+        TripLeg::SoiTransfer => Leg::SoiTransfer,
+        TripLeg::Landing | TripLeg::Landed => Leg::Landing,
+        TripLeg::Failed => Leg::Failed,
+    }
 }
 
 fn tanks(craft: &Craft, which: &dyn Fn(&str) -> bool, resource: &str) -> (Vec<usize>, f64) {
@@ -291,15 +349,28 @@ impl Routes {
             .find(|p| p.id == proving)
             .ok_or("no such recording")?;
         let r = &p.recorder.recording;
-        if r.state != State::OneWay {
-            return Err(
-                "only a one-way recording (ended docked at its depot) makes a route yet".into(),
-            );
-        }
-        let depot = p.depot.ok_or("the recording has no depot")?;
-        let (Some(depot_port), Some(own_port)) = (r.depot_port.clone(), r.own_port.clone()) else {
-            return Err("the recording has no docking ports".into());
+        let (depot, depot_port, own_port, endpoint) = match (&r.state, &p.colony) {
+            (State::Landed, Some(c)) => {
+                (0, String::new(), String::new(), Endpoint::Colony(c.clone()))
+            }
+            (State::OneWay, _) => {
+                let depot = p.depot.ok_or("the recording has no depot")?;
+                let (Some(depot_port), Some(own_port)) = (r.depot_port.clone(), r.own_port.clone())
+                else {
+                    return Err("the recording has no docking ports".into());
+                };
+                (depot, depot_port, own_port, Endpoint::Depot)
+            }
+            _ => {
+                return Err(
+                    "only a one-way recording (ended docked at its depot, or landed at a \
+                            colony) makes a route yet"
+                        .into(),
+                )
+            }
         };
+        let colony = matches!(endpoint, Endpoint::Colony(_));
+
         let site = r.trajectory.first().ok_or("the recording has no flight")?;
         let name = name.trim();
         let name = if name.is_empty() {
@@ -330,8 +401,14 @@ impl Routes {
             next_launch: None,
             active: None,
             runs: Vec::new(),
-            when_delivered: WhenDelivered::Rotate,
+            // a run landed at a colony stays as its stock
+            when_delivered: if colony {
+                WhenDelivered::Stay
+            } else {
+                WhenDelivered::Rotate
+            },
             stayed: None,
+            endpoint,
         };
         let id = self.fresh_route_id();
         self.routes.push(Route { id, ..route });
@@ -348,6 +425,9 @@ impl Routes {
     /// What the route's runs do once delivered.
     pub fn set_when_delivered(&mut self, id: u64, when: WhenDelivered) -> Result<(), String> {
         let r = self.route_mut(id)?;
+        if r.colony().is_some() && when != WhenDelivered::Stay {
+            return Err("a run landed at a colony stays there as its stock".into());
+        }
         r.when_delivered = when;
         r.next_launch = None;
         Ok(())
@@ -401,6 +481,18 @@ impl Routes {
         Ok(())
     }
 
+    /// A colony was abandoned: its routes pause (their runs in flight carry on).
+    pub fn colony_abandoned(&mut self, colony: u64) {
+        for r in self
+            .routes
+            .iter_mut()
+            .filter(|r| r.colony().is_some_and(|c| c.id == colony))
+        {
+            r.paused = Some("the colony was abandoned".into());
+            r.next_launch = None;
+        }
+    }
+
     /// Delete a route. Its run in flight is left where it is, flown by nobody.
     pub fn delete_route(&mut self, pilots: &mut Pilots, id: u64) -> Result<(), String> {
         let i = self
@@ -442,6 +534,22 @@ impl Routes {
             if let Some(why) = &r.paused {
                 r.status = format!("Paused: {why}");
                 r.next_launch = None;
+                continue;
+            }
+            if r.colony().is_some() {
+                // no window to wait for: the trip phases its own transfer
+                let when = *r.next_launch.get_or_insert(ut + ROLLOUT_S);
+                if ut < when {
+                    r.status = format!("Next launch in {:.0} s", when - ut);
+                    continue;
+                }
+                r.status = "Launching".into();
+                out.push(LaunchRequest {
+                    route: r.id,
+                    owner: r.owner,
+                    craft: r.craft.clone(),
+                    vessel_name: format!("{} {}", r.name, r.runs.len() + 1),
+                });
                 continue;
             }
             let Some(d) = depots.iter().find(|d| d.id == r.depot) else {
@@ -501,11 +609,17 @@ impl Routes {
     ) -> Result<(), String> {
         let depots = self.depots.clone();
         let r = self.route_mut(route)?;
-        let d = depots.iter().find(|d| d.id == r.depot).ok_or("no depot")?;
-        let mission = run_mission(u, r, d, vessel, true)?;
-        pilots.runs.insert(route, Stage::Flying(Box::new(mission)));
+        let n = r.runs.len() as u32 + 1;
+        let stage = match r.colony() {
+            Some(c) => Stage::Trip(Box::new(colony_trip(u, c, vessel, true, n)?)),
+            None => {
+                let d = depots.iter().find(|d| d.id == r.depot).ok_or("no depot")?;
+                Stage::Flying(Box::new(run_mission(u, r, d, vessel, true)?))
+            }
+        };
+        pilots.runs.insert(route, stage);
         r.active = Some(ActiveRun {
-            n: r.runs.len() as u32 + 1,
+            n,
             vessel_name: vessel_name.into(),
             launched_ut: u.ut(),
             delivered: BTreeMap::new(),
@@ -545,11 +659,14 @@ impl Routes {
             };
             let depot = depots.iter().find(|d| d.id == r.depot);
             let mut ended: Option<(Outcome, BTreeMap<String, f64>)> = None;
-            match stage {
-                Stage::Flying(m)
-                    if pilots.manual.contains_key(&m.vessel()) || active.manual.is_some() =>
+            let by_hand = match &*stage {
+                Stage::Flying(m) => Some(m.vessel()),
+                Stage::Trip(t) => Some(t.vessel()),
+                Stage::Pumping { .. } => None,
+            }
+            .filter(|e| pilots.manual.contains_key(e) || active.manual.is_some());
+            if let Some(e) = by_hand {
                 {
-                    let e = m.vessel();
                     let gone = u.vessel(e).is_none();
                     match pilots.manual.get(&e).copied().filter(|_| !gone) {
                         Some(player) => {
@@ -573,7 +690,7 @@ impl Routes {
                             let found = (!gone).then_some(e);
                             let mut a = active.clone();
                             a.manual = None;
-                            match pick_up(u, r, depot, &a, found) {
+                            match pick_up(u, r, depot, &mut a, found) {
                                 Ok(next) => {
                                     *stage = next;
                                     r.active = Some(a);
@@ -592,6 +709,8 @@ impl Routes {
                     }
                     continue;
                 }
+            }
+            match stage {
                 Stage::Flying(m) => {
                     let before = m.leg();
                     let status = m.update(u, catalog);
@@ -667,6 +786,41 @@ impl Routes {
                         }
                     }
                 }
+                Stage::Trip(t) => {
+                    let before = t.leg();
+                    let status = t.update(u);
+                    if t.leg() != before {
+                        out.push(RouteChange {
+                            owner: r.owner,
+                            route: r.id,
+                        });
+                    }
+                    r.status = format!("Run {}: {:?}", active.n, trip_leg(t));
+                    let e = t.vessel();
+                    match status {
+                        Status::Running if ut - active.launched_ut > RUN_TIME_LIMIT_S => {
+                            ended = Some((Outcome::Missed("out of time".into()), BTreeMap::new()));
+                        }
+                        Status::Running => {}
+                        Status::Failed(why) => {
+                            let gone =
+                                u.vessel(e).is_none() || u.powered(e).is_some_and(|p| p.crashed);
+                            ended = Some((
+                                if gone {
+                                    Outcome::Lost(why)
+                                } else {
+                                    Outcome::Missed(why)
+                                },
+                                BTreeMap::new(),
+                            ));
+                        }
+                        Status::Done => {
+                            if let Some(c) = r.colony() {
+                                ended = Some(arrived(u, c, e, &r.cargo));
+                            }
+                        }
+                    }
+                }
                 Stage::Pumping {
                     queue,
                     current,
@@ -705,7 +859,9 @@ impl Routes {
                 let docked = matches!(outcome, Outcome::Delivered | Outcome::Short);
                 let mut after = None;
                 let mut going = None;
-                if docked {
+                if docked && r.colony().is_some() {
+                    after = Some(LANDED_AT_COLONY.to_string());
+                } else if docked {
                     after = Some(match r.when_delivered {
                         WhenDelivered::Stay | WhenDelivered::Rotate => {
                             r.stayed = Some(active.n);
@@ -845,7 +1001,8 @@ impl Routes {
             {
                 changed = true;
                 let found = find_by_name(u, &a.vessel_name, &depot_vessels);
-                let resumed = pick_up(u, r, depot, &a, found);
+                let mut a = a;
+                let resumed = pick_up(u, r, depot, &mut a, found);
                 match resumed {
                     Ok(stage) => {
                         r.status = format!("Run {}: resumed", a.n);
@@ -912,7 +1069,7 @@ fn pick_up(
     u: &mut Universe,
     r: &Route,
     depot: Option<&Depot>,
-    a: &ActiveRun,
+    a: &mut ActiveRun,
     found: Option<Entity>,
 ) -> Result<Stage, Outcome> {
     let docked = r.stayed.is_none()
@@ -926,6 +1083,15 @@ fn pick_up(
             if p.is_some_and(|p| p.crashed) {
                 return Err(Outcome::Lost("crashed".into()));
             }
+            let landed = p.is_some_and(|p| p.landed);
+            if let Some(c) = r.colony() {
+                if landed && colony_distance(u, e, c).is_some_and(|d| d <= ose_colonies::RADIUS_M) {
+                    // it landed in the colony meanwhile (while the server was down, or by hand)
+                    let (outcome, held) = arrived(u, c, e, &r.cargo);
+                    a.delivered = held;
+                    return Err(outcome);
+                }
+            }
             let climbing = p.is_some_and(|p| p.landed)
                 || match (ose_pilot::orbit(u, e), ose_pilot::body(u, e)) {
                     (Some(o), Some((b, _, radius))) => {
@@ -933,6 +1099,11 @@ fn pick_up(
                     }
                     _ => true,
                 };
+            if let Some(c) = r.colony() {
+                return colony_trip(u, c, e, climbing, a.n)
+                    .map(|t| Stage::Trip(Box::new(t)))
+                    .map_err(Outcome::Missed);
+            }
             depot
                 .ok_or("the depot is gone".to_string())
                 .and_then(|d| run_mission(u, r, d, e, climbing))
@@ -959,6 +1130,7 @@ fn end_run(r: &mut Route, a: ActiveRun, ut: f64, outcome: Outcome) {
         // don't keep sending craft into the same wreck (design 3.4)
         r.paused = Some(format!("run {} was lost: {why}", a.n));
     }
+    let landed = r.colony().is_some() && matches!(outcome, Outcome::Delivered | Outcome::Short);
     r.runs.push(RunLog {
         n: a.n,
         vessel_name: a.vessel_name,
@@ -966,12 +1138,110 @@ fn end_run(r: &mut Route, a: ActiveRun, ut: f64, outcome: Outcome) {
         ended_ut: ut,
         outcome,
         delivered: a.delivered,
-        after: None,
+        after: landed.then(|| LANDED_AT_COLONY.to_string()),
         leaving: None,
         flown_by: a.flown_by,
     });
     r.active = None;
     r.status = "Run ended".into();
+}
+
+/// What a run that landed at a colony did after: it stays.
+const LANDED_AT_COLONY: &str = "landed at the colony";
+
+/// The route pilot for a run to a colony: climbing first if `ascend`, then across to the colony's body and
+/// down at the run's aim point.
+fn colony_trip(
+    u: &Universe,
+    c: &ColonySite,
+    vessel: Entity,
+    ascend: bool,
+    n: u32,
+) -> Result<Trip, String> {
+    let b = u.body_entity(&c.body).ok_or("the colony's body is gone")?;
+    let radius = u
+        .world
+        .get::<Body>(b)
+        .ok_or("the colony's body is gone")?
+        .radius_m;
+    let (lat, lon) = aim_point(c, radius, n);
+    Ok(Trip::new(
+        vessel,
+        TripParams {
+            body: c.body.clone(),
+            landing: LandingParams::at(lat, lon),
+            ascent: ascend.then(|| AscentParams {
+                stage_in_orbit: true,
+                ..AscentParams::default()
+            }),
+        },
+    ))
+}
+
+/// Where run `n` lands: `COLONY_AIM_M` from the site, each run a golden angle further round.
+pub fn aim_point(c: &ColonySite, radius_m: f64, n: u32) -> (f64, f64) {
+    let d = COLONY_AIM_M / radius_m;
+    let a = n as f64 * 2.399_963;
+    let lat = c.lat_deg + (d * a.cos()).to_degrees();
+    let lon = c.lon_deg + (d * a.sin() / c.lat_deg.to_radians().cos().max(0.05)).to_degrees();
+    (lat, lon)
+}
+
+/// How far a vessel stands from the colony's site over the ground (m), if it is on the colony's body.
+fn colony_distance(u: &Universe, e: Entity, c: &ColonySite) -> Option<f64> {
+    let p = u.powered(e).or_else(|| u.dormant(e))?;
+    let (b, _, _) = ose_pilot::body(u, e)?;
+    let body = u.world.get::<Body>(b)?;
+    if body.id != c.body {
+        return None;
+    }
+    let here = ose_sim::flight::lat_lon(body, p.r, u.ut());
+    Some(ose_colonies::surface_distance(
+        body.radius_m,
+        here,
+        (c.lat_deg, c.lon_deg),
+    ))
+}
+
+/// A run's trip ended landed: within the colony it delivered what its tanks hold (electric charge and
+/// intake air are free); outside it missed.
+fn arrived(
+    u: &Universe,
+    c: &ColonySite,
+    e: Entity,
+    cargo: &BTreeMap<String, f64>,
+) -> (Outcome, BTreeMap<String, f64>) {
+    match colony_distance(u, e, c) {
+        Some(d) if d <= ose_colonies::RADIUS_M => {
+            let mut held = BTreeMap::new();
+            for p in u.current_craft(e).map(|c| c.parts).unwrap_or_default() {
+                for r in p.resources {
+                    if !ose_colonies::FREE.contains(&r.resource.as_str()) && r.stored_units > 1e-6 {
+                        *held.entry(r.resource).or_insert(0.0) += r.stored_units;
+                    }
+                }
+            }
+            let full = cargo
+                .iter()
+                .all(|(k, v)| held.get(k).copied().unwrap_or(0.0) >= 0.99 * v);
+            (
+                if full {
+                    Outcome::Delivered
+                } else {
+                    Outcome::Short
+                },
+                held,
+            )
+        }
+        Some(d) => (
+            Outcome::Missed(format!("landed {d:.0} m from the colony")),
+            BTreeMap::new(),
+        ),
+        None => (
+            Outcome::Missed("landed away from the colony's body".into()),
+            BTreeMap::new(),
+        ),
+    }
 }
 
 /// The route pilot for a run: to the depot's recorded port, climbing first if `ascend`.

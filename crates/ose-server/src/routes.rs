@@ -9,7 +9,7 @@ use bevy_ecs::entity::Entity;
 use ose_net::{ClientMessage, DepotInfo, RecordingInfo, RouteInfo, RouteRunInfo, ServerMessage};
 use ose_net::{RouteEnd, StayedRun};
 use ose_routes::recording::State;
-use ose_routes::route::{Outcome, StayedCommand, WhenDelivered};
+use ose_routes::route::{ColonySite, Outcome, StayedCommand, WhenDelivered};
 
 use crate::{flight_spec_for, owned_vessel, Shared};
 
@@ -41,6 +41,7 @@ pub fn info(s: &Shared, reason: Option<String>) -> ServerMessage {
                 State::Recording => ("Recording", None),
                 State::RoundTrip => ("RoundTrip", None),
                 State::OneWay => ("OneWay", None),
+                State::Landed => ("Landed", None),
                 State::Dropped(why) => ("Dropped", Some(why.clone())),
             };
             RecordingInfo {
@@ -78,6 +79,7 @@ pub fn info(s: &Shared, reason: Option<String>) -> ServerMessage {
             owner: r.owner,
             recording: r.proving,
             depot: r.depot,
+            colony: r.colony().map(|c| c.id),
             status: r.status.clone(),
             paused: r.paused.clone(),
             next_launch_ut: r.next_launch,
@@ -166,9 +168,42 @@ pub fn handle(s: &Shared, player: u64, msg: &ClientMessage) -> ServerMessage {
         ClientMessage::StopRecording => {
             let mut u = s.universe.lock().expect("sim lock");
             let mut c = s.campaign.lock().expect("campaign lock");
-            c.routes.finish(&mut u, player).map(|id| {
-                tracing::info!(player, recording = id, "recording stopped");
-            })
+            // landed within a colony: a route to the colony
+            let at = c
+                .routes
+                .recording(player)
+                .map(|p| p.recorder.vessel())
+                .and_then(|e| {
+                    let landed = u
+                        .powered(e)
+                        .or_else(|| u.dormant(e))
+                        .is_some_and(|p| p.landed);
+                    if !landed {
+                        return None;
+                    }
+                    c.colonies
+                        .colonies
+                        .clone()
+                        .into_iter()
+                        .find(|col| ose_colonies::members(&mut u, col).contains(&e))
+                });
+            match at {
+                Some(col) => {
+                    let site = ColonySite {
+                        id: col.id,
+                        name: col.name.clone(),
+                        body: col.body.clone(),
+                        lat_deg: col.lat_deg,
+                        lon_deg: col.lon_deg,
+                    };
+                    c.routes.finish_at_colony(&mut u, player, site).map(|id| {
+                        tracing::info!(player, recording = id, colony = col.id, "recording landed");
+                    })
+                }
+                None => c.routes.finish(&mut u, player).map(|id| {
+                    tracing::info!(player, recording = id, "recording stopped");
+                }),
+            }
         }
         ClientMessage::ForgetRecording { id } => {
             let mut c = s.campaign.lock().expect("campaign lock");

@@ -154,6 +154,9 @@ pub struct Proving {
     /// The depot it docked at (`Depot::id`).
     #[serde(default)]
     pub depot: Option<u64>,
+    /// The colony it landed at, if it ended there.
+    #[serde(default)]
+    pub colony: Option<crate::route::ColonySite>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -250,6 +253,7 @@ impl Routes {
             player,
             recorder,
             depot: None,
+            colony: None,
         });
         Ok(id)
     }
@@ -267,6 +271,34 @@ impl Routes {
         } else {
             p.recorder.recording.state = State::Dropped("stopped".into());
         }
+        Ok(p.id)
+    }
+
+    /// The player ends their recording landed at a colony (the server has checked the vessel stands within
+    /// it): a one-way route to the colony, whose runs land there and stay as its stock. Only airless bodies
+    /// yet, where the route pilot can land.
+    pub fn finish_at_colony(
+        &mut self,
+        u: &mut Universe,
+        player: u64,
+        colony: crate::route::ColonySite,
+    ) -> Result<u64, String> {
+        let b = u
+            .body_entity(&colony.body)
+            .ok_or("the colony's body is gone")?;
+        if u.atmosphere(b).is_some() {
+            return Err(
+                "routes land only on airless bodies yet: this colony is under an atmosphere".into(),
+            );
+        }
+        let p = self
+            .provings
+            .iter_mut()
+            .find(|p| p.player == player && p.recorder.is_recording())
+            .ok_or("you are not recording a route")?;
+        p.recorder.finish_landed(u)?;
+        p.recorder.recording.depot = Some(colony.name.clone());
+        p.colony = Some(colony);
         Ok(p.id)
     }
 

@@ -14,7 +14,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 77;
+pub const PROTOCOL_VERSION: u16 = 78;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -1508,7 +1508,11 @@ pub struct RouteInfo {
     pub owner: u64,
     /// The recording it was made from.
     pub recording: u64,
+    /// The depot its runs dock at (0 for a route to a colony).
     pub depot: u64,
+    /// Protocol 78: the colony its runs land at instead (`ColonyInfo::id`); its runs stay there.
+    #[serde(default)]
+    pub colony: Option<u64>,
     /// What it is doing or waiting for ("Next launch in 1200 s", "Waiting: no free port at Station").
     pub status: String,
     pub paused: Option<String>,
@@ -1566,7 +1570,7 @@ pub struct RecordingInfo {
     pub vessel: Option<u64>,
     /// Pad, Ascent, Transfer, Approach, Docked, Return or Descent.
     pub phase: String,
-    /// Recording, RoundTrip, OneWay, or Dropped.
+    /// Recording, RoundTrip, OneWay, Landed (at a colony, protocol 78), or Dropped.
     pub state: String,
     /// Why it was dropped.
     pub dropped: Option<String>,
