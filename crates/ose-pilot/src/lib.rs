@@ -18,6 +18,7 @@ pub mod descent;
 pub mod landing;
 pub mod mission;
 pub mod soi;
+pub mod trip;
 pub mod window;
 
 /// Attitude commands and RCS translation are in the control point's axes, which differ from the

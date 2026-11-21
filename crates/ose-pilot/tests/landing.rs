@@ -61,3 +61,42 @@ fn land(incl: f64, lat: f64, lon: f64) {
     assert!(miss < 300.0, "landed {miss:.0} m from the site");
     assert!(!w.u.powered(e).unwrap().crashed);
 }
+
+/// A colony run's flight from low Kerbin orbit: across to the Mun, then down at a site. (The climb from
+/// the pad is the ascent pilot's, tested with the missions.)
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "a full flight takes minutes unoptimised; CI runs it with --release"
+)]
+fn flies_from_low_kerbin_orbit_to_a_site_on_the_mun() {
+    use ose_pilot::trip::{Trip, TripLeg, TripParams};
+    let mut w = world();
+    let e = common::in_orbit(&mut w, &lander(), 100_000.0, 0.0);
+    let mut trip = Trip::new(
+        e,
+        TripParams {
+            body: "Mun".into(),
+            landing: LandingParams::at(5.0, 60.0),
+            ascent: None,
+        },
+    );
+    let start = w.u.ut();
+    let status = loop {
+        let s = trip.update(&mut w.u);
+        if s != Status::Running {
+            break s;
+        }
+        assert!(w.u.ut() - start < 3.0 * 86_400.0, "{:?}", trip.log);
+        w.u.set_warp(trip.suggested_warp(&w.u));
+        w.u.step();
+    };
+    for line in &trip.log {
+        println!("{line}");
+    }
+    assert_eq!(status, Status::Done, "{:?}", trip.log);
+    assert_eq!(trip.leg(), TripLeg::Landed);
+    let (_, miss) = trip.landed().unwrap();
+    assert!(miss < 300.0, "landed {miss:.0} m from the site");
+    assert!(!w.u.powered(trip.vessel()).unwrap().crashed);
+}

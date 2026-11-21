@@ -48,6 +48,8 @@ impl LandingParams {
 }
 
 enum Phase {
+    /// Round the orbit out first at apoapsis, when it is eccentric (a low or uneven capture).
+    Circularize(Burn),
     PlanPlane,
     Plane(Burn),
     PlanDeorbit,
@@ -62,6 +64,7 @@ pub struct Landing {
     pub params: LandingParams,
     phase: Phase,
     started: Option<f64>,
+    rounded: bool,
     /// Where the vessel came to rest (lat, lon) and how far from the site (m).
     pub landed_at: Option<(f64, f64)>,
     pub miss_m: Option<f64>,
@@ -105,17 +108,24 @@ fn after(o: &Orbit, ut: f64, dv: DVec3) -> Orbit {
 /// The retrograde impulse at `ut` that puts periapsis at radius `rp`, by bisection.
 fn lower_periapsis(o: &Orbit, ut: f64, rp: f64) -> DVec3 {
     let (_, v) = o.state_at(ut);
-    let back = -v.normalized();
-    let (mut lo, mut hi) = (0.0, v.length());
+    // usually lower it; an orbit already dipping below `rp` (a low capture) is raised instead
+    let raise = after(o, ut, v * 0.0).periapsis() < rp;
+    let (dir, mut hi) = if raise {
+        (v.normalized(), 0.2 * v.length())
+    } else {
+        (-v.normalized(), v.length())
+    };
+    let mut lo = 0.0;
     for _ in 0..50 {
         let mid = 0.5 * (lo + hi);
-        if after(o, ut, back * mid).periapsis() > rp {
+        let p = after(o, ut, dir * mid).periapsis();
+        if (p > rp) != raise {
             lo = mid;
         } else {
             hi = mid;
         }
     }
-    back * hi
+    dir * hi
 }
 
 impl Landing {
@@ -124,6 +134,7 @@ impl Landing {
             params,
             phase: Phase::PlanPlane,
             started: None,
+            rounded: false,
             landed_at: None,
             miss_m: None,
             log: Vec::new(),
@@ -155,7 +166,33 @@ impl Landing {
         };
         match &mut self.phase {
             Phase::Down => Status::Done,
+            Phase::Circularize(burn) => match burn.update(u, e) {
+                Status::Done => {
+                    self.phase = Phase::PlanPlane;
+                    Status::Running
+                }
+                Status::Failed(why) => Status::Failed(format!("circularizing: {why}")),
+                Status::Running => Status::Running,
+            },
             Phase::PlanPlane => {
+                if let Some((_, _, radius)) = body(u, e) {
+                    self.log.push(format!(
+                        "from a {:.1} x {:.1} km orbit",
+                        (o.periapsis() - radius) / 1000.0,
+                        (o.apoapsis() - radius) / 1000.0
+                    ));
+                }
+                if !self.rounded && o.eccentricity() > 0.03 && o.period.is_finite() {
+                    self.rounded = true;
+                    let ta = now + o.time_to_true_anomaly(std::f64::consts::PI, now);
+                    let (ra, va) = o.state_at(ta);
+                    let v_circ = (mu / ra.length()).sqrt();
+                    let dv = va.normalized() * (v_circ - va.length());
+                    self.log
+                        .push(format!("circularize {:.1} m/s at apoapsis", dv.length()));
+                    self.phase = Phase::Circularize(Burn::new(dv, ta));
+                    return Status::Running;
+                }
                 // Turn the orbit's plane so it holds the site as the vessel will pass over it, about a
                 // half orbit after the burn.
                 let t_b = now + 300.0;
@@ -208,6 +245,10 @@ impl Landing {
                     let t = now + 240.0 + period * i as f64 / 360.0;
                     let dv = lower_periapsis(&o, t, rp);
                     let low = after(&o, t, dv);
+                    // a burn point below `rp` cannot set it there
+                    if (low.periapsis() - rp).abs() > 500.0 {
+                        continue;
+                    }
                     let tp = t + low.time_to_true_anomaly(0.0, t);
                     let (rp_at, _) = low.state_at(tp);
                     let (s, _) = self.site(u, b, 0.0, tp);
@@ -223,6 +264,12 @@ impl Landing {
                 let Some((angle, t, dv)) = best else {
                     return Status::Failed("no deorbit found".into());
                 };
+                let (s_now, _) = self.site(u, b, 0.0, now);
+                self.log.push(format!(
+                    "site {:.0} m up, {:.1} deg off the plane",
+                    s_now.length() - body(u, e).map_or(0.0, |x| x.2),
+                    (90.0 - s_now.normalized().dot(o.frame.z).clamp(-1.0, 1.0).acos().to_degrees()).abs()
+                ));
                 self.log.push(format!(
                     "deorbit {:.1} m/s at {:.0} s, periapsis {:.2} deg from the site",
                     dv.length(),
@@ -346,7 +393,7 @@ impl Landing {
     /// Ticks per step a headless harness can run at.
     pub fn suggested_warp(&self, u: &Universe, e: Entity) -> u32 {
         match &self.phase {
-            Phase::Plane(b) | Phase::Deorbit(b) => b.suggested_warp(u, e),
+            Phase::Plane(b) | Phase::Deorbit(b) | Phase::Circularize(b) => b.suggested_warp(u, e),
             Phase::Coast => {
                 let alt = match (state(u, e), body(u, e)) {
                     (Some((r, _)), Some((_, _, radius))) => r.length() - radius,
