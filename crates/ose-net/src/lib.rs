@@ -14,7 +14,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 76;
+pub const PROTOCOL_VERSION: u16 = 77;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -515,7 +515,7 @@ pub enum ClientMessage {
     },
     /// The campaign's colonies. Answers `Colonies`.
     ColoniesInfo,
-    /// Send home, let go or keep the run a route left docked at its depot (protocol 76). Answers `Routes`.
+    /// Send home, let go or keep the run a route left docked at its depot (protocol 77). Answers `Routes`.
     RouteStayed {
         id: u64,
         what: StayedRun,
@@ -1520,7 +1520,7 @@ pub struct RouteInfo {
     /// Protocol 74: what its runs do once delivered, and the run left docked at the depot.
     pub when_delivered: RouteEnd,
     pub stayed: Option<u32>,
-    /// Protocol 76: the player flying the run by hand now (`TakeControl` of its vessel; `ReleaseControl`
+    /// Protocol 77: the player flying the run by hand now (`TakeControl` of its vessel; `ReleaseControl`
     /// hands it back to the route pilot, which carries on from where it is).
     pub manual: Option<u64>,
     /// Finished runs, oldest first.
@@ -1541,7 +1541,7 @@ pub struct RouteRunInfo {
     pub delivered: Vec<(String, f64)>,
     /// Protocol 74: what it did after: "docked", "let go", "flying home", "recovered", or what went wrong.
     pub after: Option<String>,
-    /// Protocol 76: the players who took control of it on the way.
+    /// Protocol 77: the players who took control of it on the way.
     pub flown_by: Vec<u64>,
 }
 

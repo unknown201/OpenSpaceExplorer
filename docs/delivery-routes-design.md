@@ -263,7 +263,7 @@ Colonies, cargo inventory, a funds economy, crew rotation, landed depots (decisi
    left of its cargo if docked (what each run has pumped so far is saved). A run leaving the depot carries
    on undocking, or flying home. A run whose vessel is gone ends as Missed. The test restarts once while
    the first run is in orbit and once while it flies home.*
-   *Step 2d (protocol 76): taking control (3.11) and cleaning up by hand (3.10). Take control is the
+   *Step 2d (protocol 77): taking control (3.11) and cleaning up by hand (3.10). Take control is the
    usual `TakeControl` of the run's vessel: while a player pilots it, the route pilot stands aside, the
    run shows as flown by hand (`RouteInfo::manual`) and doesn't hold the warp down, and the player is
    added to the run's `flown_by`. `ReleaseControl` (or flying something else) hands it back. The pilot
