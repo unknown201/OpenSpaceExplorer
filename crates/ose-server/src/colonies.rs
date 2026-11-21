@@ -157,6 +157,29 @@ fn near_home(u: &Universe, e: Entity, ksc: &[LaunchSite]) -> bool {
     })
 }
 
+/// Once a second: the colonies' vessels are CommNet ground stations (those with an antenna count; the
+/// network leaves out the rest), kept for the graph's next rebuild.
+pub fn after_step(s: &Shared, step: u64) {
+    if !step.is_multiple_of(ose_sim::TICKS_PER_SECOND) {
+        return;
+    }
+    let mut u = s.universe.lock().expect("sim lock");
+    let colonies = s
+        .campaign
+        .lock()
+        .expect("campaign lock")
+        .colonies
+        .colonies
+        .clone();
+    let mut sources: Vec<Entity> = colonies
+        .iter()
+        .flat_map(|c| ose_colonies::members(&mut u, c))
+        .collect();
+    sources.sort();
+    sources.dedup();
+    u.set_comm_sources(sources);
+}
+
 /// Tell the campaign's other connected players that its colonies changed.
 fn tell_everyone(s: &Shared, by: u64) {
     let players: Vec<u64> = s
