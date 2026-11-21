@@ -1556,6 +1556,31 @@ fn flight_readout(
                     .collect()
             })
             .unwrap_or_default(),
+        engine_modes: u
+            .structure(e)
+            .map(|st| {
+                (0..st.engine_mode.len())
+                    .filter(|&i| st.rigid.present[i] && st.engine_mode_count(i) > 1)
+                    .map(|i| {
+                        (
+                            i as u16,
+                            st.engine_mode[i] as u8,
+                            st.engine_changing_to(i).map(|m| m as u8),
+                            st.engine_auto_switch[i],
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        flameouts: u
+            .structure(e)
+            .map(|st| {
+                (0..st.engine_flameout.len())
+                    .filter(|&i| st.engine_flameout[i] && st.rigid.present[i])
+                    .map(|i| i as u16)
+                    .collect()
+            })
+            .unwrap_or_default(),
         // filled in by `vessels_message`, which knows the vessel ids
         on_ladder: None,
         boarding: u.boarding(e).is_some(),
