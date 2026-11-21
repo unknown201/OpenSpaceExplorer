@@ -900,6 +900,19 @@ impl Universe {
         Ok(())
     }
 
+    /// Part `part` of vessel `e` and the rest of its symmetry set, from the craft as flown.
+    fn symmetry_set(&self, e: Entity, part: usize) -> Vec<usize> {
+        match self.world.get::<docking::CraftDoc>(e) {
+            Some(d) => match d.0.parts.get(part).map(|p| p.symmetry).filter(|s| *s != 0) {
+                Some(s) => (0..d.0.parts.len())
+                    .filter(|&k| d.0.parts[k].symmetry == s)
+                    .collect(),
+                None => vec![part],
+            },
+            None => vec![part],
+        }
+    }
+
     /// Change a parachute's deploy mode, opening pressure and full-deploy height in flight; the rest of its
     /// symmetry set follows (`KSPState(CopyToSymmetrySet)`), and the settings go with the craft.
     pub fn set_chute_settings(
@@ -909,16 +922,7 @@ impl Universe {
         settings: ose_data::craft::ChuteSettings,
     ) -> Result<(), &'static str> {
         let settings = settings.stepped();
-        // The part and the rest of its symmetry set, from the craft as flown.
-        let parts: Vec<usize> = match self.world.get::<docking::CraftDoc>(e) {
-            Some(d) => match d.0.parts.get(part).map(|p| p.symmetry).filter(|s| *s != 0) {
-                Some(s) => (0..d.0.parts.len())
-                    .filter(|&k| d.0.parts[k].symmetry == s)
-                    .collect(),
-                None => vec![part],
-            },
-            None => vec![part],
-        };
+        let parts = self.symmetry_set(e, part);
         let mut st = self
             .world
             .get_mut::<structure::Structure>(e)
@@ -945,10 +949,22 @@ impl Universe {
 
     /// Run one part's action now (its right-click menu); false when it does not apply to that part.
     pub fn part_action(&mut self, e: Entity, part: usize, action: &str, on: bool) -> bool {
+        // an engine's mode is copied to the rest of its symmetry set (`activeEngineMode`,
+        // `KSPState(CopyToSymmetrySet = true)`); its Auto Switch is not
+        let parts = if action == "mode" {
+            self.symmetry_set(e, part)
+        } else {
+            vec![part]
+        };
         let done = self
             .world
             .get_mut::<structure::Structure>(e)
-            .is_some_and(|mut st| st.part_action(part, action, on));
+            .is_some_and(|mut st| {
+                parts.iter().filter(|&&k| k != part).for_each(|&k| {
+                    st.part_action(k, action, on);
+                });
+                st.part_action(part, action, on)
+            });
         // crossfeed is part of the craft as saved (the original's `PartState.FuelCrossfeed`)
         if done && action == "crossfeed" {
             if let Some(mut doc) = self.world.get_mut::<docking::CraftDoc>(e) {
@@ -3092,6 +3108,47 @@ mod tests {
         u.stage(v);
         u.step();
         (u, v)
+    }
+
+    #[test]
+    fn an_engine_mode_change_goes_to_its_symmetry_set_but_auto_switch_does_not() {
+        let (mut u, v) = starter_in_orbit();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let rapier = defs
+            .iter()
+            .find(|d| d.id == "engine_1v_methane-methalox_rapier")
+            .unwrap();
+        // two parts of the craft made a symmetry pair of RAPIERs, a third left alone
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let mut craft = crafts
+            .into_iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap();
+        assert!(craft.parts.len() >= 3);
+        for k in 0..craft.parts.len() {
+            craft.parts[k].symmetry = if k < 2 { 7 } else { 0 };
+        }
+        u.set_craft(v, craft);
+        {
+            let mut st = u.world.get_mut::<structure::Structure>(v).unwrap();
+            for k in 0..3 {
+                st.engine_modes[k] = rapier.engines.clone();
+                st.engine_mode[k] = 0;
+            }
+        }
+        assert!(u.part_action(v, 0, "mode", true));
+        assert!(u.part_action(v, 1, "automode", false));
+        let st = u.structure(v).unwrap();
+        assert_eq!(st.engine_changing_to(0), Some(1));
+        assert_eq!(
+            st.engine_changing_to(1),
+            Some(1),
+            "its symmetry partner follows"
+        );
+        assert_eq!(st.engine_changing_to(2), None, "not in the set");
+        assert_eq!(st.engine_auto_switch[..3], [true, false, true]);
     }
 
     #[test]

@@ -9238,6 +9238,15 @@ impl App {
                 }
             ));
         }
+        // Protocol 76: Data_Engine's status line, mode switch and Auto Switch for a multi-mode engine.
+        if let Some(s) = spec.filter(|s| s.has_engine) {
+            html.push_str(&vab::engine_status_html(
+                &s.engines,
+                f.engine_modes.iter().find(|m| m.0 == i as u16).copied(),
+                f.engines_off.contains(&(i as u16)),
+                f.flameouts.contains(&(i as u16)),
+            ));
+        }
         // Protocol 63: a parachute's deploy settings, folded behind their heading until opened, the mode
         // gone once the canopy is fully open and everything gone once it is cut (`UpdatePAMControlVisibility`).
         let state = f.parachutes.iter().find(|c| c.0 == i as u16).map(|c| c.1);
@@ -13085,6 +13094,27 @@ impl App {
                     part: i as u16,
                     action: "engine".into(),
                     on: off,
+                }
+            }
+            "fh-act-mode" | "fh-act-automode" => {
+                let Some(i) = self.flight_pam else { return };
+                let Some(m) = f
+                    .as_ref()
+                    .and_then(|f| f.engine_modes.iter().find(|m| m.0 == i as u16).copied())
+                else {
+                    return;
+                };
+                let (action, on) = if id == "fh-act-mode" {
+                    // to the other of the two modes (or back, while a change is still waiting)
+                    ("mode", m.2.unwrap_or(m.1) == 0)
+                } else {
+                    ("automode", !m.3)
+                };
+                ClientMessage::PartAction {
+                    vessel,
+                    part: i as u16,
+                    action: action.into(),
+                    on,
                 }
             }
             "fh-act-crossfeed" => {

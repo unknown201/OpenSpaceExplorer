@@ -14,7 +14,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 75;
+pub const PROTOCOL_VERSION: u16 = 76;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -936,6 +936,14 @@ pub struct FlightReadout {
     pub burn_stopped: Option<String>,
     /// Engines the pilot has shut down (`PartAction` "engine" off).
     pub engines_off: Vec<u16>,
+    /// Multi-mode engines (protocol 76): (part, the mode it runs in, the mode it is changing to while it
+    /// waits out a change, Auto Switch on). `PartAction` "mode" picks the first (off) or second (on) mode
+    /// for the part and its symmetry set; "automode" sets Auto Switch for the part.
+    #[serde(default)]
+    pub engine_modes: Vec<(u16, u8, Option<u8>, bool)>,
+    /// Engines flamed out (`Module_Engine` `Flameout`): starved of propellant or of intake air.
+    #[serde(default)]
+    pub flameouts: Vec<u16>,
     /// A Kerbal holding a ladder: (vessel, part).
     pub on_ladder: Option<(u64, u16)>,
     /// A Kerbal climbing in through a hatch (`Board`): the vessel is gone a moment later.

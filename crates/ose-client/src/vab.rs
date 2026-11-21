@@ -68,6 +68,9 @@ pub struct ChuteSpec {
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
 pub struct EngineSpec {
+    /// The mode's id, which for the stock multi-mode engines is its display name ("Air Breathing", "Wet").
+    #[serde(default)]
+    pub id: String,
     #[serde(default)]
     pub max_thrust_kn: f64,
     #[serde(default)]
@@ -2904,6 +2907,61 @@ pub fn stage_in_situation(
     (dv.max(0.0) + 0.0, twr)
 }
 
+/// The original's engine status and mode controls in a flight part window (`Data_Engine`): the status line
+/// (`StatusString`: Nominal, Off or Flameout), and for an engine with more than one mode the mode it runs in
+/// (or is changing to, while it waits out the change) with a button for the other mode (`data-act`
+/// "fh-act-mode") and the Auto Switch toggle (`EngineAutoSwitchMode`, "fh-act-automode"). `mode` is the
+/// readout's (part, mode, changing_to, auto) entry.
+pub fn engine_status_html(
+    modes: &[EngineSpec],
+    mode: Option<(u16, u8, Option<u8>, bool)>,
+    off: bool,
+    flameout: bool,
+) -> String {
+    let esc = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    };
+    let status = if off {
+        "Off"
+    } else if flameout {
+        "Flameout"
+    } else {
+        "Nominal"
+    };
+    let mut html = format!(
+        "<div class=\"pam-acts\"><span>Status: <b data-engine-status>{status}</b></span></div>"
+    );
+    let Some((_, now, to, auto)) = mode.filter(|_| modes.len() > 1) else {
+        return html;
+    };
+    let name = |m: u8| {
+        modes
+            .get(m as usize)
+            .map(|e| e.id.as_str())
+            .filter(|n| !n.is_empty())
+            .map_or_else(|| format!("Mode {}", m + 1), esc)
+    };
+    let target = to.unwrap_or(now);
+    let other = u8::from(target == 0);
+    let shown = match to {
+        Some(t) if t != now => format!("{} &rarr; {}", name(now), name(t)),
+        _ => name(now),
+    };
+    html.push_str(&format!(
+        "<div class=\"pam-acts\"><span>Mode: <b data-engine-mode>{shown}</b></span>\
+         <button data-act=\"fh-act-mode\">{}</button></div>\
+         <div class=\"pam-acts\"><span>Auto Switch: <b>{}</b></span>\
+         <button data-act=\"fh-act-automode\">{}</button></div>",
+        name(other),
+        if auto { "on" } else { "off" },
+        if auto { "Turn off" } else { "Turn on" },
+    ));
+    html
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -3941,5 +3999,29 @@ mod tests {
             categories(&cat),
             vec!["Pods", "FuelTank", "Engine", "Coupling", "Utility"]
         );
+    }
+
+    #[test]
+    fn the_engine_part_window_shows_its_status_mode_switch_and_auto_switch() {
+        let modes: Vec<EngineSpec> = ["Air Breathing", "Closed Cycle"]
+            .iter()
+            .map(|id| EngineSpec {
+                id: (*id).into(),
+                ..Default::default()
+            })
+            .collect();
+        let one = engine_status_html(&modes[..1], None, false, false);
+        assert!(one.contains("Nominal") && !one.contains("fh-act-mode"));
+        assert!(engine_status_html(&modes[..1], None, false, true).contains("Flameout"));
+        assert!(engine_status_html(&modes[..1], None, true, true).contains(">Off<"));
+        let rapier = engine_status_html(&modes, Some((3, 0, None, true)), false, false);
+        assert!(rapier.contains("<b data-engine-mode>Air Breathing</b>"));
+        assert!(rapier.contains("<button data-act=\"fh-act-mode\">Closed Cycle</button>"));
+        assert!(rapier.contains("Auto Switch: <b>on</b>"));
+        // while the change waits, it shows where it is going and offers the way back
+        let changing = engine_status_html(&modes, Some((3, 0, Some(1), false)), false, false);
+        assert!(changing.contains("Air Breathing &rarr; Closed Cycle"));
+        assert!(changing.contains("<button data-act=\"fh-act-mode\">Air Breathing</button>"));
+        assert!(changing.contains("Auto Switch: <b>off</b>"));
     }
 }
