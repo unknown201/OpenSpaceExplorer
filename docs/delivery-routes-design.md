@@ -262,8 +262,16 @@ Colonies, cargo inventory, a funds economy, crew rotation, landed depots (decisi
    if it was still climbing, planning its rendezvous from where it is if in orbit, or pumping what is
    left of its cargo if docked (what each run has pumped so far is saved). A run leaving the depot carries
    on undocking, or flying home. A run whose vessel is gone ends as Missed. The test restarts once while
-   the first run is in orbit and once while it flies home. Still to do: warp rules, take control, the
-   "Send home / Let go / Keep" buttons for stayed runs, and depot-to-depot shuttles.*
+   the first run is in orbit and once while it flies home.*
+   *Step 2d (protocol 76): taking control (3.11) and cleaning up by hand (3.10). Take control is the
+   usual `TakeControl` of the run's vessel: while a player pilots it, the route pilot stands aside, the
+   run shows as flown by hand (`RouteInfo::manual`) and doesn't hold the warp down, and the player is
+   added to the run's `flown_by`. `ReleaseControl` (or flying something else) hands it back. The pilot
+   then picks the run up from wherever it is, as after a restart: it ascends or plans again, pumps if the
+   player docked it, or the run ends as Missed if the vessel is gone. `RouteStayed` sends home, lets go
+   or keeps the run a route left docked at the depot. The test flies run 1 by hand for a minute in
+   orbit before handing it back, and lets the last run go at the end. Still to do: warp rules,
+   depot-to-depot shuttles (sharing the route endpoint with colony routes), and the client panel.*
 3. **Client**: launch checkbox, routes panel, depot toggle, map tags, toasts.
 4. **Browser e2e** against a local server, never prod: record a run with the bot, create the route,
    and watch two runs. Plus a collision test: two routes into one port at the same window.

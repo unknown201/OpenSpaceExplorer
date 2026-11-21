@@ -5002,7 +5002,8 @@ fn handle_message(
             | ClientMessage::CreateRoute { .. }
             | ClientMessage::PauseRoute { .. }
             | ClientMessage::DeleteRoute { .. }
-            | ClientMessage::SetRouteEnd { .. }),
+            | ClientMessage::SetRouteEnd { .. }
+            | ClientMessage::RouteStayed { .. }),
         ) => out.push(routes::handle(s, player_id, &msg)),
         Ok(
             msg @ (ClientMessage::FoundColony { .. }
