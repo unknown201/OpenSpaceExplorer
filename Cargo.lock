@@ -1943,6 +1943,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ose-colonies"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "ose-data",
+ "ose-math",
+ "ose-pilot",
+ "ose-sim",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ose-data"
 version = "0.1.0"
 dependencies = [
@@ -2028,6 +2041,7 @@ dependencies = [
  "httpdate",
  "image",
  "lettre",
+ "ose-colonies",
  "ose-data",
  "ose-math",
  "ose-net",

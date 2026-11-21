@@ -11,6 +11,7 @@
 
 mod accounts;
 mod campaigns;
+mod colonies;
 mod crew_docking;
 mod diagnostics;
 mod interest;
@@ -1893,6 +1894,8 @@ fn launch_sites(_home: &str) -> Vec<ose_net::LaunchSite> {
                 lon_deg: lon,
                 // planes face down the runway (the scene's +X)
                 heading_deg: site.x_heading_deg(),
+                body: None,
+                colony: None,
             }
         })
         .collect()
@@ -1926,7 +1929,7 @@ fn site_vessels(
     site: &ose_net::LaunchSite,
 ) -> Vec<(bevy_ecs::entity::Entity, u64, Option<u64>, String)> {
     let mut found = Vec::new();
-    let Some(home) = u.body_entity("Kerbin") else {
+    let Some(home) = u.body_entity(site.body.as_deref().unwrap_or("Kerbin")) else {
         return found;
     };
     let Some(body) = u.world.get::<ose_sim::bodies::Body>(home) else {
@@ -1958,7 +1961,8 @@ fn site_vessels(
 /// `ClearLaunchSite`: remove the player's own vessels from a launch site, as the original's VAB does before
 /// rolling out onto an occupied pad (`OABProvider.ClearVesselsAtSelectedLaunchSite`).
 fn clear_launch_site(s: &Shared, player_id: u64, site: Option<&str>) -> ServerMessage {
-    let sites = launch_sites("Kerbin");
+    let mut sites = launch_sites("Kerbin");
+    sites.extend(colonies::sites(s, &s.universe.lock().expect("sim lock")));
     let at = match site {
         None => sites.first(),
         Some(id) => sites.iter().find(|x| x.id == id),
@@ -2002,6 +2006,7 @@ fn clear_launch_site(s: &Shared, player_id: u64, site: Option<&str>) -> ServerMe
 fn launch_sites_message(s: &Shared) -> ServerMessage {
     let u = s.universe.lock().expect("sim lock");
     let mut sites = launch_sites("Kerbin");
+    sites.extend(colonies::sites(s, &u));
     for site in &mut sites {
         if let Some(o) = launch_site_occupant(s, &u, site) {
             site.occupied_by = Some(o.owner);
@@ -2230,7 +2235,8 @@ fn launch_on_pad_now(
     let Some(body) = u.body_entity(&home.id) else {
         return fail("home body missing".into());
     };
-    let sites = launch_sites(&home.id);
+    let mut sites = launch_sites(&home.id);
+    sites.extend(colonies::sites(s, &u));
     let at = match site {
         None => sites.first(),
         Some(id) => sites.iter().find(|x| x.id == id),
@@ -2240,6 +2246,28 @@ fn launch_on_pad_now(
     };
     if let Some(o) = launch_site_occupant(s, &u, &at) {
         return fail(format!("{} is in use by {}", at.name, o.owner));
+    }
+    // A colony's pad (`colonies.rs`): on the colony's body, paid for out of its stock, crewed by its residents.
+    let body = match at.body.as_deref() {
+        None => body,
+        Some(id) => match u.body_entity(id) {
+            Some(b) => b,
+            None => return fail(format!("no body {id}")),
+        },
+    };
+    let colony = match at.colony {
+        None => None,
+        Some(id) => match s.campaign.lock().expect("campaign lock").colonies.get(id) {
+            Some(c) => Some(c.clone()),
+            None => return fail("that colony is gone".into()),
+        },
+    };
+    let bill = ose_colonies::bill(craft, m.dry_t);
+    if let Some(col) = &colony {
+        let short = ose_colonies::shortfall(&ose_colonies::stock(&mut u, col), &bill);
+        if !short.is_empty() {
+            return fail(ose_colonies::describe_shortfall(&short));
+        }
     }
     let (pad_lat, pad_lon) = (at.lat_deg, at.lon_deg);
     let e = u.spawn_powered_on_surface(&name, body, spec, pad_lat, pad_lon);
@@ -2256,9 +2284,29 @@ fn launch_on_pad_now(
     if is_level {
         u.set_level(e, at.heading_deg);
     }
-    if let Err(reason) = crew_launch(s, &mut u, e, crew) {
+    let crewed = match &colony {
+        None => crew_launch(s, &mut u, e, crew),
+        Some(col) => ose_colonies::board(&mut u, col, e, crew).map(|_| ()),
+    };
+    if let Err(reason) = crewed {
         u.despawn_vessel(e);
         return fail(reason);
+    }
+    if let Some(col) = &colony {
+        if let Err(reason) = ose_colonies::draw(&mut u, col, &bill) {
+            u.despawn_vessel(e);
+            return fail(reason);
+        }
+        let mut c = s.campaign.lock().expect("campaign lock");
+        if let Some(x) = c.colonies.colonies.iter_mut().find(|x| x.id == col.id) {
+            x.launches += 1;
+        }
+        tracing::info!(
+            player = player_id,
+            colony = col.id,
+            ?bill,
+            "launched from a colony"
+        );
     }
     let mut list = s.vessels.lock().expect("vessels lock");
     let id = s.new_vessel_id(&list);
@@ -4981,6 +5029,11 @@ fn handle_message(
             | ClientMessage::DeleteRoute { .. }
             | ClientMessage::SetRouteEnd { .. }),
         ) => out.push(routes::handle(s, player_id, &msg)),
+        Ok(
+            msg @ (ClientMessage::FoundColony { .. }
+            | ClientMessage::AbandonColony { .. }
+            | ClientMessage::ColoniesInfo),
+        ) => out.push(colonies::handle(s, player_id, &msg)),
         Ok(ClientMessage::Viewing { vessel }) => interest::set_viewing(s, player_id, vessel),
         Ok(ClientMessage::TakeControl { vessel }) => {
             let ok = owned_vessel(s, vessel, player_id).is_some();

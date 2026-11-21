@@ -51,6 +51,9 @@ fn esc(s: &str) -> String {
 pub fn text<'a>(loc: &'a HashMap<String, String>, key: &'a str) -> std::borrow::Cow<'a, str> {
     match loc.get(key) {
         Some(v) => std::borrow::Cow::Borrowed(v.as_str()),
+        None if ose_data::colony::own_text(key).is_some() => {
+            std::borrow::Cow::Borrowed(ose_data::colony::own_text(key).unwrap_or_default())
+        }
         None => {
             let last = key.rsplit('/').next().unwrap_or(key);
             std::borrow::Cow::Owned(last.replace(['_', '-'], " "))

@@ -72,6 +72,7 @@ mod reentry_gpu;
 pub mod render;
 pub mod rendezvous;
 pub use ose_guidance::plan as rendezvous_plan;
+pub mod colonies_ui;
 mod rendezvous_ui;
 pub mod rnd;
 pub mod scene;
@@ -376,6 +377,10 @@ struct App {
     /// The VAB Colors tool paints the selected part rather than the whole vehicle.
     paint_part: bool,
     ts_mine_only: bool,
+    /// The Colonies tab (protocol 75), the colony picked there, and when the colonies were last asked for.
+    ts_colonies: bool,
+    ts_colony: Option<u64>,
+    colonies_asked_ms: f64,
     ts_rendered_ms: f64,
     /// Whether the KSC camera is on the launch pad (glides there while the pad dialog is open).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -436,6 +441,10 @@ struct App {
     raw_rotation_sent: Option<(u64, [f32; 3])>,
     /// Launch sites from the server (protocol 30) and the one chosen (None: launch pad 1), kept per browser.
     launch_sites: Vec<ose_net::LaunchSite>,
+    /// The campaign's colonies as the server last listed them (protocol 75), and the one being founded.
+    colonies: Vec<ose_net::ColonyInfo>,
+    colony_founding: Option<String>,
+    colonies_known: bool,
     /// A craft to roll out once the launch site has been cleared of the player's vessel on it.
     launch_after_clear: Option<u64>,
     launch_site: Option<String>,
@@ -1082,6 +1091,9 @@ pub fn start() -> Result<(), JsValue> {
         km_selected: None,
         paint_part: false,
         ts_mine_only: false,
+        ts_colonies: false,
+        ts_colony: None,
+        colonies_asked_ms: 0.0,
         ts_rendered_ms: 0.0,
         ksc_on_pad: false,
         throttle: 0.0,
@@ -1122,6 +1134,9 @@ pub fn start() -> Result<(), JsValue> {
         precision_sent: None,
         raw_rotation_sent: None,
         launch_sites: Vec::new(),
+        colonies: Vec::new(),
+        colony_founding: None,
+        colonies_known: false,
         launch_after_clear: None,
         launch_site: stored("ose.launchSite"),
         loading_place: None,
@@ -2864,10 +2879,20 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             Box::new(move |a| {
                 let mut app = a.borrow_mut();
                 app.ts_mine_only = mine;
+                app.ts_colonies = false;
                 app.render_tracking();
             }),
         )?;
     }
+    wire(
+        "ts-tab-colonies",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.ts_colonies = true;
+            app.ask_colonies(now_ms());
+            app.render_tracking();
+        }),
+    )?;
     if let Some(panel) = doc.get_element_by_id("tracking") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
@@ -2896,6 +2921,34 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                     }
                     app.render_tracking();
                 }
+                return;
+            }
+            if let Some(id) = num("data-ose-colony-abandon") {
+                let name = app
+                    .colonies
+                    .iter()
+                    .find(|c| c.id == id)
+                    .map(|c| c.name.clone())
+                    .unwrap_or_default();
+                let sure = web_sys::window()
+                    .and_then(|w| {
+                        w.confirm_with_message(&format!(
+                            "Abandon {name}? Its vessels stay where they are, but its launch pad goes."
+                        ))
+                        .ok()
+                    })
+                    .unwrap_or(false);
+                if sure {
+                    if let Some(ws) = &app.ws {
+                        send(ws, &ClientMessage::AbandonColony { id });
+                    }
+                    app.ts_colony = None;
+                }
+                return;
+            }
+            if let Some(id) = num("data-ose-colony") {
+                app.ts_colony = Some(id);
+                app.render_tracking();
                 return;
             }
             if let Some(id) = num("data-ose-ts-focus") {
@@ -6961,6 +7014,38 @@ impl App {
                 };
                 set_text(&self.doc, "rd-note", &msg);
             }
+            ServerMessage::Colonies { colonies, reason } => {
+                let founding = self.colony_founding.take();
+                match (reason, founding) {
+                    (Some(why), _) => hud::push(&self.doc, &format!("Colony: {why}"), "warning"),
+                    (None, Some(name)) if colonies.iter().any(|c| c.name == name) => {
+                        hud::push(
+                            &self.doc,
+                            &format!("{name} founded: its launch pad is in the VAB's launch sites"),
+                            "passive",
+                        );
+                    }
+                    _ if self.colonies_known => {
+                        // another player's new colony
+                        for c in colonies
+                            .iter()
+                            .filter(|c| !self.colonies.iter().any(|o| o.id == c.id))
+                        {
+                            hud::push(
+                                &self.doc,
+                                &format!("{} founded {} on the {}", c.owner_name, c.name, c.body),
+                                "passive",
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+                self.colonies_known = true;
+                self.colonies = colonies;
+                if self.tracking_open && self.ts_colonies {
+                    self.render_tracking();
+                }
+            }
             ServerMessage::AgencyNews { by, event } => {
                 let tech = |id: &str| {
                     let key = self
@@ -9134,6 +9219,13 @@ impl App {
                 }
             ));
         }
+        // Protocol 75: a colony trunk founds a colony where the vessel has landed (`docs/colonies-design.md`).
+        if part.part_id.starts_with("transport_3v_colony_trunk") {
+            html.push_str(&format!(
+                "<div class=\"pam-acts\"><button data-act=\"fh-act-colony\">{}</button></div>",
+                self.tr("OSE/Colony/Found", "Found colony here")
+            ));
+        }
         // Protocol 57: shut an engine down or start it again, and the part's action-group bindings.
         if spec.is_some_and(|s| s.has_engine) {
             let off = f.engines_off.contains(&(i as u16));
@@ -10835,8 +10927,66 @@ impl App {
             .collect()
     }
 
+    /// Ask the server for the colonies (the Colonies tab), at most every 3 s.
+    fn ask_colonies(&mut self, now: f64) {
+        if now - self.colonies_asked_ms < 3000.0 {
+            return;
+        }
+        self.colonies_asked_ms = now;
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::ColoniesInfo);
+        }
+    }
+
+    /// The Colonies tab: the list and the picked colony's card.
+    fn render_colonies_tab(&mut self) {
+        if self
+            .ts_colony
+            .is_some_and(|id| !self.colonies.iter().any(|c| c.id == id))
+        {
+            self.ts_colony = None;
+        }
+        let list = colonies_ui::render_list(&self.colonies, self.ts_colony);
+        let info = match self
+            .ts_colony
+            .and_then(|id| self.colonies.iter().find(|c| c.id == id))
+        {
+            Some(c) => colonies_ui::render_info(c, self.player_id),
+            None => "<div class=\"ts-hint\">Select a colony</div>".to_string(),
+        };
+        for (id, html) in [
+            ("ts-list", list),
+            ("ts-info", info),
+            ("ts-filters", String::new()),
+        ] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                let key = format!("{}:{}", html.len(), hud::fnv(&html));
+                if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+                    el.set_inner_html(&html);
+                    el.set_attribute("data-ose-key", &key).ok();
+                }
+            }
+        }
+        for (id, on) in [
+            ("ts-tab-all", false),
+            ("ts-tab-mine", false),
+            ("ts-tab-colonies", true),
+        ] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                el.class_list().toggle_with_force("on", on).ok();
+            }
+        }
+    }
+
     fn render_tracking(&mut self) {
         self.ts_rendered_ms = now_ms();
+        if self.ts_colonies {
+            self.render_colonies_tab();
+            return;
+        }
+        if let Some(el) = self.doc.get_element_by_id("ts-tab-colonies") {
+            el.class_list().toggle_with_force("on", false).ok();
+        }
         let rows = self.tracking_rows();
         if let Some(el) = self.doc.get_element_by_id("ts-list") {
             let mut html =
@@ -10893,6 +11043,9 @@ impl App {
             el.class_list().toggle_with_force("open", visible).ok();
         }
         if visible && now - self.ts_rendered_ms > 500.0 {
+            if self.ts_colonies {
+                self.ask_colonies(now);
+            }
             self.render_tracking();
         }
     }
@@ -12994,6 +13147,23 @@ impl App {
                     vessel,
                     part: if here { 0 } else { cur as u16 },
                 }
+            }
+            "fh-act-colony" => {
+                let base = self
+                    .scene
+                    .as_ref()
+                    .and_then(|s| s.vessel(vessel))
+                    .map(|v| format!("{} Colony", v.name))
+                    .unwrap_or_else(|| "Colony".into());
+                let Some(name) = prompt_text("Name the colony", &base) else {
+                    return;
+                };
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    return;
+                }
+                self.colony_founding = Some(name.clone());
+                ClientMessage::FoundColony { vessel, name }
             }
             "fh-act-rename" => {
                 let old = self
