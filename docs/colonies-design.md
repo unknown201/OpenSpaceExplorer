@@ -1,7 +1,7 @@
 # Colonies: design and plan
 
-Status: **step 1 built** (2026-11-21, protocol 75). Later steps are proposals; the open questions in section 5
-are for Josh.
+Status: **step 1 built** (2026-11-21, protocol 75), with Josh's answers to the first questions (section 5).
+Later steps follow the agreed order in section 4.
 
 ## 1. Why colonies, and what KSP2 had
 
@@ -42,8 +42,12 @@ transferring fuel, EVA, boarding) works on it unchanged.
 
 ## 3. Step 1 (built)
 
-- **Research**: KSP2's tree leaves the colony trunks out, so OSE adds them to the 3.75 m payload node
-  (`tNode_3v_payload_01`, with the 3.75 m crew cabin) in the importer and `assets/own/tech-tree.json`.
+- **Research**: a colony path in the tech tree (OSE's own, `ose_data::colony::NODES`), after the 3.75 m
+  payload node: **Colony Foundations** (2900 science, the small trunk) then **Colony Logistics** (4500, the
+  large trunk). The importer adds them, and a test keeps `assets/own/tech-tree.json` in step.
+- **Metal**: a new resource, the building material, one unit a kilogram. The small trunk holds 10 t of it
+  and the large one 40 t, filled on Kerbin like a fuel tank (the VAB can fill less). Like fuel, it is part of
+  the stock once its trunk is landed at the colony, and it can be pumped between docked vessels.
 - **Found** (`FoundColony { vessel, name }`): a player's vessel founds a colony where it stands when it is
   landed (not afloat, not wrecked), carries a colony trunk, and has a Kerbal aboard. Colonies stand at least
   2 km apart on a body and at least 5 km from the KSC. The colony is saved with the campaign
@@ -54,9 +58,9 @@ transferring fuel, EVA, boarding) works on it unchanged.
   so a craft waiting on the pad is not part of the stock. It appears in the VAB's launch-site list as
   "<name> pad (<body>)", with the usual "in use" check.
 - **Paying for a launch**: a craft rolled out on a colony pad takes every resource its tanks hold from the
-  colony's stock, except electric charge (batteries charge themselves) and intake air. Each tank gives in
-  proportion to what it holds. If anything is short the launch is refused and says what is missing; nothing
-  is taken. Parts are free for now, as route runs are.
+  colony's stock, except electric charge (batteries charge themselves) and intake air, **and its parts' dry
+  mass in Metal** (1 kg per unit). Each tank gives in proportion to what it holds. If anything is short the
+  launch is refused and says what is missing; nothing is taken.
 - **Crew**: the craft is crewed by the colony's residents (chosen names must live there; otherwise residents
   fill the seats in order). They leave their colony vessel.
 - **Abandon** (`AbandonColony { id }`, founder only): the record goes; the vessels stay.
@@ -74,21 +78,18 @@ Code: `crates/ose-colonies` (rules, tested on the Mun in `tests/found_and_launch
    colony's radius instead of docking, and its tanks become stock (or are pumped into the colony's tanks).
    Needs the route pilot to land at a site, which ose-pilot's descent (R6) nearly does.
 3. **Colony CommNet**: a colony with an antenna is a ground station (KSP2's `IsCommNetSource`).
-4. **Building costs parts too**: charge dry mass against a construction resource. KSP2's provider takes
-   any resource dictionary; we would need to pick which resource stands for materials (see Q3).
+4. ~~Building costs parts too~~: done in step 1 (Metal).
 5. **In-situ resources**: an abundance map per body (KSP2's `AbundanceRequest`), drills and converters
    (Methane, Uranium). KSP2 ships no drill parts, so this needs our own parts.
 6. **Population**: KSP2's vacancy fill: new Kerbals join a colony with habitation over time.
 7. **Orbital colonies**: KSP2 planned an orbital editor environment. Depots already cover stations for
    routes; an orbital colony would add building in orbit.
 
-## 5. Open questions for Josh
+## 5. Decisions (Josh, 2026-11-21)
 
-- **Q1. Founding requirement.** Step 1 needs a colony trunk plus a Kerbal aboard, landed. Keep the trunk as
-  the "colony kit", or let any crewed landed vessel found one?
-- **Q2. What a launch costs.** Step 1 charges the craft's fuel only; parts are free. Should parts cost
-  something (Q3), or stay free like route runs?
-- **Q3. Construction resource.** If parts cost, which resource pays: a new "Materials" resource delivered
-  from Kerbin, an existing one (e.g. Uranium or Methane), or ore mined at the colony?
-- **Q4. Order of the next steps** in section 4. Proposed: panel, routes to colonies, CommNet, then
-  resources and population.
+1. **A colony trunk is required** to found a colony (with a Kerbal aboard, landed).
+2. **Parts cost Metal shipped from Kerbin, like fuel.**
+3. (Follows from 2: the construction resource is Metal.)
+4. **The order of section 4 is agreed**: colony panel, routes to colonies, CommNet, then resources and
+   population.
+5. **Colony research has its own path in the tech tree.**

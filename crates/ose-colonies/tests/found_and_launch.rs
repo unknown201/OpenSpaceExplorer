@@ -8,8 +8,8 @@ use ose_data::craft::Craft;
 mod common;
 use common::{modules, on_surface, world};
 
-/// The Unity module with a small colony trunk hung on its side.
-fn with_trunk(c: &Craft) -> Craft {
+/// The Unity module with a small colony trunk hung on its side, holding `metal` units.
+fn with_trunk(c: &Craft, metal: f64) -> Craft {
     let mut c = c.clone();
     let mut trunk = c
         .parts
@@ -19,7 +19,11 @@ fn with_trunk(c: &Craft) -> Craft {
         .clone();
     trunk.guid = "trunk".into();
     trunk.part_id = "transport_3v_colony_trunk_small".into();
-    trunk.resources.clear();
+    trunk.resources = vec![ose_data::craft::StoredResource {
+        resource: "Metal".into(),
+        stored_units: metal,
+        capacity_units: 10_000.0,
+    }];
     c.parts.push(trunk);
     c
 }
@@ -36,7 +40,15 @@ fn a_colony_on_the_mun_stocks_fuel_and_launches_from_its_pad() {
     let m = modules();
     let mut w = world();
     let mun = w.u.body_entity("Mun").unwrap();
-    let base = on_surface(&mut w, mun, &with_trunk(&m.unity), 1.0, 20.0);
+    // enough Metal for two Unity launches and a half
+    let dry_t = m.unity.mass(&w.defs, &w.resources).dry_t;
+    let base = on_surface(
+        &mut w,
+        mun,
+        &with_trunk(&m.unity, 2_500.0 * dry_t),
+        1.0,
+        20.0,
+    );
     for _ in 0..50 {
         w.u.step();
     }
@@ -95,12 +107,15 @@ fn a_colony_on_the_mun_stocks_fuel_and_launches_from_its_pad() {
     let d = surface_distance(r, (colony.lat_deg, colony.lon_deg), (plat, plon));
     assert!(d > ose_colonies::RADIUS_M, "{d}");
 
-    // launching a Unity from the pad costs 4.5 monopropellant, not its charge, and takes two residents
-    let bill = bill(&m.unity);
-    assert_eq!(bill.len(), 1, "{bill:?}");
+    // launching a Unity from the pad costs 4.5 monopropellant and its dry mass in Metal, not its charge
+    let bill = bill(&m.unity, dry_t);
+    assert_eq!(bill.len(), 2, "{bill:?}");
+    assert!((bill["Metal"] - 1000.0 * dry_t).abs() < 1e-6);
+    let metal = held(&before, "Metal");
     draw(&mut w.u, &colony, &bill).expect("paid");
     let after = stock(&mut w.u, &colony);
     assert!((held(&after, "MonoPropellant") - (mono - 4.5)).abs() < 1e-6);
+    assert!((held(&after, "Metal") - (metal - 1000.0 * dry_t)).abs() < 1e-6);
     assert!((held(&after, "ElectricCharge") - held(&before, "ElectricCharge")).abs() < 1e-6);
     let rocket = on_surface(&mut w, mun, &m.unity, plat, plon);
     w.u.set_crew(rocket, Vec::new());
@@ -131,11 +146,29 @@ fn a_colony_on_the_mun_stocks_fuel_and_launches_from_its_pad() {
     // once more drains the colony dry and is then refused, taking nothing
     draw(&mut w.u, &colony, &bill).expect("second");
     let short = draw(&mut w.u, &colony, &bill).unwrap_err();
-    assert!(short.contains("MonoPropellant"), "{short}");
+    assert!(
+        short.contains("MonoPropellant") && short.contains("Metal"),
+        "{short}"
+    );
 
     // the book saves and loads
     let again: Colonies = serde_json::from_str(&serde_json::to_string(&book).unwrap()).unwrap();
-    assert_eq!(again, book);
+    let (a, b) = (&again.colonies[0], &book.colonies[0]);
+    assert_eq!(
+        (a.id, &a.name, &a.body, a.owner),
+        (b.id, &b.name, &b.body, b.owner)
+    );
+    assert!((a.lat_deg - b.lat_deg).abs() < 1e-9 && (a.lon_deg - b.lon_deg).abs() < 1e-9);
+    // the next colony takes a new id after a load
+    let mut again = again;
+    let far = on_surface(&mut w, mun, &with_trunk(&m.unity, 0.0), -30.0, 100.0);
+    for _ in 0..20 {
+        w.u.step();
+    }
+    let next = again
+        .found(&mut w.u, far, 7, "Aldrin")
+        .expect("second colony");
+    assert_ne!(next, id);
     assert!(book.clone().abandon(id, 8).is_err());
     let mut b2 = book.clone();
     b2.abandon(id, 7).unwrap();

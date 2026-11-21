@@ -178,7 +178,9 @@ fn main() -> anyhow::Result<()> {
             args.own_out.join("kerbol-system.json"),
             serde_json::to_string_pretty(&bodies)?,
         )?;
-        let slim: Vec<ose_data::PartDef> = game
+        let mut tech = ose_importer::science::import_tech_tree(&args.data.join("technodedata"))?;
+        let mut resources = game.resources.clone();
+        let mut slim: Vec<ose_data::PartDef> = game
             .parts
             .iter()
             .map(|p| ose_data::PartDef {
@@ -188,12 +190,13 @@ fn main() -> anyhow::Result<()> {
                 ..p.clone()
             })
             .collect();
+        // OSE's own colony content: Metal, the trunks' holds, the colony research path
+        ose_data::colony::add_colony_content(&mut slim, &mut resources, &mut tech);
         std::fs::write(
             args.own_out.join("parts-catalog.json"),
             serde_json::to_string(&slim)?,
         )?;
         let (science, regions) = ose_importer::science::import_science(&args.data.join("science"))?;
-        let tech = ose_importer::science::import_tech_tree(&args.data.join("technodedata"))?;
         std::fs::create_dir_all(args.own_out.join("science"))?;
         std::fs::write(
             args.own_out.join("science/index.json"),
@@ -229,7 +232,7 @@ fn main() -> anyhow::Result<()> {
         )?;
         std::fs::write(
             args.own_out.join("resources.json"),
-            serde_json::to_string_pretty(&game.resources)?,
+            serde_json::to_string_pretty(&resources)?,
         )?;
         std::fs::write(
             args.own_out.join("stock-craft.json"),

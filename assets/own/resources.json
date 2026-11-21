@@ -243,5 +243,21 @@
         ]
       }
     }
+  },
+  {
+    "id": "Metal",
+    "display_name_key": "Resource/DisplayName/Metal",
+    "abbreviation_key": "Resource/Abbreviation/Metal",
+    "kind": {
+      "Basic": {
+        "mass_per_unit_t": 0.001,
+        "volume_per_unit": 0.2,
+        "specific_heat_capacity_per_unit": 0.45,
+        "flow_mode": "AllVessel",
+        "pumpable": true,
+        "cost_per_unit": 0.01,
+        "non_stageable": false
+      }
+    }
   }
 ]

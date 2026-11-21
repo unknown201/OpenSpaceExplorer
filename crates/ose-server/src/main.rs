@@ -2237,7 +2237,7 @@ fn launch_on_pad_now(
             None => return fail("that colony is gone".into()),
         },
     };
-    let bill = ose_colonies::bill(craft);
+    let bill = ose_colonies::bill(craft, m.dry_t);
     if let Some(col) = &colony {
         let short = ose_colonies::shortfall(&ose_colonies::stock(&mut u, col), &bill);
         if !short.is_empty() {

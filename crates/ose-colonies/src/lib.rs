@@ -242,8 +242,9 @@ pub fn pad(u: &Universe, c: &Colony) -> Option<(f64, f64)> {
     Some(travel(r, (c.lat_deg, c.lon_deg), 90.0, PAD_DISTANCE_M))
 }
 
-/// What launching `craft` from a colony costs: every resource its tanks hold, but those in `FREE`.
-pub fn bill(craft: &Craft) -> BTreeMap<String, f64> {
+/// What launching `craft` from a colony costs: every resource its tanks hold, but those in `FREE`, and its
+/// parts' dry mass `dry_t` in Metal (`ose_data::colony`, a unit a kilogram) shipped from Kerbin.
+pub fn bill(craft: &Craft, dry_t: f64) -> BTreeMap<String, f64> {
     let mut all: BTreeMap<String, f64> = BTreeMap::new();
     for p in &craft.parts {
         for r in &p.resources {
@@ -251,6 +252,10 @@ pub fn bill(craft: &Craft) -> BTreeMap<String, f64> {
                 *all.entry(r.resource.clone()).or_default() += r.stored_units;
             }
         }
+    }
+    if dry_t > 0.0 {
+        *all.entry(ose_data::colony::METAL.to_string()).or_default() +=
+            dry_t / ose_data::colony::METAL_UNIT_T;
     }
     all
 }
@@ -394,7 +399,8 @@ mod tests {
             "parts": []
         }))
         .unwrap_or_default();
-        assert!(bill(&craft).is_empty());
+        assert!(bill(&craft, 0.0).is_empty());
+        assert_eq!(bill(&craft, 1.5)["Metal"], 1500.0);
         let stock = vec![Stock {
             resource: "Methane".into(),
             stored: 10.0,

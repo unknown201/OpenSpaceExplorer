@@ -1556,9 +1556,7 @@
       "cargobay_3v_1x1",
       "cargobay_3v_1x8",
       "fairing_3v_procedural",
-      "enginemount_3v_procedural",
-      "transport_3v_colony_trunk_small",
-      "transport_3v_colony_trunk_large"
+      "enginemount_3v_procedural"
     ],
     "requires": [
       "tNode_3v_trusses_01"
@@ -1971,6 +1969,44 @@
     "position": [
       4860.0,
       530.0
+    ]
+  },
+  {
+    "id": "tNode_ose_colonies_01",
+    "name_key": "OSE/TechNodes/Names/tNode_ose_colonies_01",
+    "description_key": "OSE/TechNodes/Descriptions/tNode_ose_colonies_01",
+    "icon": "ICO-RDCenter-Payload-24x",
+    "required_science": 2900,
+    "parts": [
+      "transport_3v_colony_trunk_small"
+    ],
+    "requires": [
+      "tNode_3v_payload_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3780.0,
+      310.0
+    ]
+  },
+  {
+    "id": "tNode_ose_colonies_02",
+    "name_key": "OSE/TechNodes/Names/tNode_ose_colonies_02",
+    "description_key": "OSE/TechNodes/Descriptions/tNode_ose_colonies_02",
+    "icon": "ICO-RDCenter-Payload-24x",
+    "required_science": 4500,
+    "parts": [
+      "transport_3v_colony_trunk_large"
+    ],
+    "requires": [
+      "tNode_ose_colonies_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3960.0,
+      310.0
     ]
   }
 ]
