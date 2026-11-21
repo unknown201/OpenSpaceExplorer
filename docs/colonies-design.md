@@ -1,6 +1,6 @@
 # Colonies: design and plan
 
-Status: **step 1 built** (2026-11-21, protocol 75), with Josh's answers to the first questions (section 5).
+Status: **step 1 and the colony panel built** (2026-11-21, protocol 75), with Josh's answers to the first questions (section 5).
 Later steps follow the agreed order in section 4.
 
 ## 1. Why colonies, and what KSP2 had
@@ -72,8 +72,10 @@ Code: `crates/ose-colonies` (rules, tested on the Mun in `tests/found_and_launch
 
 ## 4. Proposed next steps
 
-1. **Colony panel** in the tracking station and map: list colonies with stock, residents and vessels; jump
-   to a colony; abandon. A colony icon on the map and in the flight view.
+1. ~~**Colony panel**~~ (built): the tracking station's **Colonies** tab lists the campaign's colonies; the
+   card of the one picked shows its body and site, residents, vessels, launches and stock (Metal first, in
+   units and tonnes), and its founder can abandon it there. Still to come: a colony icon on the map and in
+   the flight view.
 2. **Delivery routes to colonies**: `Endpoint::Colony(id)` (routes design 3.1). A run lands within the
    colony's radius instead of docking, and its tanks become stock (or are pumped into the colony's tanks).
    Needs the route pilot to land at a site, which ose-pilot's descent (R6) nearly does.
