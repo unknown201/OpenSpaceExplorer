@@ -15,6 +15,7 @@ pub mod ascent;
 pub mod burn;
 pub mod depart;
 pub mod descent;
+pub mod landing;
 pub mod mission;
 pub mod soi;
 pub mod window;
