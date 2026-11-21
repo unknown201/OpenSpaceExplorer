@@ -82,7 +82,11 @@ Code: `crates/ose-colonies` (rules, tested on the Mun in `tests/found_and_launch
 4. ~~Building costs parts too~~: done in step 1 (Metal).
 5. **In-situ resources**: an abundance map per body (KSP2's `AbundanceRequest`), drills and converters
    (Methane, Uranium). KSP2 ships no drill parts, so this needs our own parts.
-6. **Population**: KSP2's vacancy fill: new Kerbals join a colony with habitation over time.
+6. ~~**Population**~~ (built): KSP2's vacancy fill, with the colony's empty seats as its room. A colony with
+   someone living there and an empty seat takes in a newcomer every two Kerbin days (`VACANCY_DELAY_S`, from
+   its founding or the last arrival): the next Kerbal the campaign has not hired is hired and sits in the
+   first empty seat (`Colonies::settle`, run by the server once a second). Without room or residents the wait
+   starts over. The colony card shows the empty seats, how many moved in, and when the next one is due.
 7. **Orbital colonies**: KSP2 planned an orbital editor environment. Depots already cover stations for
    routes; an orbital colony would add building in orbit.
 

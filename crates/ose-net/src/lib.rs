@@ -1498,6 +1498,14 @@ pub struct ColonyInfo {
     pub residents: Vec<String>,
     /// What its vessels' tanks hold: (resource, stored, capacity).
     pub stock: Vec<(String, f64, f64)>,
+    /// Population: the empty seats in its vessels, the Kerbals who moved in on their own, and how long until
+    /// the next one does (s; none without room or without anyone living there).
+    #[serde(default)]
+    pub vacancies: u32,
+    #[serde(default)]
+    pub arrivals: u32,
+    #[serde(default)]
+    pub next_arrival_in_s: Option<f64>,
 }
 
 /// A delivery route (`ServerMessage::Routes`, protocol 73).

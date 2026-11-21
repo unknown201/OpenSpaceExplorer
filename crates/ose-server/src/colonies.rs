@@ -58,6 +58,8 @@ pub fn info(s: &Shared, reason: Option<String>) -> ServerMessage {
                 ose_colonies::members(&mut u, c),
                 ose_colonies::residents(&mut u, c),
                 ose_colonies::stock(&mut u, c),
+                ose_colonies::vacancies(&mut u, c).len() as u32,
+                ose_colonies::next_arrival(&mut u, c).map(|t| (t - u.ut()).max(0.0)),
             )
         })
         .collect();
@@ -67,23 +69,28 @@ pub fn info(s: &Shared, reason: Option<String>) -> ServerMessage {
     let colonies = colonies
         .iter()
         .zip(found)
-        .map(|(c, (members, residents, stock))| ColonyInfo {
-            id: c.id,
-            name: c.name.clone(),
-            owner: c.owner,
-            owner_name: display_name_for(s, c.owner),
-            body: c.body.clone(),
-            lat_deg: c.lat_deg,
-            lon_deg: c.lon_deg,
-            founded_ut: c.founded_ut,
-            launches: c.launches,
-            vessels: members.into_iter().filter_map(id_of).collect(),
-            residents: residents.into_iter().map(|(_, n)| n).collect(),
-            stock: stock
-                .into_iter()
-                .map(|x| (x.resource, x.stored, x.capacity))
-                .collect(),
-        })
+        .map(
+            |(c, (members, residents, stock, vacancies, next))| ColonyInfo {
+                id: c.id,
+                name: c.name.clone(),
+                owner: c.owner,
+                owner_name: display_name_for(s, c.owner),
+                body: c.body.clone(),
+                lat_deg: c.lat_deg,
+                lon_deg: c.lon_deg,
+                founded_ut: c.founded_ut,
+                launches: c.launches,
+                vessels: members.into_iter().filter_map(id_of).collect(),
+                residents: residents.into_iter().map(|(_, n)| n).collect(),
+                stock: stock
+                    .into_iter()
+                    .map(|x| (x.resource, x.stored, x.capacity))
+                    .collect(),
+                vacancies,
+                arrivals: c.arrivals,
+                next_arrival_in_s: next,
+            },
+        )
         .collect();
     ServerMessage::Colonies { colonies, reason }
 }
@@ -178,6 +185,53 @@ pub fn after_step(s: &Shared, step: u64) {
     sources.sort();
     sources.dedup();
     u.set_comm_sources(sources);
+    // population: newcomers move into colonies with room, hired into the campaign as they come
+    let mut c = s.campaign.lock().expect("campaign lock");
+    let order = crate::crew_order(s, &mut c);
+    let mut colonies = std::mem::take(&mut c.colonies);
+    let mut hired: Vec<String> = Vec::new();
+    let roster: Vec<String> = c.roster.iter().map(|(n, _)| n.clone()).collect();
+    let mut spare = roster.len();
+    let busy = u.kerbals_in_use();
+    let arrived = colonies.settle(&mut u, &mut || {
+        let name = order
+            .iter()
+            .find(|n| !roster.contains(n) && !hired.contains(n) && !busy.contains(n))
+            .cloned()
+            .unwrap_or_else(|| loop {
+                spare += 1;
+                let n = format!("Kerbal {spare} Kerman");
+                if !busy.contains(&n) && !hired.contains(&n) && !roster.contains(&n) {
+                    break n;
+                }
+            });
+        hired.push(name.clone());
+        name
+    });
+    c.colonies = colonies;
+    if arrived.is_empty() {
+        return;
+    }
+    let ut = u.ut();
+    for (colony, name) in &arrived {
+        tracing::info!(colony, kerbal = %name, "a Kerbal moved into a colony");
+        c.roster.push((name.clone(), ut));
+    }
+    drop(c);
+    drop(u);
+    // everyone sees the new residents
+    let msg = info(s, None);
+    let players: Vec<u64> = s
+        .warp_requests
+        .lock()
+        .expect("warp lock")
+        .keys()
+        .copied()
+        .collect();
+    let mut q = s.pending.lock().expect("pending lock");
+    for p in players {
+        q.push((p, msg.clone()));
+    }
 }
 
 /// Tell the campaign's other connected players that its colonies changed.
