@@ -114,6 +114,17 @@ pub fn settings() -> &'static WaterSettings {
 /// much of each face the cube fills.
 pub fn displacement_m3(def: &PartDef) -> f64 {
     if let Some(c) = def.drag_cubes.first() {
+        cube_displacement_m3(c)
+    } else if let Some(b) = def.bounds {
+        b.size_m.x * b.size_m.y * b.size_m.z * 0.75
+    } else {
+        settings().default_volume_m3
+    }
+}
+
+/// [`displacement_m3`] of one drag cube.
+pub fn cube_displacement_m3(c: &ose_data::DragCube) -> f64 {
+    {
         let (x, y, z) = (c.size.x, c.size.y, c.size.z);
         let mut volume = x * y * z;
         let fill = |area: f64, a: f64, b: f64| {
@@ -133,10 +144,6 @@ pub fn displacement_m3(def: &PartDef) -> f64 {
             volume *= (fx.min(fz) + 2.0 * (fx * fz)) / 3.0 * fy;
         }
         volume
-    } else if let Some(b) = def.bounds {
-        b.size_m.x * b.size_m.y * b.size_m.z * 0.75
-    } else {
-        settings().default_volume_m3
     }
 }
 

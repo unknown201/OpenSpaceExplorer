@@ -180,7 +180,8 @@ pub fn fairing_shells(bottom: f64, top: f64, radius: f64) -> Vec<(&'static str, 
 fn kerbal_anim_fallback(clip: &str) -> &'static str {
     match clip {
         "walk_l" | "walk_r" => "walk",
-        "jump_start" => "air",
+        // treading water and the stroke: the floating pose until the swim clips are exported
+        "jump_start" | "swim" | "swim_idle" => "air",
         _ => "idle",
     }
 }
@@ -2821,6 +2822,9 @@ impl FlightView {
                 let flight = inp.vessel.flight.as_ref();
                 let on_ladder = flight.is_some_and(|f| f.on_ladder.is_some());
                 let boarding = flight.is_some_and(|f| f.boarding);
+                let swimming = flight.is_some_and(|f| {
+                    f.situation == ose_net::FlightSituation::Splashed && f.on_ladder.is_none()
+                });
                 // KSP2's EVA animator (animtree_kerbal_eva): the states and cross-fades of `kerbal_anim`
                 let falling = !landed && !on_ladder && !boarding;
                 let now_s = inp.now_ms / 1000.0;
@@ -2843,6 +2847,7 @@ impl FlightView {
                         .flag_planted_ms
                         .get()
                         .is_some_and(|t| inp.now_ms - t < 500.0),
+                    swimming,
                 };
                 self.kerbal_was_landed = landed;
                 let machine = self
