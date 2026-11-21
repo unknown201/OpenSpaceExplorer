@@ -505,6 +505,8 @@ struct App {
     eva_grab: bool,
     eva_climb_sent: f32,
     eva_on_ladder: bool,
+    /// The flown Kerbal was swimming last frame (for the hint on going in).
+    eva_swimming: bool,
     /// The Kerbal's heading when the walk keys went down, walked relative to while no camera has drawn (the
     /// heading it then turns to is the walk's, so backing up from it flipped round each tick).
     eva_walk_base: Option<f64>,
@@ -1164,6 +1166,7 @@ pub fn start() -> Result<(), JsValue> {
         eva_grab: false,
         eva_climb_sent: 0.0,
         eva_on_ladder: false,
+        eva_swimming: false,
         eva_walk_base: None,
         eva_jump: false,
         orbit_pick: Vec::new(),
@@ -12183,12 +12186,28 @@ impl App {
         let ctrl = k.is("ControlLeft");
 
         let Some(vessel) = self.flying else { return };
-        let landed = self
+        let flight = self
             .scene
             .as_ref()
             .and_then(|s| s.vessel(vessel))
-            .and_then(|v| v.flight.as_ref())
-            .is_some_and(|f| matches!(f.situation, ose_net::FlightSituation::Landed));
+            .and_then(|v| v.flight.as_ref());
+        // In the water W/S/A/D swim as they walk on the ground, Shift the faster stroke; no jumping. With the
+        // jetpack on (RCS) the keys fly the pack instead, as KSP2's `IsJetpackInUse` takes over from swimming.
+        let swimming = flight.is_some_and(|f| {
+            f.situation == ose_net::FlightSituation::Splashed && !f.rcs && f.on_ladder.is_none()
+        });
+        let landed = swimming
+            || flight.is_some_and(|f| matches!(f.situation, ose_net::FlightSituation::Landed));
+        if swimming != self.eva_swimming {
+            self.eva_swimming = swimming;
+            if swimming {
+                hud::push(
+                    &self.doc,
+                    "Swimming: W/S/A/D swim, Shift swims faster, R turns the jetpack on",
+                    "passive",
+                );
+            }
+        }
         let heading = match self.attitude {
             ose_net::AttitudeMode::PitchHeading { heading_deg, .. } => heading_deg,
             _ => self.facing_pitch_heading().map(|(_, h)| h).unwrap_or(90.0),
@@ -12219,7 +12238,7 @@ impl App {
         // Run and jump: run held while Shift is down on the ground, a jump on each new Space press there.
         let run = landed && shift;
         // A press is caught on key down, so a tap shorter than a frame still jumps.
-        let jump = std::mem::take(&mut self.eva_jump) && (landed || on_ladder);
+        let jump = std::mem::take(&mut self.eva_jump) && ((landed && !swimming) || on_ladder);
         let grab = std::mem::take(&mut self.eva_grab);
         let climb = if on_ladder { walk as f32 } else { 0.0 };
         if run != self.eva_run_sent || jump || grab || climb != self.eva_climb_sent {

@@ -14,6 +14,8 @@ pub enum State {
     JumpEnd,
     Ladder,
     FlagPlant,
+    /// Floating in the water (`EVAAnimationState.IsSwimming`): treading water, or the stroke while moving.
+    Swim,
 }
 
 /// What the animator reads each frame (its parameters, from what the Kerbal does).
@@ -35,6 +37,8 @@ pub struct Inputs {
     pub jump: bool,
     /// tPlantFlag: a flag is being planted (from this frame).
     pub plant_flag: bool,
+    /// bIsSwimming: floating in the water.
+    pub swimming: bool,
 }
 
 /// The cross-fade (seconds) and, for a transition that waits for its clip, the share of the clip it waits for.
@@ -93,6 +97,8 @@ pub mod timing {
     pub const TO_FLAG_S: f32 = 0.05;
     pub const FLAG_EXIT: f32 = 0.97;
     pub const FLAG_TO_IDLE_S: f32 = 0.02;
+    /// Into and out of the water. Ours: the swim states' transitions were not in the dumped set.
+    pub const SWIM_S: f32 = 0.25;
 }
 
 fn moving(i: &Inputs) -> bool {
@@ -156,6 +162,16 @@ impl Machine {
             );
             return;
         }
+        if i.swimming {
+            self.go(
+                now,
+                Transition {
+                    to: State::Swim,
+                    fade_s: SWIM_S,
+                },
+            );
+            return;
+        }
         if i.plant_flag && self.state != State::FlagPlant {
             self.go(
                 now,
@@ -170,6 +186,11 @@ impl Machine {
             State::Ladder => Some(Transition {
                 to: State::Idle,
                 fade_s: LADDER_S,
+            }),
+            // out of the water: onto the bed (or a craft), or into the air under the pack
+            State::Swim => Some(Transition {
+                to: if i.falling { State::Air } else { State::Idle },
+                fade_s: SWIM_S,
             }),
             State::Idle if i.jump => Some(Transition {
                 to: State::JumpStart,
@@ -240,6 +261,11 @@ impl Machine {
             State::JumpStart => vec![("jump_start", t, false, 1.0)],
             State::JumpEnd => vec![("jump_end", t, false, 1.0)],
             State::FlagPlant => vec![("flag_plant", t, false, 1.0)],
+            State::Swim => {
+                // the stroke as fast as it swims (`NormalToSprintBlend`), treading water when still
+                let m = (i.move_fb.abs().max(i.move_lr.abs())).clamp(0.0, 1.0);
+                vec![("swim_idle", t, true, 1.0 - m), ("swim", t, true, m)]
+            }
             State::Ladder => {
                 let c = i.climb.clamp(-1.0, 1.0);
                 vec![
@@ -481,5 +507,42 @@ mod tests {
             (walk.1 / 0.83 - run_c.1 / 0.53).abs() < 1e-4,
             "same phase: {walk:?} {run_c:?}"
         );
+    }
+
+    #[test]
+    fn a_kerbal_in_the_water_treads_water_strokes_while_it_swims_and_climbs_out_onto_the_bed() {
+        let mut m = Machine::new(0.0);
+        let still = Inputs {
+            swimming: true,
+            falling: true,
+            ..Default::default()
+        };
+        m.update(0.02, &still, &d);
+        assert_eq!(m.state(), State::Swim, "into the water from anywhere");
+        let clips = m.clips(1.0, &still, &d);
+        assert_eq!(
+            clips.iter().find(|c| c.0 == "swim_idle").map(|c| c.3),
+            Some(1.0)
+        );
+        let stroke = Inputs {
+            move_fb: 1.0,
+            ..still
+        };
+        m.update(1.1, &stroke, &d);
+        let clips = m.clips(1.1, &stroke, &d);
+        assert_eq!(clips.iter().find(|c| c.0 == "swim").map(|c| c.3), Some(1.0));
+        // a jump asked for in the water does nothing
+        m.update(
+            1.2,
+            &Inputs {
+                jump: true,
+                ..stroke
+            },
+            &d,
+        );
+        assert_eq!(m.state(), State::Swim);
+        // standing on the bed in the shallows
+        m.update(2.0, &Inputs::default(), &d);
+        assert_eq!(m.state(), State::Idle);
     }
 }

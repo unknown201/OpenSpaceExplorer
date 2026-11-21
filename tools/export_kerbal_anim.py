@@ -44,6 +44,12 @@ CLIPS = {
     "jump_end": ["kerbal_jp_jump_still_end", "kerbal_jump_still_end"],
     "flag_plant": ["kerbal_flag_plant"],
 }
+# Swimming (SwimKerbalCharacterStateHandler): treading water and the forward stroke. Their clip names were not
+# in the dumped set, so they are found by name: the client floats in "air" until an export has them.
+SWIM_CLIPS = {
+    "swim_idle": lambda n: "swim" in n and "idle" in n,
+    "swim": lambda n: "swim" in n and any(k in n for k in ("_f", "fwd", "forward", "front")),
+}
 VARIANTS = {"m": ("head_m_01", "eyes_m_01"), "f": ("head_f_01", "eyes_f_01")}
 
 
@@ -221,6 +227,13 @@ def add_clips(dst: Doc, ex: Exporter) -> list[str]:
             if name in clips:
                 wanted[key] = clips[name]
                 break
+    swims = sorted(n for n in clips if "swim" in n.lower())
+    print("swim clips in the bundle:", ", ".join(swims) or "none")
+    for key, match in SWIM_CLIPS.items():
+        # the backpack ("jp") variant first, as for the EVA set
+        found = sorted((n for n in swims if match(n.lower())), key=lambda n: ("_jp_" not in n, n))
+        if found:
+            wanted[key] = clips[found[0]]
     # The Animator's root is not exported; try each node as the root (and none) and keep the one whose
     # paths match most bindings.
     sample = wanted["walk"].read_typetree()  # the bones every clip moves
