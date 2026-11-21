@@ -278,8 +278,8 @@ impl ScienceData {
     }
 
     /// Parts of a craft the campaign has not researched (always empty in sandbox): every part no researched
-    /// node unlocks, parts no node unlocks at all included (the colony trunks, scanners and service bays the
-    /// original's tree leaves out are not in its campaign's VAB either).
+    /// node unlocks, parts no node unlocks at all included (the scanners and service bays the original's tree
+    /// leaves out are not in its campaign's VAB either; OSE adds the colony trunks to the 3.75 m payload node).
     pub fn locked_parts(&self, c: &Campaign, craft: &ose_data::craft::Craft) -> Vec<String> {
         if c.mode != SessionMode::Exploration {
             return Vec::new();

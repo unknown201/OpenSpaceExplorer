@@ -1556,7 +1556,9 @@
       "cargobay_3v_1x1",
       "cargobay_3v_1x8",
       "fairing_3v_procedural",
-      "enginemount_3v_procedural"
+      "enginemount_3v_procedural",
+      "transport_3v_colony_trunk_small",
+      "transport_3v_colony_trunk_large"
     ],
     "requires": [
       "tNode_3v_trusses_01"

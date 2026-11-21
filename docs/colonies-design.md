@@ -42,6 +42,8 @@ transferring fuel, EVA, boarding) works on it unchanged.
 
 ## 3. Step 1 (built)
 
+- **Research**: KSP2's tree leaves the colony trunks out, so OSE adds them to the 3.75 m payload node
+  (`tNode_3v_payload_01`, with the 3.75 m crew cabin) in the importer and `assets/own/tech-tree.json`.
 - **Found** (`FoundColony { vessel, name }`): a player's vessel founds a colony where it stands when it is
   landed (not afloat, not wrecked), carries a colony trunk, and has a Kerbal aboard. Colonies stand at least
   2 km apart on a body and at least 5 km from the KSC. The colony is saved with the campaign

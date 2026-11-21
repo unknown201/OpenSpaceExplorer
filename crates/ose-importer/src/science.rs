@@ -203,7 +203,25 @@ pub fn import_tech_tree(dir: &Path) -> anyhow::Result<Vec<TechNode>> {
         nodes.push(tech_node(&read_json(&p)?));
     }
     nodes.sort_by(|a, b| a.id.cmp(&b.id));
+    add_colony_trunks(&mut nodes);
     Ok(nodes)
+}
+
+/// The node that unlocks the colony trunks: OSE's own choice. KSP2's tree leaves them out (colonies never
+/// shipped); they are 3.75 m parts, so they come with the 3.75 m crew cabin (`docs/colonies-design.md`).
+pub const COLONY_TRUNK_NODE: &str = "tNode_3v_payload_01";
+
+pub fn add_colony_trunks(nodes: &mut [TechNode]) {
+    if let Some(n) = nodes.iter_mut().find(|n| n.id == COLONY_TRUNK_NODE) {
+        for p in [
+            "transport_3v_colony_trunk_small",
+            "transport_3v_colony_trunk_large",
+        ] {
+            if !n.parts.iter().any(|x| x == p) {
+                n.parts.push(p.to_string());
+            }
+        }
+    }
 }
 
 /// Experiments of a part's `Data_ScienceExperiment` entries.
