@@ -37,11 +37,12 @@ namespace OpenSpaceExplorer.Validation
             float wait = 0; VesselComponent kerbal = null;
             while (wait < 30) { wait += Time.deltaTime; kerbal = G.ViewController.GetActiveSimVessel(); if (kerbal != null && kerbal.IsKerbalEVA) break; yield return null; }
             if (kerbal == null || !kerbal.IsKerbalEVA) { mark("no kerbal"); yield break; }
+            mark("kerbal out, rcs " + kerbal.IsRCSEnabled + " situation " + kerbal.Situation);
             var space = G.UniverseView.PhysicsSpace;
             var frame = G.UniverseModel.inertialReferenceFrame.bodyMotionFrame;
             double ut0 = G.UniverseModel.UniverseTime;
             var w = new StreamWriter(Path.Combine(dir, "out", "eva-compare.csv"), false) { AutoFlush = true };
-            w.WriteLine("phase,t,x,y,z,dist,dvx,dvy,dvz,handler,on_ground,situation,mass_t,alt_m,jetpack");
+            w.WriteLine("phase,t,x,y,z,dist,dvx,dvy,dvz,handler,on_ground,situation,mass_t,alt_m,jetpack,rcs");
             string phase = "ladder";
             Func<float> now = () => (float)(G.UniverseModel.UniverseTime - ut0);
             Action row = () =>
@@ -58,7 +59,7 @@ namespace OpenSpaceExplorer.Validation
                     w.WriteLine(phase + "," + now().ToString("R", Inv) + "," + rel.x.ToString("R", Inv) + "," + rel.y.ToString("R", Inv) + "," + rel.z.ToString("R", Inv) + ","
                         + rel.magnitude.ToString("R", Inv) + "," + dvl.x.ToString("R", Inv) + "," + dvl.y.ToString("R", Inv) + "," + dvl.z.ToString("R", Inv) + ","
                         + (b != null ? b.CharacterCurrentLocomotionHandlerType.ToString() : "") + "," + (b != null && b.IsOnGround()) + "," + k.Situation + ","
-                        + k.totalMass.ToString("R", Inv) + "," + k.AltitudeFromSeaLevel.ToString("R", Inv) + "," + (b != null && b.CharacterState.IsJetpackInUse));
+                        + k.totalMass.ToString("R", Inv) + "," + k.AltitudeFromSeaLevel.ToString("R", Inv) + "," + (b != null && b.CharacterState.IsJetpackInUse) + "," + k.IsRCSEnabled);
                 }
                 catch (Exception e) { mark("row failed " + e.Message); }
             };
@@ -111,6 +112,13 @@ namespace OpenSpaceExplorer.Validation
                 yield return Hold(3f, 2.5f);
                 InputHolder.EvaFrontBack = 0f;
                 phase = "stand"; yield return Hold(3f, 2.5f);
+                // keep walking forward (off the pod's edge if still on it, else on along the ground) with nothing
+                // else pressed: does the pack fire, is RCS on for a surface EVA
+                phase = "walkoff"; mark("walk forward 6 s, rcs " + G.ViewController.GetActiveSimVessel()?.IsRCSEnabled);
+                InputHolder.EvaFrontBack = 1f;
+                yield return Hold(6f, 3f);
+                InputHolder.EvaFrontBack = 0f;
+                phase = "settle"; yield return Hold(3f, 2.5f);
             }
             InputHolder.KerbalMove = null; InputHolder.EvaUpDown = null; InputHolder.EvaFrontBack = null; InputHolder.EvaJump = null;
             w.Dispose();

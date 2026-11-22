@@ -9,13 +9,13 @@ use std::io::Write;
 
 const DT: f64 = 1.0 / TICKS_PER_SECOND as f64;
 
-fn craft_universe(orbit: bool) -> (Universe, Entity) {
+fn craft_universe(orbit: bool, world: &str) -> (Universe, Entity) {
     let mut kerbin = serde_json::from_str::<Vec<ose_data::CelestialBody>>(include_str!(
         "../../../assets/own/kerbol-system.json"
     ))
     .unwrap()
     .into_iter()
-    .find(|b| b.id == "Kerbin")
+    .find(|b| b.id == world)
     .unwrap();
     kerbin.parent = None;
     kerbin.orbit = None;
@@ -32,11 +32,12 @@ fn craft_universe(orbit: bool) -> (Universe, Entity) {
         serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
     let mut u = Universe::with_bodies(&[kerbin]);
     u.set_part_catalog(defs.clone(), res.clone());
-    let body = u.body_entity("Kerbin").unwrap();
+    let body = u.body_entity(world).unwrap();
     let mu = u.world.get::<bodies::Body>(body).unwrap().mu;
     let report = ose_data::staging::delta_v_by_stage(&craft, &defs, &res);
     let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
-    let v = u.spawn_powered_on_surface("eva compare", body, spec, -0.0972, -74.5577);
+    let (lat, lon) = if world == "Kerbin" { (-0.0972, -74.5577) } else { (0.5, 20.0) };
+    let v = u.spawn_powered_on_surface("eva compare", body, spec, lat, lon);
     u.set_structure(v, Structure::build(&craft, &defs, &res));
     if orbit {
         let r = 700_000.0;
@@ -54,12 +55,16 @@ fn craft_universe(orbit: bool) -> (Universe, Entity) {
 }
 
 fn run(orbit: bool) {
-    let (mut u, v) = craft_universe(orbit);
+    run_on(orbit, "Kerbin")
+}
+
+fn run_on(orbit: bool, world: &str) {
+    let (mut u, v) = craft_universe(orbit, world);
     let jeb = u.go_eva(v, None).unwrap();
     let path = format!(
         "{}/../../target/eva-compare-{}.csv",
         env!("CARGO_MANIFEST_DIR"),
-        if orbit { "orbit" } else { "pad" }
+        if orbit { "orbit".to_string() } else if world == "Kerbin" { "pad".to_string() } else { world.to_lowercase() }
     );
     let mut w = std::fs::File::create(&path).unwrap();
     writeln!(
@@ -68,6 +73,7 @@ fn run(orbit: bool) {
     )
     .unwrap();
     let mut t = 0.0;
+    let radius = { let b = u.body_entity(world).unwrap(); u.world.get::<bodies::Body>(b).unwrap().radius_m };
     let mut basis = flight::vessel_basis(u.powered(v).unwrap());
     let mut hold = |u: &mut Universe, phase: &str, seconds: f64| {
         for _ in 0..(seconds * TICKS_PER_SECOND as f64).round() as u64 {
@@ -89,7 +95,7 @@ fn run(orbit: bool) {
             let pk = &pk;
             let d = pk.r - cr;
             let dv = pk.v - cv;
-            let alt = pk.r.length() - 600_000.0;
+            let alt = pk.r.length() - radius;
             writeln!(
                 w,
                 "{phase},{t:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{},{},{},{:.6},{alt:.3},{}",
@@ -146,4 +152,10 @@ fn eva_compare_orbit() {
 #[ignore]
 fn eva_compare_pad() {
     run(false);
+}
+
+#[test]
+#[ignore]
+fn eva_compare_mun() {
+    run_on(false, "Mun");
 }
