@@ -77,6 +77,15 @@ pub fn render_info(c: &ColonyInfo, me: Option<u64>) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     };
+    // a Kerbin day is 6 h
+    let newcomers = match (c.vacancies, c.next_arrival_in_s) {
+        (0, _) => "no room: every seat is taken".to_string(),
+        (_, None) => "nobody lives here to welcome them".to_string(),
+        (n, Some(t)) if t >= 21_600.0 => {
+            format!("next in {:.1} days ({n} empty seats)", t / 21_600.0)
+        }
+        (n, Some(t)) => format!("next in {:.1} h ({n} empty seats)", t / 3600.0),
+    };
     let abandon = if me == Some(c.owner) {
         format!(
             "<button data-ose=\"colony-abandon\" data-ose-colony-abandon=\"{}\">Abandon colony</button>",
@@ -89,6 +98,7 @@ pub fn render_info(c: &ColonyInfo, me: Option<u64>) -> String {
         "<h3>{name}</h3><div class=\"ts-owner\">Founded by {owner}</div><dl>\
          <dt>Body</dt><dd>{body}</dd><dt>Site</dt><dd>{lat:.3}\u{b0}, {lon:.3}\u{b0}</dd>\
          <dt>Vessels</dt><dd>{n}</dd><dt>Residents</dt><dd>{residents}</dd>\
+         <dt>Newcomers</dt><dd>{arrivals} moved in; {newcomers}</dd>\
          <dt>Launches</dt><dd>{launches}</dd>{stock}</dl>\
          <div class=\"ts-hint\">Its launch pad is in the VAB's launch sites. A craft launched there takes its \
          fuel and its dry mass in Metal from this stock.</div>\
@@ -100,6 +110,7 @@ pub fn render_info(c: &ColonyInfo, me: Option<u64>) -> String {
         lon = c.lon_deg,
         n = c.vessels.len(),
         launches = c.launches,
+        arrivals = c.arrivals,
     )
 }
 
@@ -124,6 +135,9 @@ mod tests {
                 ("MonoPropellant".into(), 4.5, 9.0),
                 ("Metal".into(), 7_500.0, 10_000.0),
             ],
+            vacancies: 1,
+            arrivals: 0,
+            next_arrival_in_s: Some(43_200.0),
         }
     }
 
@@ -134,6 +148,7 @@ mod tests {
         assert!(html.contains("Armstrong &lt;base&gt;"));
         assert!(html.find("Metal").unwrap() < html.find("MonoPropellant").unwrap());
         assert!(html.contains("7500 / 10.0k (7.5 t)"), "{html}");
+        assert!(html.contains("next in 2.0 days (1 empty seats)"), "{html}");
         assert!(html.contains("data-ose-colony-abandon=\"3\""));
         assert!(!render_info(&c, Some(8)).contains("colony-abandon"));
         let list = render_list(&[c], Some(3));

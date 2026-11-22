@@ -271,7 +271,7 @@ Colonies, cargo inventory, a funds economy, crew rotation, landed depots (decisi
    player docked it, or the run ends as Missed if the vessel is gone. `RouteStayed` sends home, lets go
    or keeps the run a route left docked at the depot. The test flies run 1 by hand for a minute in
    orbit before handing it back, and lets the last run go at the end.*
-   *Step 2e (protocol 79): depot-to-depot shuttles (3.12, `crates/ose-routes/src/shuttle.rs`). A shuttle's
+   *Step 2e (protocol 81): depot-to-depot shuttles (3.12, `crates/ose-routes/src/shuttle.rs`). A shuttle's
    proving flight starts in orbit within 2 km of the depot it leaves (`RecordRoute` off the ground; the
    recorder starts in its transfer phase and ignores that depot) and ends docked at another depot, like a
    one-way flight. `CreateRoute` on it makes a shuttle route, listed with the others in `Routes` (with

@@ -5,6 +5,9 @@
 //! The route is the original's: Dijkstra from the KSC with each link costing its squared length, so a chain
 //! of short links wins over one long one. The graph is rebuilt every `REBUILD_S` of real time
 //! (`CommNetManager.REBUILD_GRAPH_TIMER_SECONDS`), so a link is lost or found up to 3 s late.
+//! Colonies are sources too (`CommSources`, KSP2's `PredefinedColonyObject.IsCommNetSource`): a vessel
+//! standing in a colony with an antenna is a ground station of its own, connected without a link home,
+//! and its antenna's range carries the network on round another body.
 //! Without a connection probe cores that need one cannot be flown (with the `CommNetRequired` difficulty
 //! option) and reports cannot be transmitted.
 
@@ -28,6 +31,11 @@ pub struct GroundStation {
     pub range_m: f64,
 }
 
+/// Vessels that are ground stations themselves: those with an antenna standing in a colony (the server
+/// keeps the list). Each is connected without a link home, and the others can link through it.
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+pub struct CommSources(pub Vec<Entity>);
+
 /// Whether the `CommNetRequired` difficulty option is on.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
 pub struct CommNetRequired(pub bool);
@@ -44,6 +52,11 @@ pub struct CommLink {
 impl Universe {
     pub fn set_ground_station(&mut self, station: GroundStation) {
         self.world.insert_resource(station);
+    }
+
+    /// The vessels that are ground stations themselves (colonies); replaces the list.
+    pub fn set_comm_sources(&mut self, sources: Vec<Entity>) {
+        self.world.insert_resource(CommSources(sources));
     }
 
     pub fn set_commnet_required(&mut self, on: bool) {
@@ -88,6 +101,11 @@ impl Universe {
             flight::surface_state_at(&b, station.lat_deg, station.lon_deg, station.altitude_m, ut);
         let ksc = bodies::star_space_state(&self.world, station.body, ut).0 + r_site;
         let vessels = self.vessels_here();
+        let sources = self
+            .world
+            .get_resource::<CommSources>()
+            .map(|s| s.0.clone())
+            .unwrap_or_default();
         let mut nodes: Vec<(Option<Entity>, DVec3, f64)> = vec![(None, ksc, station.range_m)];
         for &e in &vessels {
             if self.world.get::<crew::EvaKerbal>(e).is_some() {
@@ -102,7 +120,15 @@ impl Universe {
             }
         }
         // breadth first from the KSC: a link needs each end within the other's range
-        let hops = route_hops(&nodes.iter().map(|n| (n.1, n.2)).collect::<Vec<_>>());
+        let is_source: Vec<bool> = nodes
+            .iter()
+            .enumerate()
+            .map(|(k, n)| k == 0 || n.0.is_some_and(|e| sources.contains(&e)))
+            .collect();
+        let hops = route_hops_from(
+            &nodes.iter().map(|n| (n.1, n.2)).collect::<Vec<_>>(),
+            &is_source,
+        );
         for &e in &vessels {
             let link = match nodes.iter().position(|nd| nd.0 == Some(e)) {
                 Some(k) => CommLink {
@@ -138,15 +164,21 @@ impl Universe {
 /// other's range and a link costs its squared length; the hops along each node's cheapest route
 /// (`u32::MAX` when it has none).
 pub fn route_hops(nodes: &[(DVec3, f64)]) -> Vec<u32> {
+    let sources: Vec<bool> = (0..nodes.len()).map(|k| k == 0).collect();
+    route_hops_from(nodes, &sources)
+}
+
+/// `route_hops` with several sources (the KSC and the colonies' ground stations): every source has no
+/// hops, and each other node routes to its cheapest.
+pub fn route_hops_from(nodes: &[(DVec3, f64)], sources: &[bool]) -> Vec<u32> {
     let n = nodes.len();
     let mut cost = vec![f64::MAX; n];
     let mut hops = vec![u32::MAX; n];
     let mut done = vec![false; n];
-    if n == 0 {
-        return hops;
+    for k in (0..n).filter(|&k| sources.get(k).copied().unwrap_or(false)) {
+        cost[k] = 0.0;
+        hops[k] = 0;
     }
-    cost[0] = 0.0;
-    hops[0] = 0;
     let mut open: Vec<usize> = (0..n).collect();
     while !open.is_empty() {
         let (k, &i) = open
@@ -192,6 +224,23 @@ mod tests {
         // a link needs each end within the other's range
         let one_way = [(DVec3::ZERO, 10.0), (DVec3::new(50.0, 0.0, 0.0), 100.0)];
         assert_eq!(route_hops(&one_way), vec![0, u32::MAX]);
+    }
+
+    #[test]
+    fn a_colony_ground_station_connects_what_the_ksc_cannot_reach() {
+        // the KSC reaches A only; C stands in a colony far away and is a source, so D links through it
+        let nodes = [
+            (DVec3::ZERO, 1000.0),
+            (DVec3::new(500.0, 0.0, 0.0), 1000.0),
+            (DVec3::new(1.0e6, 0.0, 0.0), 5000.0),
+            (DVec3::new(1.0e6 + 3000.0, 0.0, 0.0), 4000.0),
+            (DVec3::new(5.0e6, 0.0, 0.0), 4000.0),
+        ];
+        let sources = [true, false, true, false, false];
+        assert_eq!(
+            route_hops_from(&nodes, &sources),
+            vec![0, 1, 0, 1, u32::MAX]
+        );
     }
 
     #[test]
@@ -285,6 +334,18 @@ mod tests {
         );
         assert!(u.commnet_blocks_control(far));
         assert!(!u.commnet_blocks_control(near));
+        // a ground station of a colony out there (a source of its own) brings the far drone in
+        let station = u.spawn_vessel_in_circular_orbit("colony", body, 4.0e8);
+        u.set_structure(station, structure::Structure::build(drone, &defs, &res));
+        u.set_comm_sources(vec![station]);
+        u.update_commnet();
+        assert!(u.comm_link(station).connected);
+        assert!(u.comm_link(far).connected);
+        assert_eq!(u.comm_link(far).hops, 1);
+        u.set_comm_sources(Vec::new());
+        u.despawn_vessel(station);
+        u.update_commnet();
+        assert!(!u.comm_link(far).connected);
         // a report goes home packet by packet from the near drone; the far one waits for a link
         let report = ose_data::science::ResearchReport {
             base_value: 0.0,

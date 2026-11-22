@@ -14,7 +14,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 79;
+pub const PROTOCOL_VERSION: u16 = 81;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -1498,6 +1498,14 @@ pub struct ColonyInfo {
     pub residents: Vec<String>,
     /// What its vessels' tanks hold: (resource, stored, capacity).
     pub stock: Vec<(String, f64, f64)>,
+    /// Protocol 79, population: the empty seats in its vessels, the Kerbals who moved in on their own, and how long until
+    /// the next one does (s; none without room or without anyone living there).
+    #[serde(default)]
+    pub vacancies: u32,
+    #[serde(default)]
+    pub arrivals: u32,
+    #[serde(default)]
+    pub next_arrival_in_s: Option<f64>,
 }
 
 /// A delivery route (`ServerMessage::Routes`, protocol 73).
@@ -1527,7 +1535,7 @@ pub struct RouteInfo {
     /// Protocol 77: the player flying the run by hand now (`TakeControl` of its vessel; `ReleaseControl`
     /// hands it back to the route pilot, which carries on from where it is).
     pub manual: Option<u64>,
-    /// Protocol 79: a depot-to-depot shuttle's origin depot (`DepotInfo::id`): one vessel fills up there,
+    /// Protocol 81: a depot-to-depot shuttle's origin depot (`DepotInfo::id`): one vessel fills up there,
     /// flies to `depot` and back, round and round. `shuttle_leg` says where it is: Loading, Outbound,
     /// Unloading or Inbound. Its finished trips are `runs`.
     #[serde(default)]
@@ -1590,7 +1598,7 @@ pub struct RecordingInfo {
     /// How many of its parts stayed docked at the depot.
     pub payload_parts: u32,
     pub burns: u32,
-    /// Protocol 79: the depot a shuttle's proving flight left from (it was started in orbit next to it);
+    /// Protocol 81: the depot a shuttle's proving flight left from (it was started in orbit next to it);
     /// a route made from it is a shuttle between the two.
     #[serde(default)]
     pub origin: Option<String>,
