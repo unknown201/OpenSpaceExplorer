@@ -266,9 +266,10 @@ namespace OpenSpaceExplorer.Validation
             if (scenario == "warp") { yield return OrbitScenarios.Warp(vessel, dir, Mark); yield return Finish("warp"); yield break; }
             if (scenario == "burn") { yield return OrbitScenarios.Burn(vessel, dir, Mark); yield return Finish("burn"); yield break; }
             if (scenario == "jetpack") { yield return OrbitScenarios.Jetpack(vessel, dir, Mark, (v, f) => Begin(v, f), Stop); yield return Finish("jetpack"); yield break; }
+            // before the orbital catch-all below, which would fly the rotation run instead
+            if (scenario == "evaorbit" || scenario == "evapad") { yield return EvaCompare.Run(vessel, dir, scenario == "evaorbit", Mark); yield return Finish(scenario); yield break; }
             if (orbital) { yield return Rotation(vessel); yield break; }
             if (scenario == "rover") { yield return Rover(vessel); yield break; }
-            if (scenario == "evaorbit" || scenario == "evapad") { yield return EvaCompare.Run(vessel, dir, scenario == "evaorbit", Mark); yield return Finish(scenario); yield break; }
             if (scenario == "eva") { yield return Eva(vessel); yield break; }
             if (scenario == "partdump") { yield return PartDump(vessel); yield break; }
             if (scenario == "legs" || scenario == "legsrunway") { yield return Legs(vessel); yield break; }
