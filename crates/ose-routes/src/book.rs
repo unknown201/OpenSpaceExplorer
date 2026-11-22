@@ -157,7 +157,13 @@ pub struct Proving {
     /// The colony it landed at, if it ended there.
     #[serde(default)]
     pub colony: Option<crate::route::ColonySite>,
+    /// The depot a shuttle's proving flight left from (`Depot::id`, design 3.12).
+    #[serde(default)]
+    pub origin: Option<u64>,
 }
+
+/// A shuttle's proving flight starts in orbit within this distance of the depot it leaves (m).
+pub const ORIGIN_RANGE_M: f64 = 2_000.0;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Routes {
@@ -166,6 +172,9 @@ pub struct Routes {
     /// Routes made from finished proving flights (`route.rs`).
     #[serde(default)]
     pub routes: Vec<crate::route::Route>,
+    /// Depot-to-depot shuttles (`shuttle.rs`), made from proving flights that left a depot.
+    #[serde(default)]
+    pub shuttles: Vec<crate::shuttle::Shuttle>,
     #[serde(default)]
     next_id: u64,
 }
@@ -246,7 +255,34 @@ impl Routes {
         if self.depot_of(vessel).is_some() {
             return Err("a depot cannot fly its own route".into());
         }
-        let recorder = Recorder::start(u, vessel)?;
+        // off the ground, it is a shuttle leaving the depot next to it
+        let landed = u
+            .powered(vessel)
+            .or_else(|| u.dormant(vessel))
+            .is_some_and(|p| p.landed || p.splashed);
+        let origin = if landed {
+            None
+        } else {
+            let here = place(u, vessel).ok_or("no such vessel")?;
+            let near = self
+                .depots
+                .iter()
+                .filter_map(|d| {
+                    let at = place(u, d.vessel()?)?;
+                    (at.0 == here.0).then(|| ((at.1 - here.1).length(), d))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .filter(|(dist, _)| *dist < ORIGIN_RANGE_M);
+            let Some((_, d)) = near else {
+                return Err(
+                    "recording starts on the pad or runway, or in orbit next to the depot a \
+                     shuttle leaves"
+                        .into(),
+                );
+            };
+            Some((d.id, d.name.clone()))
+        };
+        let recorder = Recorder::start_from(u, vessel, origin.as_ref().map(|o| o.1.as_str()))?;
         let id = self.fresh_id();
         self.provings.push(Proving {
             id,
@@ -254,6 +290,7 @@ impl Routes {
             recorder,
             depot: None,
             colony: None,
+            origin: origin.map(|o| o.0),
         });
         Ok(id)
     }
@@ -345,14 +382,22 @@ impl Routes {
         if !self.provings.iter().any(|p| p.recorder.is_recording()) {
             return Vec::new();
         }
-        let depots: BTreeSet<Entity> = self.depots.iter().filter_map(|d| d.vessel()).collect();
-        let is_depot = |_: &Universe, e: Entity| depots.contains(&e);
+        let depots: Vec<(u64, Entity)> = self
+            .depots
+            .iter()
+            .filter_map(|d| Some((d.id, d.vessel()?)))
+            .collect();
         let mut out = Vec::new();
         for p in self
             .provings
             .iter_mut()
             .filter(|p| p.recorder.is_recording())
         {
+            // a shuttle flies to another depot than the one it left
+            let origin = p.origin;
+            let is_depot = |_: &Universe, e: Entity| {
+                depots.iter().any(|&(id, v)| v == e && Some(id) != origin)
+            };
             let before = (p.recorder.phase(), p.recorder.recording.markers.len());
             p.recorder.observe(u, &is_depot);
             let after = (p.recorder.phase(), p.recorder.recording.markers.len());

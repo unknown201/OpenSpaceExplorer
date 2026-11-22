@@ -6,5 +6,6 @@
 pub mod book;
 pub mod recording;
 pub mod route;
+pub mod shuttle;
 
 pub use book::Routes;
