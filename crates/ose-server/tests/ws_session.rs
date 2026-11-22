@@ -4766,3 +4766,43 @@ async fn a_route_is_recorded_from_the_pad_and_survives_revert_to_launch() {
     .await;
     until(&mut ws, |r| r.0.is_empty()).await;
 }
+
+#[tokio::test]
+async fn a_kerbal_on_a_landed_crafts_ladder_reads_landed() {
+    // KSP2 reports the craft's situation for a Kerbal holding its ladder; on the pad that read Flying here.
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "ladder pilot").await;
+    send_msg(&mut ws, &ClientMessage::JoinCampaign).await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchOnPad {
+            craft: starter_craft(),
+        },
+    )
+    .await;
+    let vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, .. } => vessel,
+        _ => None,
+    })
+    .await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::GoEva {
+            vessel,
+            kerbal: None,
+        },
+    )
+    .await;
+    let eva = wait_for(&mut ws, |m| match m {
+        ServerMessage::CrewAck { new_vessel, .. } => new_vessel,
+        _ => None,
+    })
+    .await;
+    let f = service_flight(&mut ws, eva, |f| f.on_ladder.is_some()).await;
+    assert_eq!(f.situation, ose_net::FlightSituation::Landed);
+}

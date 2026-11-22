@@ -1267,7 +1267,13 @@ fn flight_readout(
                 })
                 .unwrap_or(0.0)
         });
-    let sit = match ose_sim::flight::situation(p, body, atmo) {
+    // A Kerbal holding a ladder is where its craft is: on a landed craft's ladder it is Landed, not Flying
+    // (KSP2 reports the craft's situation for a Kerbal on its ladder: Landed on the pad, Orbiting in orbit).
+    let holder = u
+        .on_ladder(e)
+        .and_then(|(h, _)| u.powered(h))
+        .filter(|h| !h.crashed);
+    let sit = match ose_sim::flight::situation(holder.unwrap_or(p), body, atmo) {
         Situation::Landed => ose_net::FlightSituation::Landed,
         Situation::Flying => ose_net::FlightSituation::Flying,
         Situation::SubOrbital => ose_net::FlightSituation::SubOrbital,
