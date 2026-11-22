@@ -9238,13 +9238,18 @@ impl App {
                 }
             ));
         }
-        // Protocol 76: Data_Engine's status line, mode switch and Auto Switch for a multi-mode engine.
+        // Protocols 76 and 80: Data_Engine's status line, mode switch and Auto Switch for a multi-mode engine.
         if let Some(s) = spec.filter(|s| s.has_engine) {
+            let part = i as u16;
+            let status = vab::engine_status(
+                f.engine_thrust.iter().find(|e| e.0 == part).map(|e| e.1),
+                f.flameouts.contains(&part),
+                f.shielded.contains(&part),
+            );
             html.push_str(&vab::engine_status_html(
                 &s.engines,
-                f.engine_modes.iter().find(|m| m.0 == i as u16).copied(),
-                f.engines_off.contains(&(i as u16)),
-                f.flameouts.contains(&(i as u16)),
+                f.engine_modes.iter().find(|m| m.0 == part).copied(),
+                &status,
             ));
         }
         // Protocol 63: a parachute's deploy settings, folded behind their heading until opened, the mode

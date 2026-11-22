@@ -178,6 +178,9 @@ pub struct Structure {
     /// Air intakes (`Data_ResourceIntake`), the IntakeAir each part holds room for, and what the vessel
     /// holds now, units.
     intakes: Vec<Option<ose_data::Intake>>,
+    /// The parts on each intake's `occludeNode` (the Goliath's top node): while one of them is aboard, the
+    /// intake is occluded and gathers nothing (Module_ResourceIntake's `attachNode.AttachedPart`).
+    intake_occluders: Vec<Vec<usize>>,
     intake_air_capacity: Vec<f64>,
     intake_air: f64,
     /// IntakeAir the intakes gathered per second at the last step, and the share of the jets' need met.
@@ -1022,6 +1025,33 @@ impl Structure {
             engine_thrust_last: vec![0.0; n],
             intakes: (0..n)
                 .map(|i| def_of(i).and_then(|d| d.intake.clone()))
+                .collect(),
+            intake_occluders: (0..n)
+                .map(|i| {
+                    let Some(node) = def_of(i)
+                        .and_then(|d| d.intake.as_ref())
+                        .map(|k| k.occlude_node.as_str())
+                        .filter(|n| !n.is_empty())
+                    else {
+                        return Vec::new();
+                    };
+                    craft
+                        .parts
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(j, part)| {
+                            if j == i && part.own_node.as_deref() == Some(node) {
+                                part.parent.filter(|&parent| parent < n)
+                            } else if part.parent == Some(i)
+                                && part.parent_node.as_deref() == Some(node)
+                            {
+                                Some(j)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                })
                 .collect(),
             intake_air_capacity: (0..n)
                 .map(|i| {
@@ -1911,6 +1941,18 @@ impl Structure {
             .sum()
     }
 
+    /// The ignited engines (`EngineIgnited`: staged, attached and not shut down, on a vessel whose engines
+    /// are lit) and the thrust each delivered at the last propulsion step, kN (`FinalThrustValue`).
+    pub fn ignited_engine_thrust(&self, p: &Powered) -> Vec<(usize, f64)> {
+        if !p.ignited || p.crashed {
+            return Vec::new();
+        }
+        self.live_engines(p.stage)
+            .into_iter()
+            .map(|i| (i, self.engine_thrust_last[i]))
+            .collect()
+    }
+
     /// Switch engine `i` to `mode` (Module_Engine.ChangeEngineMode): the engine stops drawing propellant,
     /// keeps its last thrust, and runs in the new mode after the old mode's exit wait and the new mode's
     /// enter wait (the "running" waits only for an engine without a response time that is running, the
@@ -1980,6 +2022,16 @@ impl Structure {
         }
     }
 
+    /// Whether intake `i` is occluded: shielded from the airstream (a fairing or cargo bay), or with a part
+    /// on its `occludeNode` (Module_ResourceIntake: status "Occluded", no air).
+    pub fn intake_occluded(&self, i: usize) -> bool {
+        self.shielded.get(i).copied().unwrap_or(false)
+            || self
+                .intake_occluders
+                .get(i)
+                .is_some_and(|o| o.iter().any(|&j| self.rigid.present[j]))
+    }
+
     /// IntakeAir the open intakes gather per second (Module_ResourceIntake.OnModuleFixedUpdate): in air
     /// with oxygen at or above each intake's pressure threshold, unshielded,
     /// `(clamp01(v . forward) * speed + intakeSpeed) * unitScalar * area * machCurve(Mach) * density`.
@@ -1989,7 +2041,7 @@ impl Structure {
         let speed = env.airspeed.length();
         let kpa = env.pressure_atm * 101.325;
         (0..self.intakes.len())
-            .filter(|&i| self.rigid.present[i] && !self.shielded[i])
+            .filter(|&i| self.rigid.present[i] && !self.intake_occluded(i))
             .filter_map(|i| self.intakes[i].as_ref().map(|k| (i, k)))
             .filter(|(_, k)| (env.oxygen || !k.check_oxygen) && kpa >= k.kpa_threshold)
             .map(|(i, k)| {
@@ -7494,6 +7546,57 @@ mod tests {
             !s.engine_flameout[engine],
             "a shut-down engine is Off, not flamed out"
         );
+    }
+
+    #[test]
+    fn a_goliath_mounted_by_its_top_node_has_its_intake_occluded() {
+        let (crafts, defs, res) = assets();
+        let jet = crafts.iter().find(|c| c.name == "Stock04_Jet").unwrap();
+        let wheesley = jet
+            .parts
+            .iter()
+            .position(|p| p.part_id.contains("wheesley"))
+            .expect("the jet's Wheesley");
+        let goliath = "engine_2v_turbofan_methane_goliath";
+        assert_eq!(
+            defs.iter()
+                .find(|d| d.id == goliath)
+                .and_then(|d| d.intake.as_ref())
+                .map(|k| k.occlude_node.as_str()),
+            Some("top")
+        );
+        let mut stacked = jet.clone();
+        stacked.parts[wheesley].part_id = goliath.into();
+        stacked.parts[wheesley].own_node = Some("top".into());
+        let s = Structure::build(&stacked, &defs, &res);
+        assert!(
+            s.intake_occluded(wheesley),
+            "its top node holds the fuselage"
+        );
+        // hung by its surface attachment, nothing on the top node: it breathes
+        let mut hung = stacked.clone();
+        hung.parts[wheesley].own_node = Some("srfAttach".into());
+        hung.parts[wheesley].parent_node = None;
+        let mut s = Structure::build(&hung, &defs, &res);
+        assert!(!s.intake_occluded(wheesley));
+        let mut p = flying(DVec3::new(0.0, 1.0, 0.0));
+        let env = runway_air(DVec3::ZERO);
+        let open = s.intake_supply(&p, &env);
+        // a part on the top node closes it
+        let mut capped = hung.clone();
+        let mut nose = capped.parts[wheesley].clone();
+        nose.part_id = "nosecone_1v_hemisphere".into();
+        nose.guid = "cap".into();
+        nose.parent = Some(wheesley);
+        nose.own_node = Some("bottom".into());
+        nose.parent_node = Some("top".into());
+        capped.parts.push(nose);
+        let mut c = Structure::build(&capped, &defs, &res);
+        assert!(c.intake_occluded(wheesley));
+        c.sync(&mut p);
+        s.sync(&mut p);
+        let shut = c.intake_supply(&p, &env);
+        assert!(open > shut + 1e-6, "open {open} vs capped {shut}");
     }
 
     #[test]

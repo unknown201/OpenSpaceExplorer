@@ -960,6 +960,11 @@ pub struct FlightReadout {
     /// Engines flamed out (`Module_Engine` `Flameout`): starved of propellant or of intake air.
     #[serde(default)]
     pub flameouts: Vec<u16>,
+    /// Ignited engines (protocol 80, `EngineIgnited`) and the thrust each delivers, kN (`FinalThrustValue`):
+    /// the part window reads "Nominal" with it; an engine not ignited reads "Off", or "Occluded" while
+    /// shielded from the airstream.
+    #[serde(default)]
+    pub engine_thrust: Vec<(u16, f32)>,
     /// A Kerbal holding a ladder: (vessel, part).
     pub on_ladder: Option<(u64, u16)>,
     /// A Kerbal climbing in through a hatch (`Board`): the vessel is gone a moment later.
