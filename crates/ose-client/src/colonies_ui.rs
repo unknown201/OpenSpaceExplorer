@@ -128,6 +128,22 @@ pub fn render_info(c: &ColonyInfo, me: Option<u64>) -> String {
     )
 }
 
+/// A colony's map marker tooltip: its name, whose it is, and who lives there.
+pub fn map_tooltip(c: &ColonyInfo, mine: bool) -> String {
+    let whose = if mine {
+        "yours".to_string()
+    } else {
+        c.owner_name.clone()
+    };
+    format!(
+        "{} \u{b7} colony on the {}\n{whose}\n{} Kerbals \u{b7} {} vessels",
+        c.name,
+        c.body,
+        c.residents.len(),
+        c.vessels.len()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +196,10 @@ mod tests {
             list.contains("selected") && list.contains("2 vessels") && list.contains("1 Kerbals")
         );
         assert!(render_list(&[], None).contains("No colonies yet"));
+        let tip = map_tooltip(&colony(), false);
+        assert_eq!(
+            tip,
+            "Armstrong <base> \u{b7} colony on the Mun\nJosh\n1 Kerbals \u{b7} 2 vessels"
+        );
     }
 }

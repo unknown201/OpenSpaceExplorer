@@ -76,8 +76,10 @@ Code: `crates/ose-colonies` (rules, tested on the Mun in `tests/found_and_launch
 
 1. ~~**Colony panel**~~ (built): the tracking station's **Colonies** tab lists the campaign's colonies; the
    card of the one picked shows its body and site, residents, vessels, launches and stock (Metal first, in
-   units and tonnes), and its founder can abandon it there. Still to come: a colony icon on the map and in
-   the flight view.
+   units and tonnes), and its founder can abandon it there. The map (in flight and in the tracking station)
+   marks each colony on its body's surface with the KSC map icon in its founder's colour, turning with the
+   body and hidden behind it or while the body is drawn smaller than 12 px; hovering shows its name, whose
+   it is, and how many Kerbals and vessels it has. Still to come: a marker in the flight view.
 2. ~~**Delivery routes to colonies**~~ (built, protocol 78): see section 6.
 3. ~~**Colony CommNet**~~ (built, protocol 79): every vessel standing in a colony with an antenna is a CommNet
    source of its own (KSP2's `IsCommNetSource`, `ose_sim::commnet::CommSources`): connected without a link
