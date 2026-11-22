@@ -72,6 +72,14 @@
     body.webgpu #labels .vessel.flag::before { -webkit-mask-image: url(assets/ui/hud/ICO-Map-Flag-16x16.png); mask-image: url(assets/ui/hud/ICO-Map-Flag-16x16.png); }
     #labels .body::before { background: currentColor; -webkit-mask-image: url(assets/ui/hud/ICO-Map-Planet-16x16.png); mask-image: url(assets/ui/hud/ICO-Map-Planet-16x16.png); }
     #labels .body.star::before { -webkit-mask-image: url(assets/ui/hud/ICO-Map-StarSystem-16x16.png); mask-image: url(assets/ui/hud/ICO-Map-StarSystem-16x16.png); }
+    /* A colony on its body's surface: the KSC map icon in its founder's colour, the name on hover. Placed by
+       the 3D map only. */
+    #labels .colony { position: absolute; visibility: hidden; transform: translate(-6px, -50%); white-space: nowrap;
+      font-size: 0; color: #ffd27a; text-shadow: 0 0 3px #000; pointer-events: auto; cursor: default; }
+    #labels .colony::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 4px; vertical-align: -2px;
+      background: currentColor; -webkit-mask: url(assets/ui/ICO-Map-KSC-16x16.png) center / contain no-repeat; mask: url(assets/ui/ICO-Map-KSC-16x16.png) center / contain no-repeat; }
+    #labels .colony.mine { color: #9ef0c0; } #labels .colony.other { color: var(--owner); }
+    #labels .colony:hover { font-size: 12px; z-index: 2; }
     #labels .node { position: absolute; transform: translate(-50%, -50%); width: 12px; height: 12px;
       border: 2px solid #96aaff; border-radius: 50%; background: #06080f; pointer-events: auto; cursor: pointer; }
     #node-panel { position: fixed; top: 160px; left: 50%; transform: translateX(-50%); z-index: 12; width: 280px; padding: 8px 10px; border-radius: 6px;
