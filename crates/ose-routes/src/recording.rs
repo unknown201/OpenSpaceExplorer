@@ -128,6 +128,9 @@ pub struct Recording {
     pub payload: Vec<String>,
     pub trajectory: Vec<Sample>,
     pub state: State,
+    /// The depot a shuttle's proving flight left from (design 3.12); none for a flight from the ground.
+    #[serde(default)]
+    pub origin: Option<String>,
 }
 
 impl Recording {
@@ -220,9 +223,15 @@ fn orbit_floor(u: &Universe, b: Entity) -> f64 {
 impl Recorder {
     /// Start recording a vessel standing on the pad or runway.
     pub fn start(u: &Universe, vessel: Entity) -> Result<Self, String> {
+        Self::start_from(u, vessel, None)
+    }
+
+    /// Start recording a vessel on the pad or runway, or, with `origin` (a depot's name), one in orbit that
+    /// has just left that depot: a shuttle's proving flight (design 3.12), recorded from its transfer on.
+    pub fn start_from(u: &Universe, vessel: Entity, origin: Option<&str>) -> Result<Self, String> {
         let craft = u.current_craft(vessel).ok_or("no such vessel")?;
         let (p, _) = flight_state(u, vessel).ok_or("the vessel is not flying")?;
-        if !p.landed {
+        if !p.landed && origin.is_none() {
             return Err("recording starts on the pad or runway".into());
         }
         let (_, body) = body_of(u, vessel).ok_or("no body")?;
@@ -245,10 +254,15 @@ impl Recorder {
                 payload: Vec::new(),
                 trajectory: Vec::new(),
                 state: State::Recording,
+                origin: origin.map(str::to_string),
             },
             ours,
             vessel,
-            phase: Phase::Pad,
+            phase: if origin.is_some() {
+                Phase::Transfer
+            } else {
+                Phase::Pad
+            },
             phase_start: u.ut(),
             phase_tanks: tanks,
             // finite, so the save's JSON keeps it

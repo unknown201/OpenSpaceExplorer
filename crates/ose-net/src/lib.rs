@@ -14,7 +14,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 80;
+pub const PROTOCOL_VERSION: u16 = 81;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -1540,6 +1540,13 @@ pub struct RouteInfo {
     /// Protocol 77: the player flying the run by hand now (`TakeControl` of its vessel; `ReleaseControl`
     /// hands it back to the route pilot, which carries on from where it is).
     pub manual: Option<u64>,
+    /// Protocol 81: a depot-to-depot shuttle's origin depot (`DepotInfo::id`): one vessel fills up there,
+    /// flies to `depot` and back, round and round. `shuttle_leg` says where it is: Loading, Outbound,
+    /// Unloading or Inbound. Its finished trips are `runs`.
+    #[serde(default)]
+    pub origin: Option<u64>,
+    #[serde(default)]
+    pub shuttle_leg: Option<String>,
     /// Finished runs, oldest first.
     pub runs: Vec<RouteRunInfo>,
 }
@@ -1596,6 +1603,10 @@ pub struct RecordingInfo {
     /// How many of its parts stayed docked at the depot.
     pub payload_parts: u32,
     pub burns: u32,
+    /// Protocol 81: the depot a shuttle's proving flight left from (it was started in orbit next to it);
+    /// a route made from it is a shuttle between the two.
+    #[serde(default)]
+    pub origin: Option<String>,
 }
 
 /// Another player's time, against the receiver's.

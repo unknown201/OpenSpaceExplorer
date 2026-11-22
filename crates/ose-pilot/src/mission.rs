@@ -148,6 +148,14 @@ impl Mission {
         self.vessel
     }
 
+    /// The vessel flying now: while undocking, the half that has left (once it has), else `vessel`.
+    pub fn flying(&self) -> Entity {
+        match &self.phase {
+            Phase::Depart(d) => d.vessel.unwrap_or(self.vessel),
+            _ => self.vessel,
+        }
+    }
+
     /// How this mission's ascent flew, once it reached orbit.
     pub fn flown_profile(&self) -> Option<LaunchProfile> {
         self.flown_profile

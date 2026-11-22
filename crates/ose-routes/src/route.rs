@@ -9,7 +9,7 @@
 //!
 //! Routes run one way from KSC. After delivering, a run stays docked, rotates out when the next one reaches
 //! orbit, flies home or is let go (`WhenDelivered`, design 3.10); the route waits while the recorded port is
-//! taken ("no launch when all ports are full"). Depot-to-depot shuttles come next.
+//! taken ("no launch when all ports are full"). Depot-to-depot shuttles are in `shuttle.rs`.
 //!
 //! The route itself is saved with the campaign. Its pilot lives only in memory (`Pilots`): after a restart
 //! or a reload the pilots are made again from the saved routes (`Routes::resume`). A run in flight is found
@@ -233,12 +233,17 @@ pub struct Pilots {
     /// The pilots were made again from the saved routes (`Routes::resume`).
     resumed: bool,
     /// The vessels players fly by hand now, and who flies each (`set_manual`).
-    manual: BTreeMap<Entity, u64>,
+    pub(crate) manual: BTreeMap<Entity, u64>,
+    /// The shuttle pilots, by route (`crate::shuttle`).
+    pub(crate) shuttles: BTreeMap<u64, crate::shuttle::ShuttleStage>,
 }
 
 impl Pilots {
     /// The leg the route's run is flying, if it is flying.
     pub fn leg(&self, route: u64) -> Option<Leg> {
+        if let Some(s) = self.shuttles.get(&route) {
+            return s.leg();
+        }
         match self.runs.get(&route)? {
             Stage::Flying(m) => Some(m.leg()),
             Stage::Trip(t) => Some(trip_leg(t)),
@@ -246,8 +251,11 @@ impl Pilots {
         }
     }
 
-    /// The vessel a route's run is, while flying.
+    /// The vessel a route's run is, while flying (or its shuttle, while flying).
     pub fn vessel(&self, route: u64) -> Option<Entity> {
+        if let Some(s) = self.shuttles.get(&route) {
+            return s.vessel();
+        }
         match self.runs.get(&route)? {
             Stage::Flying(m) => Some(m.vessel()),
             Stage::Trip(t) => Some(t.vessel()),
@@ -271,6 +279,11 @@ impl Pilots {
                 Leave::Undock(d, _) => d.suggested_warp(),
                 Leave::Descend(d, e) => d.suggested_warp(u, *e),
             }))
+            .chain(
+                self.shuttles
+                    .values()
+                    .filter_map(|s| s.suggested_warp(u, &self.manual)),
+            )
             .min()
     }
 
@@ -284,6 +297,7 @@ impl Pilots {
     pub fn clear(&mut self) {
         self.runs.clear();
         self.homebound.clear();
+        self.shuttles.clear();
         self.resumed = false;
     }
 }
@@ -304,7 +318,11 @@ fn trip_leg(t: &Trip) -> Leg {
     }
 }
 
-fn tanks(craft: &Craft, which: &dyn Fn(&str) -> bool, resource: &str) -> (Vec<usize>, f64) {
+pub(crate) fn tanks(
+    craft: &Craft,
+    which: &dyn Fn(&str) -> bool,
+    resource: &str,
+) -> (Vec<usize>, f64) {
     let mut parts = Vec::new();
     let mut total = 0.0;
     for (i, p) in craft.parts.iter().enumerate() {
@@ -348,6 +366,9 @@ impl Routes {
             .iter()
             .find(|p| p.id == proving)
             .ok_or("no such recording")?;
+        if p.origin.is_some() {
+            return self.create_shuttle(player, proving, name);
+        }
         let r = &p.recorder.recording;
         let (depot, depot_port, own_port, endpoint) = match (&r.state, &p.colony) {
             (State::Landed, Some(c)) => {
@@ -475,6 +496,12 @@ impl Routes {
 
     /// Pause a route (its run in flight carries on) or resume it.
     pub fn pause_route(&mut self, id: u64, paused: bool) -> Result<(), String> {
+        if let Some(s) = self.shuttles.iter_mut().find(|s| s.id == id) {
+            s.paused = paused.then(|| "paused".to_string());
+            // resuming tries again after a failure
+            s.stuck &= paused;
+            return Ok(());
+        }
         let r = self.route_mut(id)?;
         r.paused = paused.then(|| "paused".to_string());
         r.next_launch = None;
@@ -495,6 +522,11 @@ impl Routes {
 
     /// Delete a route. Its run in flight is left where it is, flown by nobody.
     pub fn delete_route(&mut self, pilots: &mut Pilots, id: u64) -> Result<(), String> {
+        if let Some(i) = self.shuttles.iter().position(|s| s.id == id) {
+            self.shuttles.remove(i);
+            pilots.shuttles.remove(&id);
+            return Ok(());
+        }
         let i = self
             .routes
             .iter()
@@ -643,6 +675,7 @@ impl Routes {
             pilots.resumed = true;
             out = self.resume(u, pilots);
         }
+        self.fly_shuttles(u, pilots, catalog, &mut out);
         if pilots.runs.is_empty() && pilots.homebound.is_empty() {
             return out;
         }
@@ -830,7 +863,8 @@ impl Routes {
                         ended = Some((Outcome::Lost("the depot is gone".into()), delivered.clone()))
                     }
                     Some((d, dv)) => {
-                        let done = pump(u, d, dv, queue, current, delivered).is_some();
+                        let done = pump(u, dv, &|g| d.parts.contains(g), queue, current, delivered)
+                            .is_some();
                         if let Some(a) = r.active.as_mut() {
                             a.delivered = delivered.clone();
                         }
@@ -1099,6 +1133,7 @@ fn pick_up(
                     }
                     _ => true,
                 };
+            settle(u, e);
             if let Some(c) = r.colony() {
                 return colony_trip(u, c, e, climbing, a.n)
                     .map(|t| Stage::Trip(Box::new(t)))
@@ -1121,6 +1156,16 @@ fn pick_up(
             delivered: a.delivered.clone(),
         }),
         None => Err(Outcome::Missed("the run's vessel is gone".into())),
+    }
+}
+
+/// Let go of a vessel's controls a pilot left set (a restart or a hand-back halfway through a manoeuvre):
+/// no throttle, no translation, RCS off, holding the attitude it had.
+pub(crate) fn settle(u: &mut Universe, e: Entity) {
+    if let Some(att) = u.powered(e).map(|p| p.attitude) {
+        u.set_controls(e, 0.0, att);
+        u.set_translate(e, DVec3::ZERO);
+        u.action_group(e, ose_sim::ActionGroup::Rcs, Some(false));
     }
 }
 
@@ -1269,7 +1314,7 @@ fn run_mission(
 }
 
 /// The vessel named `name` that carries no depot (the first, if several).
-fn find_by_name(u: &mut Universe, name: &str, depots: &[Entity]) -> Option<Entity> {
+pub(crate) fn find_by_name(u: &mut Universe, name: &str, depots: &[Entity]) -> Option<Entity> {
     u.vessels()
         .into_iter()
         .filter(|e| !depots.contains(e))
@@ -1278,6 +1323,17 @@ fn find_by_name(u: &mut Universe, name: &str, depots: &[Entity]) -> Option<Entit
 
 /// Undock what is docked at the depot's recorded port: a pilot that backs it off, and the depot's vessel.
 fn send_off(u: &Universe, d: &Depot, port: &str) -> Result<(Depart, Entity), String> {
+    let (partner, dv) = docked_partner(u, d, port)?;
+    Ok((Depart::new(&partner), dv))
+}
+
+/// What is docked at the depot's port (`port`, named as when the depot was marked): the name of the port
+/// docked to it, in the depot's vessel, and that vessel.
+pub(crate) fn docked_partner(
+    u: &Universe,
+    d: &Depot,
+    port: &str,
+) -> Result<(String, Entity), String> {
     let dv = d.vessel().ok_or("the depot cannot be found")?;
     let name = d.current_name(port).ok_or("the depot's port is gone")?;
     let craft = u.current_craft(dv).ok_or("the depot has no parts")?;
@@ -1299,11 +1355,11 @@ fn send_off(u: &Universe, d: &Depot, port: &str) -> Result<(Depart, Entity), Str
             }
         })
         .ok_or("nothing is docked there")?;
-    Ok((Depart::new(&craft.parts[other].guid), dv))
+    Ok((craft.parts[other].guid.clone(), dv))
 }
 
 /// Whether the depot's recorded port has nothing docked to it.
-fn port_free(u: &Universe, d: &Depot, dv: Entity, port: &str) -> bool {
+pub(crate) fn port_free(u: &Universe, d: &Depot, dv: Entity, port: &str) -> bool {
     let Some(name) = d.current_name(port) else {
         return false;
     };
@@ -1355,18 +1411,18 @@ fn launch_time(u: &Universe, r: &Route, depot: Entity) -> Option<f64> {
     Some(w.ut.max(now + ROLLOUT_S))
 }
 
-/// Pump the route's cargo into the depot, one resource at a time. Returns `Some` when done.
-fn pump(
+/// Pump the route's cargo into the receiving parts (`is_depot`) from the rest of the vessel, one resource at
+/// a time. Returns `Some` when done.
+pub(crate) fn pump(
     u: &mut Universe,
-    d: &Depot,
     dv: Entity,
+    is_depot: &dyn Fn(&str) -> bool,
     queue: &mut Vec<(String, f64)>,
     current: &mut Option<(String, f64, f64, f64, f64)>,
     delivered: &mut BTreeMap<String, f64>,
 ) -> Option<()> {
     let ut = u.ut();
     let craft = u.current_craft(dv)?;
-    let is_depot = |g: &str| d.parts.contains(g);
     if let Some((res, start, goal, last, last_ut)) = current.clone() {
         let (_, now) = tanks(&craft, &is_depot, &res);
         delivered.insert(res.clone(), (now - start).max(0.0));
