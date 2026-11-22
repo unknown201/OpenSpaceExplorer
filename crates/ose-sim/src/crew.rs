@@ -567,12 +567,13 @@ impl Universe {
             // a jetpack fires on the throttle without staging; on the ground the Kerbal walks
             p.ignited = true;
             p.walker = true;
-            // In space the pack starts off; R enables body-relative translation after release.
             p.rcs.thrust_kn = jetpack.move_force_kn;
             p.rcs.isp_vac_s = isp_vac;
             p.rcs.isp_asl_s = isp_asl;
             p.jetpack = Some(jetpack);
-            p.groups.rcs = landed;
+            // the pack is off until R, on the ground too: KSP2 pilot run `evapad` (2026-11-22) has the Kerbal
+            // out on the pad with RCS off, and walking off the pod's edge it falls 3.5 m without the pack firing
+            p.groups.rcs = false;
             // a Kerbal has no SAS: it keeps the attitude it stepped out in rather than turning to a mode
             p.attitude = flight::Attitude::Free;
             p.angvel = DVec3::ZERO;
@@ -1740,6 +1741,11 @@ mod tests {
         let jeb = u.go_eva(v, None).unwrap();
         let_go_and_land(&mut u, jeb);
         let fuel = u.powered(jeb).unwrap().propellant_t;
+        // walking on off the pod's edge, it falls to the pad with the pack off (KSP2 pilot run `evapad`)
+        assert_eq!(
+            fuel, JETPACK_PROPELLANT_T,
+            "no pack fired walking off the pod"
+        );
         let body = u.body_entity("Kerbin").unwrap();
         let b = u.world.get::<bodies::Body>(body).unwrap().clone();
         let here = |u: &Universe| flight::lat_lon(&b, u.position_of(jeb).unwrap(), u.ut());
@@ -1796,7 +1802,9 @@ mod tests {
         let p = u.powered(jeb).unwrap();
         assert!(p.landed && !p.crashed);
         assert_eq!(p.propellant_t, fuel, "walking and jumping burn nothing");
-        // the jetpack lifts it straight up (Translate along the Kerbal's axis)
+        // the jetpack (off until R, as in KSP2) lifts it straight up (Translate along the Kerbal's axis)
+        assert!(!u.powered(jeb).unwrap().groups.rcs, "the pack starts off");
+        u.action_group(jeb, crate::ActionGroup::Rcs, Some(true));
         u.set_controls(jeb, 0.0, flight::Attitude::Up);
         assert!(u.set_translate(jeb, DVec3::new(0.0, 1.0, 0.0)));
         for _ in 0..crate::TICKS_PER_SECOND {

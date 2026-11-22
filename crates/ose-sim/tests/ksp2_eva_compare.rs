@@ -36,7 +36,11 @@ fn craft_universe(orbit: bool, world: &str) -> (Universe, Entity) {
     let mu = u.world.get::<bodies::Body>(body).unwrap().mu;
     let report = ose_data::staging::delta_v_by_stage(&craft, &defs, &res);
     let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
-    let (lat, lon) = if world == "Kerbin" { (-0.0972, -74.5577) } else { (0.5, 20.0) };
+    let (lat, lon) = if world == "Kerbin" {
+        (-0.0972, -74.5577)
+    } else {
+        (0.5, 20.0)
+    };
     let v = u.spawn_powered_on_surface("eva compare", body, spec, lat, lon);
     u.set_structure(v, Structure::build(&craft, &defs, &res));
     if orbit {
@@ -64,7 +68,13 @@ fn run_on(orbit: bool, world: &str) {
     let path = format!(
         "{}/../../target/eva-compare-{}.csv",
         env!("CARGO_MANIFEST_DIR"),
-        if orbit { "orbit".to_string() } else if world == "Kerbin" { "pad".to_string() } else { world.to_lowercase() }
+        if orbit {
+            "orbit".to_string()
+        } else if world == "Kerbin" {
+            "pad".to_string()
+        } else {
+            world.to_lowercase()
+        }
     );
     let mut w = std::fs::File::create(&path).unwrap();
     writeln!(
@@ -73,7 +83,10 @@ fn run_on(orbit: bool, world: &str) {
     )
     .unwrap();
     let mut t = 0.0;
-    let radius = { let b = u.body_entity(world).unwrap(); u.world.get::<bodies::Body>(b).unwrap().radius_m };
+    let radius = {
+        let b = u.body_entity(world).unwrap();
+        u.world.get::<bodies::Body>(b).unwrap().radius_m
+    };
     let mut basis = flight::vessel_basis(u.powered(v).unwrap());
     let mut hold = |u: &mut Universe, phase: &str, seconds: f64| {
         for _ in 0..(seconds * TICKS_PER_SECOND as f64).round() as u64 {
