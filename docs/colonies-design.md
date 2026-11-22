@@ -79,7 +79,9 @@ Code: `crates/ose-colonies` (rules, tested on the Mun in `tests/found_and_launch
    units and tonnes), and its founder can abandon it there. The map (in flight and in the tracking station)
    marks each colony on its body's surface with the KSC map icon in its founder's colour, turning with the
    body and hidden behind it or while the body is drawn smaller than 12 px; hovering shows its name, whose
-   it is, and how many Kerbals and vessels it has. Still to come: a marker in the flight view.
+   it is, and how many Kerbals and vessels it has. The flight view marks the colonies on the flown vessel's
+   body the same way, 10 m over the ground at the site, with the name and the distance from the vessel, and
+   hides those beyond the horizon.
 2. ~~**Delivery routes to colonies**~~ (built, protocol 78): see section 6.
 3. ~~**Colony CommNet**~~ (built, protocol 79): every vessel standing in a colony with an antenna is a CommNet
    source of its own (KSP2's `IsCommNetSource`, `ose_sim::commnet::CommSources`): connected without a link
