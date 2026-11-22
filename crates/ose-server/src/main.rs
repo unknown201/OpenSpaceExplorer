@@ -983,6 +983,7 @@ fn step_once(sim: &Shared) {
     }
     maintain_registry(sim);
     routes::after_step(sim, sim.steps.load(std::sync::atomic::Ordering::SeqCst));
+    colonies::after_step(sim, sim.steps.load(std::sync::atomic::Ordering::SeqCst));
     replay::after_step(sim, sim.steps.load(std::sync::atomic::Ordering::SeqCst));
 }
 
