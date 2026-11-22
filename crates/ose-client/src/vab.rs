@@ -2907,29 +2907,33 @@ pub fn stage_in_situation(
     (dv.max(0.0) + 0.0, twr)
 }
 
+/// An engine's status line (`Data_Engine.StatusString`): an ignited engine reads "Flameout" while flamed
+/// out, else "Nominal" with the thrust it delivers (`PartComponentModule_Engine.UpdateStatus`); one not
+/// ignited reads "Occluded" while shielded from the airstream, else "Off" (`Module_Engine.ThrustUpdate`).
+pub fn engine_status(ignited_kn: Option<f32>, flameout: bool, shielded: bool) -> String {
+    match ignited_kn {
+        Some(_) if flameout => "Flameout".into(),
+        Some(kn) => format!("Nominal {kn:.2} kN"),
+        None if shielded => "Occluded".into(),
+        None => "Off".into(),
+    }
+}
+
 /// The original's engine status and mode controls in a flight part window (`Data_Engine`): the status line
-/// (`StatusString`: Nominal, Off or Flameout), and for an engine with more than one mode the mode it runs in
+/// ([`engine_status`]), and for an engine with more than one mode the mode it runs in
 /// (or is changing to, while it waits out the change) with a button for the other mode (`data-act`
 /// "fh-act-mode") and the Auto Switch toggle (`EngineAutoSwitchMode`, "fh-act-automode"). `mode` is the
 /// readout's (part, mode, changing_to, auto) entry.
 pub fn engine_status_html(
     modes: &[EngineSpec],
     mode: Option<(u16, u8, Option<u8>, bool)>,
-    off: bool,
-    flameout: bool,
+    status: &str,
 ) -> String {
     let esc = |s: &str| {
         s.replace('&', "&amp;")
             .replace('<', "&lt;")
             .replace('>', "&gt;")
             .replace('"', "&quot;")
-    };
-    let status = if off {
-        "Off"
-    } else if flameout {
-        "Flameout"
-    } else {
-        "Nominal"
     };
     let mut html = format!(
         "<div class=\"pam-acts\"><span>Status: <b data-engine-status>{status}</b></span></div>"
@@ -4010,16 +4014,18 @@ mod tests {
                 ..Default::default()
             })
             .collect();
-        let one = engine_status_html(&modes[..1], None, false, false);
-        assert!(one.contains("Nominal") && !one.contains("fh-act-mode"));
-        assert!(engine_status_html(&modes[..1], None, false, true).contains("Flameout"));
-        assert!(engine_status_html(&modes[..1], None, true, true).contains(">Off<"));
-        let rapier = engine_status_html(&modes, Some((3, 0, None, true)), false, false);
+        let one = engine_status_html(&modes[..1], None, "Nominal 12.00 kN");
+        assert!(one.contains(">Nominal 12.00 kN<") && !one.contains("fh-act-mode"));
+        assert_eq!(engine_status(Some(12.0), false, true), "Nominal 12.00 kN");
+        assert_eq!(engine_status(Some(12.0), true, false), "Flameout");
+        assert_eq!(engine_status(None, true, false), "Off");
+        assert_eq!(engine_status(None, false, true), "Occluded");
+        let rapier = engine_status_html(&modes, Some((3, 0, None, true)), "Off");
         assert!(rapier.contains("<b data-engine-mode>Air Breathing</b>"));
         assert!(rapier.contains("<button data-act=\"fh-act-mode\">Closed Cycle</button>"));
         assert!(rapier.contains("Auto Switch: <b>on</b>"));
         // while the change waits, it shows where it is going and offers the way back
-        let changing = engine_status_html(&modes, Some((3, 0, Some(1), false)), false, false);
+        let changing = engine_status_html(&modes, Some((3, 0, Some(1), false)), "Off");
         assert!(changing.contains("Air Breathing &rarr; Closed Cycle"));
         assert!(changing.contains("<button data-act=\"fh-act-mode\">Air Breathing</button>"));
         assert!(changing.contains("Auto Switch: <b>off</b>"));

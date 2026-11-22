@@ -14,7 +14,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 78;
+pub const PROTOCOL_VERSION: u16 = 79;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -960,6 +960,11 @@ pub struct FlightReadout {
     /// Engines flamed out (`Module_Engine` `Flameout`): starved of propellant or of intake air.
     #[serde(default)]
     pub flameouts: Vec<u16>,
+    /// Ignited engines (protocol 79, `EngineIgnited`) and the thrust each delivers, kN (`FinalThrustValue`):
+    /// the part window reads "Nominal" with it; an engine not ignited reads "Off", or "Occluded" while
+    /// shielded from the airstream.
+    #[serde(default)]
+    pub engine_thrust: Vec<(u16, f32)>,
     /// A Kerbal holding a ladder: (vessel, part).
     pub on_ladder: Option<(u64, u16)>,
     /// A Kerbal climbing in through a hatch (`Board`): the vessel is gone a moment later.

@@ -1,6 +1,6 @@
 # Status
 
-Current wire protocol: **76**. Science availability and diminishing returns, per-part deployment permissions, and powered light outputs require matching client and server builds.
+Current wire protocol: **79**. Science availability and diminishing returns, per-part deployment permissions, and powered light outputs require matching client and server builds.
 
 Client rendering defaults to 60 FPS with higher/unlimited choices. [Performance diagnostics](performance-diagnostics.md)
 correlate automatic client stall reports and manual Graphics reports with server simulation, publication, command and save timings.
