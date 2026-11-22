@@ -22,11 +22,47 @@ namespace OpenSpaceExplorer.Validation
         static GameInstance G => GameManager.Instance.Game;
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
-        public static IEnumerator Run(VesselComponent vessel, string dir, bool orbit, Action<string> mark)
+        // Puts the craft `above` m over the terrain at a latitude/longitude, still (the body's own turn).
+        static void ToSurface(VesselComponent vessel, double lat, double lon, double above)
         {
+            var state = new KSP.Sim.State.SurfaceTeleportState { ReferenceBodyGuid = vessel.mainBody.Name, Altitude = above, Latitude = lat, Longitude = lon, VerticalSpeed = 0 };
+            G.SpaceSimulation.TeleportSimObjectToSurface(vessel.SimulationObject, state);
+        }
+
+        // Boards the Kerbal back into the pod; filled in from the decompiled boarding call (see run-eva-compare.ps1).
+        static bool TryBoard(VesselComponent kerbal, PartBehavior pod, Action<string> mark)
+        {
+            return EvaBoard.TryBoard(kerbal, pod, mark);
+        }
+
+        // mode: orbit (100 km orbit), pad, flight (2500 m over the land west of the KSC, falling from rest),
+        // splash (afloat on the sea east of the KSC), board (pad, back in after 3 s on the ladder)
+        public static IEnumerator Run(VesselComponent vessel, string dir, string mode, Action<string> mark)
+        {
+            bool orbit = mode == "orbit";
             G.ViewController.flightInputHandler.OverrideInputThrottleCutoff(true);
             if (orbit) yield return OrbitScenarios.ToOrbit(vessel, "Kerbin", 700000, 0, mark);
             else yield return new WaitForSeconds(3f);
+            if (mode == "splash")
+            {
+                // the teleport height is over the terrain (the sea floor here): find the floor, then set it down
+                // 3 m above the water and let it settle afloat
+                ToSurface(vessel, -0.0972, -73.5, 50);
+                yield return new WaitForSeconds(0.5f);
+                double asl = G.ViewController.GetActiveSimVessel().AltitudeFromSeaLevel;
+                mark("probe asl " + asl.ToString("R", Inv));
+                ToSurface(vessel, -0.0972, -73.5, 53 - asl);
+                yield return new WaitForSeconds(20f);
+                var v = G.ViewController.GetActiveSimVessel();
+                mark("afloat? situation " + v.Situation + " asl " + v.AltitudeFromSeaLevel.ToString("R", Inv));
+            }
+            if (mode == "flight")
+            {
+                ToSurface(vessel, -0.0972, -74.8, 2500);
+                yield return new WaitForSeconds(0.2f);
+                var v = G.ViewController.GetActiveSimVessel();
+                mark("dropped, situation " + v.Situation + " asl " + v.AltitudeFromSeaLevel.ToString("R", Inv));
+            }
             vessel = G.ViewController.GetActiveSimVessel();
             PartComponent podPart = null; Transform pod = null;
             foreach (var part in vessel.SimulationObject.PartOwner.Parts)
@@ -73,19 +109,46 @@ namespace OpenSpaceExplorer.Validation
                     row();
                     if (next < shots.Length && now() - start >= shots[next])
                     {
-                        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "out", "eva-" + (orbit ? "orbit" : "pad") + "-" + phase + "-" + shots[next].ToString("0.0", Inv) + "s.png"));
+                        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "out", "eva-" + mode + "-" + phase + "-" + shots[next].ToString("0.0", Inv) + "s.png"));
                         mark("shot " + phase + " " + shots[next].ToString("0.0", Inv));
                         next++;
                     }
                 }
             }
-            yield return Hold(10f, 0.5f, 2f, 5f, 9.5f);
+            if (mode == "board")
+            {
+                yield return Hold(3f, 1f);
+                phase = "board"; mark("board " + TryBoard(G.ViewController.GetActiveSimVessel(), pod.GetComponent<PartBehavior>(), mark));
+                float b = now();
+                while (now() - b < 10f)
+                {
+                    yield return new WaitForFixedUpdate();
+                    var a = G.ViewController.GetActiveSimVessel();
+                    if (a == null || !a.IsKerbalEVA) { mark("aboard after " + (now() - b).ToString("R", Inv) + " s, active " + a?.Name + " crew " + a?.SimulationObject?.Crew?.ToString()); break; }
+                    row();
+                }
+                w.Dispose();
+                yield break;
+            }
+            yield return Hold(mode == "flight" ? 5f : 10f, 0.5f, 2f, 5f, 9.5f);
             phase = "letgo"; mark("let go");
             InputHolder.EvaJump = true;
             yield return Hold(0.3f);
             InputHolder.EvaJump = false;
             yield return Hold(5f, 1f, 4.5f);
-            if (orbit)
+            if (mode == "flight")
+            {
+                phase = "fall"; yield return Hold(8f, 2f, 7.5f);
+            }
+            else if (mode == "splash")
+            {
+                phase = "float"; yield return Hold(5f, 4.5f);
+                phase = "swim"; mark("swim forward 6 s"); InputHolder.EvaFrontBack = 1f;
+                yield return Hold(6f, 3f);
+                InputHolder.EvaFrontBack = 0f;
+                phase = "settle"; yield return Hold(3f, 2.5f);
+            }
+            else if (orbit)
             {
                 kerbal = G.ViewController.GetActiveSimVessel();
                 kerbal.IsRCSEnabled = true;

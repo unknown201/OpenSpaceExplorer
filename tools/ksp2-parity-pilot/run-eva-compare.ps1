@@ -15,7 +15,7 @@
 #>
 param(
     [string]$Ksp2 = "C:\Program Files (x86)\Steam\steamapps\common\Kerbal Space Program 2",
-    [string[]]$Scenarios = @("evaorbit", "evapad"),
+    [string[]]$Scenarios = @("evaflight", "evasplash", "evaboard"),
     [int]$TimeoutMinutes = 20
 )
 $ErrorActionPreference = "Stop"
@@ -23,11 +23,11 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $pilotDir = Join-Path $Ksp2 "BepInEx\ose-parity"
 $plugin = Join-Path $Ksp2 "BepInEx\plugins\OSE.ParityPilot.dll"
 $campaign = Join-Path $env:USERPROFILE "AppData\LocalLow\Intercept Games\Kerbal Space Program 2\Saves\SinglePlayer\OSE Parity"
-$outNames = @{ evaorbit = "ksp2-eva-orbit"; evapad = "ksp2-eva-pad" }
+$outNames = @{ evaorbit = "ksp2-eva-orbit"; evapad = "ksp2-eva-pad"; evaflight = "ksp2-eva-flight"; evasplash = "ksp2-eva-splash"; evaboard = "ksp2-eva-board" }
 
 if (-not (Test-Path $pilotDir)) { throw "No ${pilotDir}: the parity pilot (BepInEx) is not installed in KSP2." }
 if (Get-Process -Name "KSP2_x64" -ErrorAction SilentlyContinue) { throw "KSP2 is running; close it first." }
-foreach ($s in $Scenarios) { if (-not $outNames.ContainsKey($s)) { throw "Unknown scenario '$s' (evaorbit, evapad)." } }
+foreach ($s in $Scenarios) { if (-not $outNames.ContainsKey($s)) { throw "Unknown scenario '$s' (evaorbit, evapad, evaflight, evasplash, evaboard)." } }
 
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $work = Join-Path $env:TEMP "ose-parity-$stamp"
