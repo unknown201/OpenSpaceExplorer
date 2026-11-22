@@ -46,6 +46,12 @@ pub struct Colony {
     /// Crafts launched from its pad.
     #[serde(default)]
     pub launches: u32,
+    /// When the last newcomer moved in (universal time, s; the founding until one has).
+    #[serde(default)]
+    pub last_arrival_ut: Option<f64>,
+    /// Kerbals who have moved in on their own (`settle`).
+    #[serde(default)]
+    pub arrivals: u32,
 }
 
 /// A campaign's colonies. Kept in the campaign save.
@@ -173,6 +179,8 @@ impl Colonies {
             lon_deg: lon,
             founded_ut: u.ut(),
             launches: 0,
+            last_arrival_ut: None,
+            arrivals: 0,
         });
         Ok(id)
     }
@@ -233,6 +241,76 @@ pub fn residents(u: &mut Universe, c: &Colony) -> Vec<(Entity, String)> {
         .into_iter()
         .flat_map(|e| u.crew(e).into_iter().map(move |(_, n)| (e, n)))
         .collect()
+}
+
+/// A newcomer moves into a colony with room this long after the last one, or after its founding (s): two
+/// Kerbin days. KSP2's population component fills vacancies after a delay; OSE's room is the empty seats.
+pub const VACANCY_DELAY_S: f64 = 2.0 * 21_600.0;
+
+/// The empty seats in a colony's vessels, as (vessel, part), in vessel then seat order. A colony is
+/// home to as many Kerbals as its vessels seat.
+pub fn vacancies(u: &mut Universe, c: &Colony) -> Vec<(Entity, usize)> {
+    let mut out = Vec::new();
+    for e in members(u, c) {
+        let mut taken = u.crew(e);
+        for part in u.crew_seats(e) {
+            match taken.iter().position(|(p, _)| *p == part) {
+                Some(k) => {
+                    taken.remove(k);
+                }
+                None => out.push((e, part)),
+            }
+        }
+    }
+    out
+}
+
+/// When the next newcomer is due in a colony, if it has someone living there to welcome them and room.
+pub fn next_arrival(u: &mut Universe, c: &Colony) -> Option<f64> {
+    if residents(u, c).is_empty() || vacancies(u, c).is_empty() {
+        return None;
+    }
+    Some(c.last_arrival_ut.unwrap_or(c.founded_ut) + VACANCY_DELAY_S)
+}
+
+impl Colonies {
+    /// Population (design step 6): each colony with residents and an empty seat takes in a newcomer every
+    /// `VACANCY_DELAY_S`, named by `name_for` (the next Kerbal the campaign has not hired). Returns the
+    /// (colony, Kerbal) pairs who moved in. A colony without room or residents only restarts its wait.
+    pub fn settle(
+        &mut self,
+        u: &mut Universe,
+        name_for: &mut dyn FnMut() -> String,
+    ) -> Vec<(u64, String)> {
+        let now = u.ut();
+        let mut out = Vec::new();
+        for c in &mut self.colonies {
+            loop {
+                let due = c.last_arrival_ut.unwrap_or(c.founded_ut) + VACANCY_DELAY_S;
+                if now < due {
+                    break;
+                }
+                let room = if residents(u, c).is_empty() {
+                    None
+                } else {
+                    vacancies(u, c).first().copied()
+                };
+                let Some((e, part)) = room else {
+                    // nobody to welcome them or no room: the wait starts over from now
+                    c.last_arrival_ut = Some(now);
+                    break;
+                };
+                let name = name_for();
+                let mut crew = u.crew(e);
+                crew.push((part, name.clone()));
+                u.set_crew(e, crew);
+                c.last_arrival_ut = Some(due);
+                c.arrivals += 1;
+                out.push((c.id, name));
+            }
+        }
+        out
+    }
 }
 
 /// Where a colony's launch pad stands: `PAD_DISTANCE_M` east of its site.

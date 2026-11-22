@@ -14,7 +14,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 78;
+pub const PROTOCOL_VERSION: u16 = 79;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -1498,6 +1498,14 @@ pub struct ColonyInfo {
     pub residents: Vec<String>,
     /// What its vessels' tanks hold: (resource, stored, capacity).
     pub stock: Vec<(String, f64, f64)>,
+    /// Protocol 79, population: the empty seats in its vessels, the Kerbals who moved in on their own, and how long until
+    /// the next one does (s; none without room or without anyone living there).
+    #[serde(default)]
+    pub vacancies: u32,
+    #[serde(default)]
+    pub arrivals: u32,
+    #[serde(default)]
+    pub next_arrival_in_s: Option<f64>,
 }
 
 /// A delivery route (`ServerMessage::Routes`, protocol 73).

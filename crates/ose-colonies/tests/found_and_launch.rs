@@ -174,3 +174,50 @@ fn a_colony_on_the_mun_stocks_fuel_and_launches_from_its_pad() {
     b2.abandon(id, 7).unwrap();
     assert!(b2.colonies.is_empty());
 }
+
+#[test]
+fn newcomers_move_into_empty_seats_every_two_days() {
+    let m = modules();
+    let mut w = world();
+    let mun = w.u.body_entity("Mun").unwrap();
+    let base = on_surface(&mut w, mun, &with_trunk(&m.unity, 1_000.0), 1.0, 20.0);
+    for _ in 0..50 {
+        w.u.step();
+    }
+    let seats = w.u.crew_seats(base);
+    assert!(seats.len() >= 2, "{seats:?}");
+    w.u.set_crew(base, vec![(seats[0], "Jebediah Kerman".to_string())]);
+    let mut book = Colonies::default();
+    let id = book.found(&mut w.u, base, 7, "Armstrong").expect("founded");
+    let free = seats.len() - 1;
+    assert_eq!(
+        ose_colonies::vacancies(&mut w.u, book.get(id).unwrap()).len(),
+        free
+    );
+    let mut n = 0;
+    let mut name = || {
+        n += 1;
+        format!("Newcomer {n} Kerman")
+    };
+    // not yet: the first newcomer is due two days after the founding
+    assert!(book.settle(&mut w.u, &mut name).is_empty());
+    let due = ose_colonies::next_arrival(&mut w.u, book.get(id).unwrap()).unwrap();
+    assert!((due - book.get(id).unwrap().founded_ut - ose_colonies::VACANCY_DELAY_S).abs() < 1e-6);
+    // as if many days went by: one newcomer per empty seat, then no more room
+    book.colonies[0].founded_ut -= 10.0 * ose_colonies::VACANCY_DELAY_S;
+    let mut n = 0;
+    let mut name = || {
+        n += 1;
+        format!("Newcomer {n} Kerman")
+    };
+    let came = book.settle(&mut w.u, &mut name);
+    assert_eq!(came.len(), free, "{came:?}");
+    assert_eq!(book.get(id).unwrap().arrivals as usize, free);
+    assert!(ose_colonies::vacancies(&mut w.u, book.get(id).unwrap()).is_empty());
+    let residents = ose_colonies::residents(&mut w.u, book.get(id).unwrap());
+    assert!(residents.iter().any(|(_, n)| n == "Newcomer 1 Kerman"));
+    assert_eq!(
+        ose_colonies::next_arrival(&mut w.u, book.get(id).unwrap()),
+        None
+    );
+}
