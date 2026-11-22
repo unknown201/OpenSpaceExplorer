@@ -63,13 +63,69 @@ fn run(orbit: bool) {
 }
 
 fn run_on(orbit: bool, world: &str) {
+    run_mode(orbit, world, None)
+}
+
+/// `flight`: the craft dropped from rest (turning with the body) `drop_m` over the ground, as the pilot's
+/// `evaflight` teleport does.
+fn run_mode(orbit: bool, world: &str, drop_m: Option<f64>) {
+    run_full(orbit, world, drop_m, false)
+}
+
+/// `splash`: a sea 442 m deep (as east of the KSC in KSP2's run), the craft set down 3 m over it, still,
+/// left 20 s to settle, then the pilot's splash steps: let go, float, swim forward 6 s.
+fn run_full(orbit: bool, world: &str, drop_m: Option<f64>, splash: bool) {
     let (mut u, v) = craft_universe(orbit, world);
+    if splash {
+        let body = u.body_entity(world).unwrap();
+        let radius = u.world.get::<bodies::Body>(body).unwrap().radius_m;
+        u.world
+            .entity_mut(body)
+            .insert(flight::Terrain(std::sync::Arc::new(
+                ose_data::terrain::TerrainMap {
+                    width: 2,
+                    height: 2,
+                    scale_m: 0.0,
+                    offset_m: -442.0,
+                    has_ocean: true,
+                    body_radius_m: radius,
+                    data: vec![0; 4],
+                    max_m: 0.0,
+                    detail: None,
+                    overlay: None,
+                    flats: vec![],
+                },
+            )));
+    }
+    let drop_m = if splash { Some(3.0) } else { drop_m };
+    if let Some(h) = drop_m {
+        let body = u.body_entity(world).unwrap();
+        let b = u.world.get::<bodies::Body>(body).unwrap().clone();
+        let mut p = u.powered(v).unwrap().clone();
+        let up = p.r.normalized();
+        p.r = up * (p.r.length() + h);
+        p.v = DVec3::new(0.0, 0.0, std::f64::consts::TAU / b.rotation_period_s).cross(p.r);
+        p.landed = false;
+        p.attitude = flight::Attitude::Free;
+        p.angvel = DVec3::ZERO;
+        u.set_powered(v, p);
+        u.step();
+        if splash {
+            for _ in 0..(20 * TICKS_PER_SECOND) {
+                u.step();
+            }
+        }
+    }
     let jeb = u.go_eva(v, None).unwrap();
     let path = format!(
         "{}/../../target/eva-compare-{}.csv",
         env!("CARGO_MANIFEST_DIR"),
         if orbit {
             "orbit".to_string()
+        } else if splash {
+            "splash".to_string()
+        } else if drop_m.is_some() {
+            "flight".to_string()
         } else if world == "Kerbin" {
             "pad".to_string()
         } else {
@@ -128,10 +184,29 @@ fn run_on(orbit: bool, world: &str) {
             .unwrap();
         }
     };
-    hold(&mut u, "ladder", 10.0);
+    hold(
+        &mut u,
+        "ladder",
+        if drop_m.is_some() && !splash {
+            5.0
+        } else {
+            10.0
+        },
+    );
     assert!(u.set_eva(jeb, false, true));
     hold(&mut u, "letgo", 5.3);
-    if orbit {
+    if splash {
+        hold(&mut u, "float", 5.0);
+        let k = u.powered(jeb).unwrap();
+        let up = k.r.normalized();
+        let east = DVec3::new(0.0, 0.0, 1.0).cross(up).normalized();
+        u.set_controls(jeb, 1.0, flight::Attitude::Fixed(east));
+        hold(&mut u, "swim", 6.0);
+        u.set_controls(jeb, 0.0, flight::Attitude::Free);
+        hold(&mut u, "settle", 3.0);
+    } else if drop_m.is_some() {
+        hold(&mut u, "fall", 8.0);
+    } else if orbit {
         u.action_group(jeb, ose_sim::ActionGroup::Rcs, Some(true));
         hold(&mut u, "pack-on", 1.0);
         u.set_translate(jeb, DVec3::new(0.0, 1.0, 0.0));
@@ -171,4 +246,16 @@ fn eva_compare_pad() {
 #[ignore]
 fn eva_compare_mun() {
     run_on(false, "Mun");
+}
+
+#[test]
+#[ignore]
+fn eva_compare_flight() {
+    run_mode(false, "Kerbin", Some(2500.0));
+}
+
+#[test]
+#[ignore]
+fn eva_compare_splash() {
+    run_full(false, "Kerbin", None, true);
 }

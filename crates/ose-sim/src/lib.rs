@@ -3721,7 +3721,8 @@ mod tests {
         }
         let p = u.powered(jeb).unwrap().clone();
         let slow = surface_speed(&p).length();
-        assert!((0.6..1.0).contains(&slow), "swims at {slow} m/s");
+        // KSP2 pilot run `evasplash`: 4.0 m/s, the stroke over the Kerbal's mass at the water's flat 2/s
+        assert!((3.8..4.3).contains(&slow), "swims at {slow} m/s");
         let up = p.r.normalized();
         let moved = p.r - start;
         let east = DVec3::new(0.0, 0.0, 1.0).cross(up).normalized();
@@ -3738,6 +3739,18 @@ mod tests {
         let p = u.powered(jeb).unwrap().clone();
         let fast = surface_speed(&p).length();
         assert!(fast > slow * 1.1, "faster stroke {fast} vs {slow} m/s");
+        // let go of W: it drifts to a stop at the same 2/s (KSP2: 4.0 -> 1.1 m/s in 0.66 s)
+        assert!(u.set_eva(jeb, false, false));
+        u.set_controls(jeb, 0.0, flight::Attitude::Free);
+        let before = surface_speed(u.powered(jeb).unwrap()).length();
+        for _ in 0..(TICKS_PER_SECOND / 2) {
+            u.step();
+        }
+        let after = surface_speed(u.powered(jeb).unwrap()).length();
+        assert!(
+            (0.3..0.42).contains(&(after / before)),
+            "slowed {before} -> {after} m/s in 0.5 s"
+        );
         // no jumping out of the water, and no flag planted in it
         assert!(u.set_eva(jeb, false, true));
         u.step();

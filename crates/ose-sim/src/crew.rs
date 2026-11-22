@@ -87,14 +87,15 @@ pub struct Boarding {
 }
 
 /// How fast a Kerbal climbs a ladder (`ClimbMoveSpeed`), m/s; how near one they must be to grab it, m (our
-/// own figure); how far off its axis they hang, m; how long climbing in takes, s (our own figure).
+/// own figure); how far off its axis they hang, m; how long climbing in takes, s: one tick, as KSP2's airlock
+/// (`EVAUtils.TryStopEVA`) seats the Kerbal and removes it on the next physics tick (pilot run `evaboard`).
 pub const CLIMB_SPEED_MPS: f64 = 0.8;
 pub const GRAB_RANGE_M: f64 = 1.5;
 pub const LADDER_STANDOFF_M: f64 = 0.4;
 /// How far up a crewed part's ladder a Kerbal steps out of its hatch (share of the ladder): KSP2 trace run 14
 /// hangs the Kerbal 0.43 m above the Mk1 pod's origin, three quarters of the way up its hull.
 pub const HATCH_ALONG: f64 = 0.75;
-pub const BOARDING_S: f64 = 1.0;
+pub const BOARDING_S: f64 = 1.0 / crate::TICKS_PER_SECOND as f64;
 
 /// A resource transfer running on a vessel (the Resource Manager): the tanks it was started with, and how
 /// many units each still has to give (positive) or take (negative).
@@ -531,7 +532,9 @@ impl Universe {
                 start_mass_t: KERBAL_MASS_T + JETPACK_PROPELLANT_T,
                 ..Default::default()
             }],
-            drag_area_m2: 0.6,
+            // fitted to KSP2 pilot run `evaflight` (2026-11-22): a Kerbal let go of the pod 2.2 km up falls at
+            // 66.8 m/s 5.5 s later and levels off at 72.4 m/s by 1.35 km (0.6 m^2 fell at 90 m/s)
+            drag_area_m2: 1.0,
             drag_cd: flight::DEFAULT_CD,
         };
         let kerbal = if landed {
@@ -1347,6 +1350,38 @@ mod tests {
     }
 
     #[test]
+    fn a_kerbal_falling_through_the_air_levels_off_at_ksp2s_speed() {
+        // KSP2 pilot run `evaflight`: let go of the pod's ladder 2.2 km up, the Kerbal levels off at about
+        // 72 m/s by 1.35 km while the craft goes on faster
+        let (mut u, pod) = k1_on_pad();
+        let body = u.body_entity("Kerbin").unwrap();
+        let b = u.world.get::<bodies::Body>(body).unwrap().clone();
+        let omega = DVec3::new(0.0, 0.0, std::f64::consts::TAU / b.rotation_period_s);
+        let mut p = u.powered(pod).unwrap().clone();
+        p.r = p.r.normalized() * (b.radius_m + 2300.0);
+        p.v = omega.cross(p.r);
+        p.landed = false;
+        p.attitude = flight::Attitude::Free;
+        u.set_powered(pod, p);
+        let jeb = u.go_eva(pod, None).unwrap();
+        assert!(u.set_eva(jeb, false, true));
+        let down = |u: &Universe, e: Entity| {
+            let p = u.powered(e).unwrap();
+            -(p.v - omega.cross(p.r)).dot(p.r.normalized())
+        };
+        for _ in 0..(14 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        let k = down(&u, jeb);
+        assert!((70.0..75.0).contains(&k), "falls at {k:.1} m/s");
+        let c = down(&u, pod);
+        assert!(
+            c > k + 10.0,
+            "the craft falls away below it: {c:.1} vs {k:.1} m/s"
+        );
+    }
+
+    #[test]
     fn space_releases_authored_hatch_and_can_board_again() {
         let (mut u, pod, jeb) = orbital_eva_fixture();
         assert!(u.set_eva(jeb, false, true));
@@ -1703,9 +1738,8 @@ mod tests {
         u.board(jeb, v).unwrap();
         assert_eq!(u.crew(v).len(), 1);
         assert_eq!(u.boarding(jeb), Some(v));
-        for _ in 0..(2 * crate::TICKS_PER_SECOND) {
-            u.step();
-        }
+        // gone on the next tick (KSP2 pilot run `evaboard`: aboard 0.02 s after the airlock call)
+        u.step();
         assert!(u.vessel(jeb).is_none());
     }
 
