@@ -144,6 +144,33 @@ pub fn map_tooltip(c: &ColonyInfo, mine: bool) -> String {
     )
 }
 
+/// Whether a point on a body's surface (body centre at the origin) faces a camera at `cam` rather than lying
+/// beyond the horizon, with some leeway for hills.
+pub fn site_on_screen(at: [f64; 3], cam: [f64; 3]) -> Option<()> {
+    let r = (at[0] * at[0] + at[1] * at[1] + at[2] * at[2]).sqrt();
+    // how far the camera stands above the site's horizon plane
+    let above = (0..3).map(|i| (cam[i] - at[i]) * at[i]).sum::<f64>() / r.max(1e-9);
+    (above > -0.002 * r).then_some(())
+}
+
+/// A colony's marker over the flight view at (x, y) CSS px, `d` m from the vessel: its icon, name and
+/// distance.
+pub fn flight_marker(c: &ColonyInfo, mine: bool, x: f64, y: f64, d: f64) -> String {
+    let far = if d >= 10_000.0 {
+        format!("{:.0} km", d / 1000.0)
+    } else if d >= 1000.0 {
+        format!("{:.1} km", d / 1000.0)
+    } else {
+        format!("{d:.0} m")
+    };
+    format!(
+        "<div class=\"fh-colony{}\" data-ose-colony=\"{}\" style=\"left:{x:.0}px;top:{y:.0}px\"><i></i><b>{}</b><span>{far}</span></div>",
+        if mine { " mine" } else { "" },
+        c.id,
+        esc(&c.name)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,6 +199,25 @@ mod tests {
     }
 
     #[test]
+    fn a_site_shows_from_above_and_not_from_beyond_the_horizon() {
+        let r = 200_000.0;
+        let on = |lat: f64, lon: f64, h: f64| {
+            let (lat, lon) = (lat.to_radians(), lon.to_radians());
+            [
+                lat.cos() * lon.cos() * (r + h),
+                lat.cos() * lon.sin() * (r + h),
+                lat.sin() * (r + h),
+            ]
+        };
+        let site = on(5.0, 60.0, 0.0);
+        // straight over it, and from a lander 1.7 km off, 2 km up
+        assert!(site_on_screen(site, on(5.0, 60.0, 20_000.0)).is_some());
+        assert!(site_on_screen(site, on(5.0, 60.5, 2_000.0)).is_some());
+        // from the far side of the body
+        assert!(site_on_screen(site, on(-5.0, 240.0, 50_000.0)).is_none());
+    }
+
+    #[test]
     fn the_card_lists_metal_first_and_only_the_founder_may_abandon() {
         let c = colony();
         let html = render_info(&c, Some(7));
@@ -196,6 +242,13 @@ mod tests {
             list.contains("selected") && list.contains("2 vessels") && list.contains("1 Kerbals")
         );
         assert!(render_list(&[], None).contains("No colonies yet"));
+        let m = flight_marker(&colony(), true, 10.4, 20.6, 2_345.0);
+        assert!(
+            m.contains("left:10px;top:21px") && m.contains("2.3 km"),
+            "{m}"
+        );
+        assert!(m.contains("Armstrong &lt;base&gt;") && m.contains("fh-colony mine"));
+        assert!(flight_marker(&colony(), false, 0.0, 0.0, 40.0).contains(">40 m<"));
         let tip = map_tooltip(&colony(), false);
         assert_eq!(
             tip,

@@ -561,6 +561,9 @@ pub fn model_point(lat_deg: f64, lon_deg: f64, radius: f64) -> DVec3 {
     radius * DVec3::new(lat.cos() * az.cos(), lat.sin(), -lat.cos() * az.sin())
 }
 
+/// How far over the ground a colony's marker stands (m).
+const SITE_MARKER_ABOVE_M: f64 = 10.0;
+
 /// Model-frame point of a body-centred inertial (server, Z-up) position at `ut`.
 pub fn to_model(r: DVec3, spin: Spin, ut: f64) -> DVec3 {
     let m = r.length().max(1e-9);
@@ -738,6 +741,9 @@ pub struct FlightView {
     pub nose_screen: Option<((f64, f64), (f64, f64))>,
     pub guidance_screen: Option<(f64, f64)>,
     pub port_screen: Option<(f64, f64)>,
+    /// Each of `FlightInput::sites` on screen (x, y, device px) with its distance from the vessel (m), or
+    /// `None` behind the body or the camera.
+    pub site_screens: Vec<Option<(f64, f64, f64)>>,
     /// Terrain, ocean, sky and clouds of the body (planet.rs), created with the first frame.
     planet: Option<crate::planet::PlanetRenderer>,
     fx_nozzles: std::rc::Rc<std::cell::RefCell<HashMap<String, Vec<Nozzle>>>>,
@@ -806,6 +812,8 @@ pub struct FlightInput<'a> {
     pub star_radius: f64,
     /// Aero overlay forces from the readout (protocol 39): part, lift and drag, kN, body-inertial.
     pub aero: &'a [(u16, ose_math::DVec3, ose_math::DVec3)],
+    /// Colony sites on this body (latitude, longitude, degrees), for their markers in the view.
+    pub sites: &'a [(f64, f64)],
 }
 
 fn quat_from_basis(x: DVec3, y: DVec3, z: DVec3) -> DQuat {
@@ -869,6 +877,7 @@ impl FlightView {
             nose_screen: None,
             guidance_screen: None,
             port_screen: None,
+            site_screens: Vec::new(),
             planet: None,
             fx_nozzles: Default::default(),
             fx_requested: false,
@@ -1371,6 +1380,22 @@ impl FlightView {
         self.port_screen = inp
             .port_point
             .and_then(|p| gpu.project(to_model(p - inp.body_pos, spin, inp.ut) - cam));
+        self.site_screens = inp
+            .sites
+            .iter()
+            .map(|&(lat, lon)| {
+                let dir = model_point(lat, lon, 1.0);
+                let ground = self
+                    .planet
+                    .as_ref()
+                    .and_then(|p| p.ground_m(inp.body_id, dir))
+                    .unwrap_or(0.0);
+                let at = dir * (inp.body_radius + ground + SITE_MARKER_ABOVE_M);
+                crate::colonies_ui::site_on_screen(at.to_array(), cam.to_array())?;
+                let (x, y) = gpu.project(at - cam)?;
+                Some((x, y, (at - pos).length()))
+            })
+            .collect();
         self.pick_boxes.clear();
         self.pick_poses.clear();
 
