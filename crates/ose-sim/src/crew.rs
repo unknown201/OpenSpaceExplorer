@@ -932,6 +932,19 @@ impl Universe {
             if let Some(mut h) = self.world.get_mut::<OnLadder>(k) {
                 h.along_m = l.along_m;
             }
+            // The vessel's orbit is what snapshots report it by: set it from where the ladder holds the Kerbal,
+            // or it would carry the free fall the Kerbal's own step gave it (the Kerbal fell away from a landed
+            // craft's ladder into the ground on screen while it held on).
+            let body = self.world.get::<bodies::ReferenceBody>(k).map(|b| b.0);
+            if let Some(mu) = body
+                .and_then(|b| self.world.get::<bodies::Body>(b))
+                .map(|b| b.mu)
+            {
+                let orbit = Orbit::from_state_vectors(mu, r + offset, velocity, ut);
+                if let Some(mut rails) = self.world.get_mut::<bodies::OnRails>(k) {
+                    rails.0 = orbit;
+                }
+            }
         }
     }
 
@@ -1259,6 +1272,32 @@ mod tests {
         assert_eq!(u.powered(jeb).unwrap().v, velocity, "no release impulse");
         assert_eq!(u.grab_ladder(jeb), Ok(true));
         assert!(u.crew(pod).is_empty(), "grabbing does not board");
+    }
+
+    #[test]
+    fn a_kerbal_on_a_landed_crafts_ladder_is_reported_where_it_holds_on() {
+        // Snapshots place a vessel by its orbit (`seen_state`). The ladder moved the Kerbal but left the orbit
+        // from its own step, a free fall: on screen it dropped away from the pod into the ground at g while
+        // the simulation had it holding on.
+        let (mut u, v) = k1_on_pad();
+        let jeb = u.go_eva(v, None).unwrap();
+        for _ in 0..(2 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        assert!(u.on_ladder(jeb).is_some());
+        let (_, _, orbit) = u.vessel(jeb).unwrap();
+        let (r, vel) = u.seen_state(jeb, &orbit);
+        let p = u.powered(jeb).unwrap();
+        assert!(
+            (r - p.r).length() < 0.01,
+            "reported {:.2} m off",
+            (r - p.r).length()
+        );
+        assert!(
+            (vel - p.v).length() < 0.01,
+            "reported {:.2} m/s off",
+            (vel - p.v).length()
+        );
     }
 
     #[test]
