@@ -566,12 +566,24 @@ impl Universe {
                 continue;
             };
             let at = bodies::star_space_state(&self.world, body, ut).0 + r;
+            // a drill on the ground keeps drilling through time warp
+            let harvesting = st.harvests();
+            let ground = match (self.dormant(e), self.world.get::<bodies::Body>(body)) {
+                (Some(d), Some(b)) if harvesting && d.landed => {
+                    let (lat, lon) = flight::lat_lon(b, d.r, ut);
+                    ose_data::abundance::ore(&b.id, lat, lon)
+                }
+                _ => 0.0,
+            };
             if let Some(mut d) = self.world.get_mut::<flight::Dormant>(e) {
                 // Rails retain an inertial craft pose, but the star direction changes along the orbit.
                 // Reusing the final physics tick's direction freezes tracking and incidence during warp.
                 st.sun_local =
                     (at.length() > 0.0).then(|| st.to_craft_axis(d.0.facing, -at.normalized()));
-                st.electric(&mut d.0, sun, 0.0, dt);
+                if harvesting {
+                    st.ground_abundance = ground;
+                }
+                st.electric_over(&mut d.0, sun, dt);
             }
             self.world.entity_mut(e).insert(st);
         }
@@ -2164,6 +2176,23 @@ impl Universe {
                 if p.own_top.length_squared() > 0.0 {
                     p.own_top = turn(p.own_top);
                 }
+                // its panels, fuel cells and drills keep working, as on rails
+                if let Some(mut st) = self.world.entity_mut(e).take::<structure::Structure>() {
+                    let at = bodies::star_space_state(&self.world, body_e, ut).0 + p.r;
+                    st.sun_local =
+                        (at.length() > 0.0).then(|| st.to_craft_axis(p.facing, -at.normalized()));
+                    if st.harvests() {
+                        st.ground_abundance = if p.landed && !p.crashed {
+                            let (lat, lon) = flight::lat_lon(&body, p.r, ut);
+                            ose_data::abundance::ore(&body.id, lat, lon)
+                        } else {
+                            0.0
+                        };
+                    }
+                    let sun = self.sunlight(body_e, p.r, ut);
+                    st.electric_over(&mut p, sun, ticks.max(1) as f64 * dt);
+                    self.world.entity_mut(e).insert(st);
+                }
                 let orbit = Orbit::from_state_vectors(body.mu, p.r, p.v, ut);
                 self.world
                     .entity_mut(e)
@@ -2390,6 +2419,14 @@ impl Universe {
                     if comm_blocked {
                         p.controlled = false;
                         p.throttle = 0.0;
+                    }
+                    if st.harvests() {
+                        st.ground_abundance = if was_landed {
+                            let (lat, lon) = flight::lat_lon(&body, p.r, step_ut);
+                            ose_data::abundance::ore(&body.id, lat, lon)
+                        } else {
+                            0.0
+                        };
                     }
                     let mut propulsion = st.powered_services(&mut p, sun, env, step_dt);
                     propulsion.water_reference = water_reference;
