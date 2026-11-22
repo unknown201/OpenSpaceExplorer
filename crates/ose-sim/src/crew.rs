@@ -932,6 +932,19 @@ impl Universe {
             if let Some(mut h) = self.world.get_mut::<OnLadder>(k) {
                 h.along_m = l.along_m;
             }
+            // The vessel's orbit is what snapshots report it by: set it from where the ladder holds the Kerbal,
+            // or it would carry the free fall the Kerbal's own step gave it (the Kerbal fell away from a landed
+            // craft's ladder into the ground on screen while it held on).
+            let body = self.world.get::<bodies::ReferenceBody>(k).map(|b| b.0);
+            if let Some(mu) = body
+                .and_then(|b| self.world.get::<bodies::Body>(b))
+                .map(|b| b.mu)
+            {
+                let orbit = Orbit::from_state_vectors(mu, r + offset, velocity, ut);
+                if let Some(mut rails) = self.world.get_mut::<bodies::OnRails>(k) {
+                    rails.0 = orbit;
+                }
+            }
         }
     }
 
@@ -1259,6 +1272,77 @@ mod tests {
         assert_eq!(u.powered(jeb).unwrap().v, velocity, "no release impulse");
         assert_eq!(u.grab_ladder(jeb), Ok(true));
         assert!(u.crew(pod).is_empty(), "grabbing does not board");
+    }
+
+    #[test]
+    fn a_kerbal_on_a_landed_crafts_ladder_is_reported_where_it_holds_on() {
+        // Snapshots place a vessel by its orbit (`seen_state`). The ladder moved the Kerbal but left the orbit
+        // from its own step, a free fall: on screen it dropped away from the pod into the ground at g while
+        // the simulation had it holding on.
+        let (mut u, v) = k1_on_pad();
+        let jeb = u.go_eva(v, None).unwrap();
+        for _ in 0..(2 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        assert!(u.on_ladder(jeb).is_some());
+        let (_, _, orbit) = u.vessel(jeb).unwrap();
+        let (r, vel) = u.seen_state(jeb, &orbit);
+        let p = u.powered(jeb).unwrap();
+        assert!(
+            (r - p.r).length() < 0.01,
+            "reported {:.2} m off",
+            (r - p.r).length()
+        );
+        assert!(
+            (vel - p.v).length() < 0.01,
+            "reported {:.2} m/s off",
+            (vel - p.v).length()
+        );
+    }
+
+    #[test]
+    fn letting_go_in_orbit_floats_beside_the_pod_as_in_ksp2() {
+        // KSP2 pilot run `evaorbit` (2026-11-22, reference/ksp2-eva-orbit): a Kerbal letting go of the Mk1 pod's
+        // ladder in a 100 km orbit eases about 0.2 m off the hatch and floats there, never on the ground, at
+        // under 0.01 m/s from the pod. Here it used to land on the pod's top as if it had weight, Landed at
+        // 100 km, and was torn away at orbital speed once the craft went back on rails.
+        let (mut u, pod) = k1_on_pad();
+        let body = u.body_entity("Kerbin").unwrap();
+        let mu = u.world.get::<bodies::Body>(body).unwrap().mu;
+        let mut p = u.powered(pod).unwrap().clone();
+        p.r = DVec3::new(700_000.0, 0.0, 0.0);
+        p.v = DVec3::new(0.0, (mu / 700_000.0).sqrt(), 0.0);
+        p.landed = false;
+        p.attitude = flight::Attitude::Free;
+        p.facing = DVec3::new(1.0, 0.0, 0.0);
+        p.angvel = DVec3::ZERO;
+        p.roll_rate = 0.0;
+        u.set_powered(pod, p);
+        let jeb = u.go_eva(pod, None).unwrap();
+        assert!(u.set_eva(jeb, false, true));
+        assert!(u.on_ladder(jeb).is_none());
+        u.set_eva(jeb, false, false);
+        for _ in 0..(15 * crate::TICKS_PER_SECOND) {
+            u.step();
+            // both may go back on rails once they have coasted 10 s
+            if let Some(k) = u.powered(jeb) {
+                assert!(
+                    !k.landed && k.deck.is_none(),
+                    "floats, not standing on the pod"
+                );
+            }
+        }
+        let state = |u: &Universe, e: Entity| match u.powered(e) {
+            Some(p) => (p.r, p.v),
+            None => u.vessel(e).unwrap().2.state_at(u.ut()),
+        };
+        let ((r, v), (kr, kv)) = (state(&u, pod), state(&u, jeb));
+        assert!(
+            (kv - v).length() < 0.05,
+            "drifts at {:.3} m/s",
+            (kv - v).length()
+        );
+        assert!((kr - r).length() < 15.0, "still beside the pod");
     }
 
     #[test]

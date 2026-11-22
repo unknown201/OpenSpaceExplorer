@@ -763,6 +763,7 @@ impl Universe {
     /// within a step up of where it is and the fall it can make this step. It lands on that, stands on it and
     /// rides along (KSP2 `KerbalBehavior.SetContactObjectRelativeVelocity`), and falls once it walks off.
     pub(crate) fn kerbals_find_decks(&mut self, dt: f64) {
+        let ut = self.ut();
         let walkers: Vec<(Entity, Entity)> = {
             let mut q = self.world.query::<(
                 Entity,
@@ -821,6 +822,21 @@ impl Universe {
                         .map(|(_, o, r)| o.length() + r)
                         .fold(0.0, f64::max);
                     if (pk.r - pc.r).length() > reach + 2.0 {
+                        continue;
+                    }
+                    // As with craft (`crafts_find_decks`), only a craft on or near the ground has a top to stand
+                    // on: in orbit there is no weight to hold a Kerbal to a hull. KSP2 (pilot run `evaorbit`,
+                    // 2026-11-22): a Kerbal letting go of the Mk1 pod's ladder in a 100 km orbit floats beside
+                    // it, never on the ground, at under 0.01 m/s from the pod.
+                    let near_ground = pc.landed
+                        || pc.splashed
+                        || self.world.get::<bodies::Body>(body).is_some_and(|b| {
+                            let terrain =
+                                self.world.get::<flight::Terrain>(body).map(|t| t.0.clone());
+                            pc.r.length() - flight::ground_radius(b, terrain.as_deref(), pc.r, ut)
+                                < DECK_NEAR_GROUND_M
+                        });
+                    if !near_ground {
                         continue;
                     }
                     let Some(z) = deck_on(&hulls(st, pc.facing), pk, pc.r, hi, lo) else {

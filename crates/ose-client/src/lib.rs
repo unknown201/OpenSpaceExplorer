@@ -106,6 +106,8 @@ use ose_net::{
     PROTOCOL_VERSION, WS_PATH,
 };
 
+/// The hint shown while a Kerbal holds a ladder; taken down when it lets go or boards.
+const LADDER_HINT: &str = "On the ladder: W/S climb, Space or F lets go";
 const BODY_LABEL_CLASS: &str = "body";
 
 /// The menu's screens (`screen-<name>` in index.html).
@@ -11600,6 +11602,7 @@ impl App {
                     return;
                 };
                 self.board_target.set(Some(target));
+                hud::dismiss(&self.doc, LADDER_HINT);
                 ClientMessage::Board { vessel, target }
             }
             "fh-flag" => {
@@ -12446,11 +12449,9 @@ impl App {
         if on_ladder != self.eva_on_ladder {
             self.eva_on_ladder = on_ladder;
             if on_ladder {
-                hud::push(
-                    &self.doc,
-                    "On the ladder: W/S climb, Space or F lets go",
-                    "passive",
-                );
+                hud::push(&self.doc, LADDER_HINT, "passive");
+            } else {
+                hud::dismiss(&self.doc, LADDER_HINT);
             }
         }
         // Run and jump: run held while Shift is down on the ground, a jump on each new Space press there.
