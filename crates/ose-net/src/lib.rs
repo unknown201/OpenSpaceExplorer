@@ -14,7 +14,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 76;
+pub const PROTOCOL_VERSION: u16 = 78;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -515,6 +515,22 @@ pub enum ClientMessage {
     },
     /// The campaign's colonies. Answers `Colonies`.
     ColoniesInfo,
+    /// Send home, let go or keep the run a route left docked at its depot (protocol 77). Answers `Routes`.
+    RouteStayed {
+        id: u64,
+        what: StayedRun,
+    },
+}
+
+/// What to do with the run a route left docked (`ClientMessage::RouteStayed`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StayedRun {
+    /// Undock it and fly it home.
+    SendHome,
+    /// Undock it and leave it drifting.
+    LetGo,
+    /// Keep it as part of the depot; the route no longer counts it.
+    Keep,
 }
 
 /// What a route's run does once it has delivered (`ClientMessage::SetRouteEnd`).
@@ -1492,7 +1508,11 @@ pub struct RouteInfo {
     pub owner: u64,
     /// The recording it was made from.
     pub recording: u64,
+    /// The depot its runs dock at (0 for a route to a colony).
     pub depot: u64,
+    /// Protocol 78: the colony its runs land at instead (`ColonyInfo::id`); its runs stay there.
+    #[serde(default)]
+    pub colony: Option<u64>,
     /// What it is doing or waiting for ("Next launch in 1200 s", "Waiting: no free port at Station").
     pub status: String,
     pub paused: Option<String>,
@@ -1504,6 +1524,9 @@ pub struct RouteInfo {
     /// Protocol 74: what its runs do once delivered, and the run left docked at the depot.
     pub when_delivered: RouteEnd,
     pub stayed: Option<u32>,
+    /// Protocol 77: the player flying the run by hand now (`TakeControl` of its vessel; `ReleaseControl`
+    /// hands it back to the route pilot, which carries on from where it is).
+    pub manual: Option<u64>,
     /// Finished runs, oldest first.
     pub runs: Vec<RouteRunInfo>,
 }
@@ -1522,6 +1545,8 @@ pub struct RouteRunInfo {
     pub delivered: Vec<(String, f64)>,
     /// Protocol 74: what it did after: "docked", "let go", "flying home", "recovered", or what went wrong.
     pub after: Option<String>,
+    /// Protocol 77: the players who took control of it on the way.
+    pub flown_by: Vec<u64>,
 }
 
 /// A vessel marked as a depot (`ServerMessage::Routes`).
@@ -1545,7 +1570,7 @@ pub struct RecordingInfo {
     pub vessel: Option<u64>,
     /// Pad, Ascent, Transfer, Approach, Docked, Return or Descent.
     pub phase: String,
-    /// Recording, RoundTrip, OneWay, or Dropped.
+    /// Recording, RoundTrip, OneWay, Landed (at a colony, protocol 78), or Dropped.
     pub state: String,
     /// Why it was dropped.
     pub dropped: Option<String>,

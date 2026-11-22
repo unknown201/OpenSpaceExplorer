@@ -2019,6 +2019,7 @@ name = "ose-routes"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "ose-colonies",
  "ose-data",
  "ose-math",
  "ose-pilot",

@@ -12,7 +12,7 @@ use ose_pilot::{
     Status,
 };
 use ose_routes::recording::{Event, Phase, Recording, State};
-use ose_routes::route::{Outcome, Pilots, WhenDelivered};
+use ose_routes::route::{Outcome, Pilots, StayedCommand, WhenDelivered};
 use ose_routes::Routes;
 
 #[path = "../../ose-pilot/tests/common/mod.rs"]
@@ -261,9 +261,31 @@ fn records_a_one_way_fuel_run_to_a_depot_and_runs_it_as_a_route() {
         "{:?}",
         pilots.leg(route)
     );
+    // a player takes control for a minute and hands it back: the pilot picks it up from there
+    let run = pilots.vessel(route).expect("run vessel");
+    pilots.set_manual([(run, 7)].into_iter().collect());
+    for _ in 0..(60 * 50) {
+        book.tick(&mut w.u);
+        book.fly(&mut w.u, &mut pilots, &catalog);
+        w.u.set_warp(1);
+        w.u.step();
+    }
+    assert_eq!(book.routes[0].active.as_ref().unwrap().manual, Some(7));
+    assert!(
+        book.routes[0].status.contains("by hand"),
+        "{}",
+        book.routes[0].status
+    );
+    assert_eq!(
+        pilots.suggested_warp(&w.u),
+        None,
+        "the player warps their own run"
+    );
+    pilots.set_manual(Default::default());
     drive(&mut w, &mut book, &mut pilots, &catalog, &|b| {
         !b.routes[0].runs.is_empty()
     });
+    assert_eq!(book.routes[0].runs[0].flown_by, vec![7]);
     let r0 = &book.routes[0];
     println!("{:?} {}", r0.runs, r0.status);
     assert_eq!(r0.runs[0].outcome, Outcome::Delivered, "{:?}", r0.runs);
@@ -339,6 +361,18 @@ fn records_a_one_way_fuel_run_to_a_depot_and_runs_it_as_a_route() {
     );
     assert_ne!(after(&book), "docked", "the first run made way");
     assert_eq!(book.routes[0].stayed, Some(2));
+
+    // cleaning up by hand: let the second run go
+    book.stayed_command(&w.u, &mut pilots, route, StayedCommand::LetGo)
+        .unwrap();
+    assert_eq!(book.routes[0].stayed, None);
+    book.pause_route(route, true).unwrap();
+    let after2 = |b: &Routes| b.routes[0].runs[1].after.clone().unwrap_or_default();
+    drive(&mut w, &mut book, &mut pilots, &catalog, &|b| {
+        after2(b) != "undocking"
+    });
+    assert_eq!(after2(&book), "let go", "{:?}", book.routes[0].runs);
+    assert_eq!(book.routes[0].runs[1].leaving, None);
 }
 
 /// What a server restart does to the routes: the book comes back from the save, every vessel is found
