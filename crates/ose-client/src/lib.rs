@@ -11093,9 +11093,9 @@ impl App {
         if let Some(el) = self.doc.get_element_by_id("tracking") {
             el.class_list().toggle_with_force("open", visible).ok();
         }
-        // the map's colony markers: the server tells everyone of a founding or an abandonment, and this
+        // the colony markers on the map and in flight: the server tells everyone of a founding or an abandonment, and this
         // catches a colony founded before the client joined
-        let map_shown = visible || (self.map_mode && self.flying.is_some());
+        let map_shown = visible || self.flying.is_some();
         if map_shown && !self.ts_colonies && now - self.colonies_asked_ms > COLONIES_MAP_REFRESH_MS
         {
             self.ask_colonies(now);
@@ -15980,7 +15980,15 @@ impl App {
             .get(&id)
             .and_then(|k| k.1.as_ref())
             .map(|c| c.parts.iter().map(|p| p.guid.clone()).collect());
+        // the colonies on this body, for their markers in the view
+        let site_colonies: Vec<&ose_net::ColonyInfo> =
+            self.colonies.iter().filter(|c| c.body == body.id).collect();
+        let sites: Vec<(f64, f64)> = site_colonies
+            .iter()
+            .map(|c| (c.lat_deg, c.lon_deg))
+            .collect();
         let inp = flight3d::FlightInput {
+            sites: &sites,
             vessel: v,
             attitude: scene.vessel_attitude(id, now_ms()),
             nearby_vessels: &nearby_vessels,
@@ -16042,6 +16050,31 @@ impl App {
         // The part whose window is open stays lit while the window is.
         self.flight3d.selected = self.flight_pam;
         let drawn = self.flight3d.frame(gpu, &inp);
+        // colony markers over the view: the KSC map icon, the name and how far
+        let markers: String = if self.map_mode {
+            String::new()
+        } else {
+            site_colonies
+                .iter()
+                .zip(&self.flight3d.site_screens)
+                .filter_map(|(c, at)| {
+                    let (x, y, d) = (*at)?;
+                    let mine = Some(c.owner) == self.player_id;
+                    Some(colonies_ui::flight_marker(
+                        c,
+                        mine,
+                        x / self.dpr,
+                        y / self.dpr,
+                        d,
+                    ))
+                })
+                .collect()
+        };
+        if let Some(el) = self.doc.get_element_by_id("fh-colonies") {
+            if el.inner_html() != markers {
+                el.set_inner_html(&markers);
+            }
+        }
         for cue in self.flight3d.audio_events.drain(..) {
             self.audio.play(&cue);
         }

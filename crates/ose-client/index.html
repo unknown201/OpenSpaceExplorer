@@ -248,6 +248,12 @@
     #rdv-alignment[hidden], .rdv-world[hidden] { display:none; }
     .rdv-cross { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); color:#b7c7de; font-size:calc(28 * var(--u)); }
     #rdv-dot { position:absolute; transform:translate(-50%,-50%); font-size:calc(24 * var(--u)); }
+    /* Colonies on the flown vessel's body, over the view: the KSC map icon, the name and how far. */
+    #fh-colonies { position:absolute; inset:0; pointer-events:none; }
+    .fh-colony { position:absolute; transform:translate(-6px,-6px); color:#ffd27a; text-shadow:0 1px 3px #000; white-space:nowrap; font-size:calc(12 * var(--u)); }
+    .fh-colony.mine { color:#9ef0c0; }
+    .fh-colony i { display:inline-block; width:12px; height:12px; margin-right:4px; vertical-align:-2px; background:currentColor; -webkit-mask:url(assets/ui/ICO-Map-KSC-16x16.png) center / contain no-repeat; mask:url(assets/ui/ICO-Map-KSC-16x16.png) center / contain no-repeat; }
+    .fh-colony b { font-weight:600; margin-right:6px; } .fh-colony span { opacity:0.8; }
     .rdv-world { position:absolute; transform:translate(-50%,-50%); pointer-events:none; color:#d0b1ff; text-align:center; text-shadow:0 1px 3px #000; }
     .rdv-world span { display:block; font-size:calc(36 * var(--u)); line-height:1; } .rdv-world b { display:block; font-size:calc(12 * var(--u)); font-weight:500; white-space:nowrap; background:#10141bd9; padding:calc(3 * var(--u)); }
     .rdv-world.rdv-port { color:#8fff9c; } .rdv-world.rdv-port span { font-size:calc(24 * var(--u)); }
@@ -1783,6 +1789,7 @@
       <div id="rdv-note" role="status" aria-live="polite"></div><div class="rdv-buttons"><button id="rdv-plan" data-ose="rendezvous-plan">Plan rendezvous</button><button id="rdv-hold" data-ose="rendezvous-hold" disabled title="SAS controls attitude only. You control throttle and RCS.">Hold direction</button><button id="rdv-warp" data-ose="rendezvous-warp" disabled>Warp to opportunity</button><button id="rdv-view" disabled>View path</button><button id="rdv-cancel">End guidance</button></div>
       <span class="rdv-manual">MANUAL FLIGHT · attitude holds never apply thrust</span></div>
     </details>
+    <div id="fh-colonies" aria-hidden="true"></div>
     <div id="rdv-world" class="rdv-world" hidden><span>⊕</span><b id="rdv-world-label">Port staging point</b></div>
     <div id="rdv-axis" class="rdv-world rdv-port" hidden><span>□</span><b>Selected docking port</b></div>
     <div class="fh-top"><div id="fh-recoverable" data-ose="flight-recoverable" title="Landed on Kerbin: Recover brings the crew, parts and science home">// <span data-loc="HUD/VesselStatus/Recoverable">RECOVERABLE</span> //</div><div id="fh-situation" class="fh-small">--</div><div id="fh-met" class="fh-small" data-ose="flight-met" title="Mission elapsed time" data-loc-title="HUD/Tooltips/MissionElapsedTime"></div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-pilot" class="fh-small" data-ose="flight-pilot" style="color:#9fd0ff"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div><div id="fh-thermal" data-ose="flight-thermal" data-level="off" title="Hottest part as a fraction of its maximum temperature"><span id="fh-thermal-text"></span><div class="fh-thermal-track"><div id="fh-thermal-fill"></div></div></div></div>
