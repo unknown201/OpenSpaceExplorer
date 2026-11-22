@@ -47,7 +47,11 @@ namespace OpenSpaceExplorer.Validation
             {
                 // the teleport height is over the terrain (the sea floor here): find the floor, then set it down
                 // 3 m above the water and let it settle afloat
+                double asl0 = G.ViewController.GetActiveSimVessel().AltitudeFromSeaLevel;
                 ToSurface(vessel, -0.0972, -73.5, 50);
+                // the teleport lands a few frames later: wait until the altitude has moved off the pad
+                float waited = 0;
+                while (waited < 10f && Math.Abs(G.ViewController.GetActiveSimVessel().AltitudeFromSeaLevel - asl0) < 1.0) { waited += Time.deltaTime; yield return null; }
                 yield return new WaitForSeconds(0.5f);
                 double asl = G.ViewController.GetActiveSimVessel().AltitudeFromSeaLevel;
                 mark("probe asl " + asl.ToString("R", Inv));
@@ -124,7 +128,7 @@ namespace OpenSpaceExplorer.Validation
                 {
                     yield return new WaitForFixedUpdate();
                     var a = G.ViewController.GetActiveSimVessel();
-                    if (a == null || !a.IsKerbalEVA) { mark("aboard after " + (now() - b).ToString("R", Inv) + " s, active " + a?.Name + " crew " + a?.SimulationObject?.Crew?.ToString()); break; }
+                    if (a == null || !a.IsKerbalEVA) { mark("aboard after " + (now() - b).ToString("R", Inv) + " s, active " + a?.Name + " crew in pod " + G.SessionManager.KerbalRosterManager.GetAllKerbalsInSimObject(pod.GetComponent<PartBehavior>().Model.GlobalId).Count); break; }
                     row();
                 }
                 w.Dispose();
