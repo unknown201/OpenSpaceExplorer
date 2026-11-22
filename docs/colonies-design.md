@@ -1,6 +1,7 @@
 # Colonies: design and plan
 
-Status: **step 1, the colony panel and routes to colonies built** (2026-11-21, protocols 75 and 78), with Josh's
+Status: **step 1, the colony panel, routes to colonies, CommNet and population built** (2026-11-21/22, protocols
+75, 78 and 79), with Josh's
 answers to the first questions (section 5).
 Later steps follow the agreed order in section 4.
 
@@ -78,11 +79,16 @@ Code: `crates/ose-colonies` (rules, tested on the Mun in `tests/found_and_launch
    units and tonnes), and its founder can abandon it there. Still to come: a colony icon on the map and in
    the flight view.
 2. ~~**Delivery routes to colonies**~~ (built, protocol 78): see section 6.
-3. **Colony CommNet**: a colony with an antenna is a ground station (KSP2's `IsCommNetSource`).
+3. ~~**Colony CommNet**~~ (built, protocol 79): every vessel standing in a colony with an antenna is a CommNet
+   source of its own (KSP2's `IsCommNetSource`, `ose_sim::commnet::CommSources`): connected without a link
+   home, and the other vessels link through it at its antenna's range, by the same rules as through the KSC.
+   The server refreshes the list once a second (`colonies::after_step`); the graph is rebuilt every 3 s as
+   before. So a relay antenna landed in a Mun colony covers the Mun's far side, and probes there can be
+   flown with **CommNet required** on.
 4. ~~Building costs parts too~~: done in step 1 (Metal).
 5. **In-situ resources**: an abundance map per body (KSP2's `AbundanceRequest`), drills and converters
    (Methane, Uranium). KSP2 ships no drill parts, so this needs our own parts.
-6. ~~**Population**~~ (built): KSP2's vacancy fill, with the colony's empty seats as its room. A colony with
+6. ~~**Population**~~ (built, protocol 79): KSP2's vacancy fill, with the colony's empty seats as its room. A colony with
    someone living there and an empty seat takes in a newcomer every two Kerbin days (`VACANCY_DELAY_S`, from
    its founding or the last arrival): the next Kerbal the campaign has not hired is hired and sits in the
    first empty seat (`Colonies::settle`, run by the server once a second). Without room or residents the wait
