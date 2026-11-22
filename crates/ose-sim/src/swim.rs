@@ -198,6 +198,14 @@ pub fn step(
         sea.density,
         dt,
     );
+    // A Kerbal in the water is damped flat (`DragSlow`, 2/s) whichever way it moves: KSP2 pilot run
+    // `evasplash` (2026-11-22, reference/ksp2-eva-splash) swims forward at 4.0 m/s, the 0.8 kN stroke over
+    // 0.095 t at 2/s, while still rising at 4.8 m/s, and stops with a 2/s decay. The part branch (quadratic
+    // cube drag once it moves mostly sideways) held it to 0.9 m/s.
+    let damping = water::Damping {
+        linear: ws.drag_slow,
+        ..damping
+    };
     // forces, then the water's damping (PhysX: v' = (v + F dt / m)(1 - c dt)), in the turning ground's frame
     let push_acc = (up * lift_kn + push_kn) * (1.0 / mass);
     v_s = (v_s + (push_acc - up * g) * dt) * (1.0 - damping.linear * dt).max(0.0);
