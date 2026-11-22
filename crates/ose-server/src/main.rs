@@ -1574,6 +1574,16 @@ fn flight_readout(
                     .collect()
             })
             .unwrap_or_default(),
+        engine_thrust: u
+            .structure(e)
+            .zip(u.powered(e))
+            .map(|(st, p)| {
+                st.ignited_engine_thrust(p)
+                    .into_iter()
+                    .map(|(i, kn)| (i as u16, kn as f32))
+                    .collect()
+            })
+            .unwrap_or_default(),
         flameouts: u
             .structure(e)
             .map(|st| {
