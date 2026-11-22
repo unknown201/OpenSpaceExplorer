@@ -9238,7 +9238,7 @@ impl App {
                 }
             ));
         }
-        // Protocols 76 and 79: Data_Engine's status line, mode switch and Auto Switch for a multi-mode engine.
+        // Protocols 76 and 80: Data_Engine's status line, mode switch and Auto Switch for a multi-mode engine.
         if let Some(s) = spec.filter(|s| s.has_engine) {
             let part = i as u16;
             let status = vab::engine_status(
