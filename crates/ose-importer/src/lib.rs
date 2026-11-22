@@ -659,6 +659,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                                 inputs: list("InputResources"),
                                 outputs: list("OutputResources"),
                                 conversion_rate: f(&o["conversionRate"], "storedValue"),
+                                harvests: false,
                             });
                         }
                     }

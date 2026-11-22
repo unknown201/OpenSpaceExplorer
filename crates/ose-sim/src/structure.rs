@@ -305,6 +305,9 @@ pub struct Structure {
     pub converter_defs: Vec<Option<ose_data::Converter>>,
     pub converter_on: Vec<bool>,
     pub converter_running: Vec<f64>,
+    /// Ore in the ground where the vessel stands (0..1), for drills; 0 off the ground. Set by the universe
+    /// each step for vessels that carry a drill (`harvests`).
+    pub ground_abundance: f64,
     /// Each part's decoupler push (`ejectionForce`, 0 for other parts).
     pub ejection_force: Vec<f64>,
     /// Fairings: for each fairing base, the parts it covers (everything stacked on its top node) and
@@ -577,6 +580,11 @@ pub(crate) fn basis(facing: DVec3) -> (DVec3, DVec3, DVec3) {
     let z = x.cross(y);
     (x, y, z)
 }
+
+/// The longest piece of a time-warp step the electric services take at once while a converter runs (s).
+pub const WARP_SERVICE_STEP_S: f64 = 1.0;
+/// The most pieces a time-warp step is cut into.
+pub const WARP_SERVICE_PIECES: usize = 100;
 
 impl Structure {
     /// A position offset in the vessel frame (as the rigid body keeps them) in the inertial frame.
@@ -1402,6 +1410,7 @@ impl Structure {
                 .map(|i| def_of(i).map(|d| d.ejection_force).unwrap_or(0.0))
                 .collect(),
             converter_running: vec![0.0; n],
+            ground_abundance: 0.0,
             gear_defs: (0..n)
                 .map(|i| def_of(i).and_then(|d| d.landing_gear.clone()))
                 .collect(),
@@ -2946,6 +2955,13 @@ impl Structure {
         };
     }
 
+    /// Whether it carries a drill (a converter that `harvests`).
+    pub fn harvests(&self) -> bool {
+        (0..self.rigid.len()).any(|i| {
+            self.rigid.present[i] && self.converter_defs[i].as_ref().is_some_and(|c| c.harvests)
+        })
+    }
+
     /// Switch the resource converters (fuel cells, reactors) on or off; returns how many changed.
     pub fn set_converters(&mut self, on: bool) -> usize {
         let mut changed = 0;
@@ -3274,13 +3290,22 @@ impl Structure {
             if !self.converter_on[i] || !self.rigid.present[i] {
                 continue;
             }
+            // a drill makes in proportion to the ore in the ground, and nothing off it
+            let yield_share = if c.harvests {
+                self.ground_abundance
+            } else {
+                1.0
+            };
+            if yield_share <= 1e-6 {
+                continue;
+            }
             let mut instructions = Vec::new();
             let mut known = true;
             for (res, rate, sign) in c
                 .inputs
                 .iter()
                 .map(|(r, u)| (r, u, 1.0))
-                .chain(c.outputs.iter().map(|(r, u)| (r, u, -1.0)))
+                .chain(c.outputs.iter().map(|(r, u)| (r, u, -yield_share)))
             {
                 match self.net.resource(res) {
                     Some(id) => instructions.push(Instruction {
@@ -3461,6 +3486,23 @@ impl Structure {
             .map(|e| e.wheel_torque_vec_knm * wheel_input.clamp(0.0, 1.0))
             .collect();
         self.consume_wheel_charge(p, &torques, dt);
+    }
+
+    /// Electric services over a long time-warp step, for a vessel on rails or at rest. With a converter
+    /// running (a drill, a fuel cell) the step is cut into pieces of up to [`WARP_SERVICE_STEP_S`] (at most
+    /// [`WARP_SERVICE_PIECES`] of them), so what the panels or a reactor make in one piece is there for the
+    /// converters in the next and a small battery does not throttle them.
+    pub fn electric_over(&mut self, p: &mut Powered, sun: f64, dt: f64) {
+        let converting =
+            (0..self.converter_on.len()).any(|i| self.converter_on[i] && self.rigid.present[i]);
+        let pieces = if converting {
+            ((dt / WARP_SERVICE_STEP_S).ceil() as usize).clamp(1, WARP_SERVICE_PIECES)
+        } else {
+            1
+        };
+        for _ in 0..pieces {
+            self.electric(p, sun, 0.0, dt / pieces as f64);
+        }
     }
 
     /// Consume charge once at the actual wheel mounts, before applying their torque.
@@ -10480,6 +10522,7 @@ mod tests {
             inputs: vec![("SolidFuel".into(), 0.5 / s.net.unit_mass_t[solid])],
             outputs: vec![("ElectricCharge".into(), 1.0)],
             conversion_rate: 1.0,
+            harvests: false,
         });
         s.converter_on[engine] = true;
         s.crew.fill(0);

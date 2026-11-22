@@ -86,6 +86,19 @@ pub fn render_info(c: &ColonyInfo, me: Option<u64>) -> String {
         }
         (n, Some(t)) => format!("next in {:.1} h ({n} empty seats)", t / 3600.0),
     };
+    // the same field the server's drills dig from, so the card can say what a drill here would make
+    let share = ose_data::abundance::ore(&c.body, c.lat_deg, c.lon_deg);
+    let ore = if share <= 0.0 {
+        "none here".to_string()
+    } else {
+        let rate = ose_data::colony::MINING
+            .iter()
+            .find(|m| m.id == ose_data::colony::DRILL)
+            .and_then(|m| (m.converter)().outputs.first().map(|o| o.1))
+            .unwrap_or(0.0)
+            * share;
+        format!("{:.0}% (a drill digs {rate:.2} Ore/s)", share * 100.0)
+    };
     let abandon = if me == Some(c.owner) {
         format!(
             "<button data-ose=\"colony-abandon\" data-ose-colony-abandon=\"{}\">Abandon colony</button>",
@@ -99,6 +112,7 @@ pub fn render_info(c: &ColonyInfo, me: Option<u64>) -> String {
          <dt>Body</dt><dd>{body}</dd><dt>Site</dt><dd>{lat:.3}\u{b0}, {lon:.3}\u{b0}</dd>\
          <dt>Vessels</dt><dd>{n}</dd><dt>Residents</dt><dd>{residents}</dd>\
          <dt>Newcomers</dt><dd>{arrivals} moved in; {newcomers}</dd>\
+         <dt>Ore in the ground</dt><dd>{ore}</dd>\
          <dt>Launches</dt><dd>{launches}</dd>{stock}</dl>\
          <div class=\"ts-hint\">Its launch pad is in the VAB's launch sites. A craft launched there takes its \
          fuel and its dry mass in Metal from this stock.</div>\
@@ -150,6 +164,16 @@ mod tests {
         assert!(html.contains("7500 / 10.0k (7.5 t)"), "{html}");
         assert!(html.contains("next in 2.0 days (1 empty seats)"), "{html}");
         assert!(html.contains("data-ose-colony-abandon=\"3\""));
+        let share = ose_data::abundance::ore("Mun", 1.0, 20.0);
+        assert!(
+            html.contains(&format!("{:.0}% (a drill", share * 100.0)) || share == 0.0,
+            "{html}"
+        );
+        let jool = ColonyInfo {
+            body: "Jool".into(),
+            ..c.clone()
+        };
+        assert!(render_info(&jool, None).contains("Ore in the ground</dt><dd>none here"));
         assert!(!render_info(&c, Some(8)).contains("colony-abandon"));
         let list = render_list(&[c], Some(3));
         assert!(

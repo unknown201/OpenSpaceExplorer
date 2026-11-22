@@ -2580,7 +2580,10 @@ pub fn part_action_kinds(spec: &PartSpec) -> Vec<&'static str> {
     if spec.stage_type.contains("Parachute") || id.contains("parachute") || id.contains("chute") {
         kinds.push("chute");
     }
-    if id.contains("isru") || id.contains("converter") {
+    if id.contains("isru")
+        || id.contains("converter")
+        || ose_data::colony::MINING.iter().any(|m| m.id == spec.id)
+    {
         kinds.push("converter");
     }
     if id.starts_with("fairing") {

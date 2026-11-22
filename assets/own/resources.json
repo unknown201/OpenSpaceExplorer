@@ -259,5 +259,21 @@
         "non_stageable": false
       }
     }
+  },
+  {
+    "id": "Ore",
+    "display_name_key": "Resource/DisplayName/Ore",
+    "abbreviation_key": "Resource/Abbreviation/Ore",
+    "kind": {
+      "Basic": {
+        "mass_per_unit_t": 0.01,
+        "volume_per_unit": 5.0,
+        "specific_heat_capacity_per_unit": 1000.0,
+        "flow_mode": "AllVessel",
+        "pumpable": true,
+        "cost_per_unit": 0.02,
+        "non_stageable": false
+      }
+    }
   }
 ]

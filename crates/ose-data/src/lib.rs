@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod abundance;
 pub mod colony;
 pub mod craft;
 pub mod engine_shroud;
@@ -470,6 +471,10 @@ pub struct Converter {
     pub inputs: Vec<(String, f64)>,
     pub outputs: Vec<(String, f64)>,
     pub conversion_rate: f64,
+    /// A drill (OSE's own, `colony::DRILL`): its outputs scale with the ground's abundance where the vessel
+    /// stands (`ose_data::abundance`), and it makes nothing off the ground.
+    #[serde(default)]
+    pub harvests: bool,
 }
 
 fn enabled() -> bool {
