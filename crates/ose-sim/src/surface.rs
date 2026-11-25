@@ -24,6 +24,37 @@ fn corners(h: DVec3) -> [DVec3; 8] {
     })
 }
 
+/// How close to the ground a model point counts as resting on it, m (our own figure).
+const RESTING_GAP_M: f64 = 0.03;
+
+/// Whether the centre of mass (the origin) lies over the points a craft rests on, seen along `up`: inside their
+/// outline, so gravity presses it onto them instead of turning it over an edge.
+fn over_support(points: &[DVec3], up: DVec3) -> bool {
+    let e1 = if up.x.abs() < 0.9 {
+        DVec3::new(1.0, 0.0, 0.0)
+    } else {
+        DVec3::new(0.0, 1.0, 0.0)
+    };
+    let e1 = (e1 - up * e1.dot(up)).normalized();
+    let e2 = up.cross(e1);
+    let mut angles: Vec<f64> = Vec::new();
+    for q in points {
+        let (x, y) = (q.dot(e1), q.dot(e2));
+        if x.hypot(y) < 0.01 {
+            return true;
+        }
+        angles.push(y.atan2(x));
+    }
+    if angles.len() < 3 {
+        return false;
+    }
+    angles.sort_by(f64::total_cmp);
+    let wrap = angles[0] + std::f64::consts::TAU - angles[angles.len() - 1];
+    let widest = angles.windows(2).map(|w| w[1] - w[0]).fold(wrap, f64::max);
+    // every direction has a resting point within a half turn of it
+    widest < std::f64::consts::PI - 0.02
+}
+
 /// How fast a craft too tall for the slope it stands on starts to fall over, rad/s (our own figure).
 const SLOPE_TOPPLE_RAD_S: f64 = 0.3;
 
@@ -469,13 +500,11 @@ impl Structure {
                 let f = flight::vessel_basis(p);
                 let lowest = (0..self.rigid.len())
                     .filter(|&i| self.rigid.present[i])
-                    .map(|i| {
-                        let (c, h) = self.part_box(i);
-                        world(f, c - centre).dot(up)
-                            - h.x * f.0.dot(up).abs()
-                            - h.y * f.1.dot(up).abs()
-                            - h.z * f.2.dot(up).abs()
-                            + self.rest_sag_m(i)
+                    .flat_map(|i| {
+                        let sag = self.rest_sag_m(i);
+                        self.ground_points(i)
+                            .into_iter()
+                            .map(move |q| world(f, q - centre).dot(up) + sag)
                     })
                     .fold(f64::INFINITY, f64::min);
                 let radius = support(p.r, ut + dt) - lowest;
@@ -493,9 +522,10 @@ impl Structure {
                 (0..self.rigid.len())
                     .filter(|&i| self.rigid.present[i])
                     .flat_map(|i| {
-                        let (c, h) = self.part_box(i);
                         let sag = self.rest_sag_m(i);
-                        corners(h).map(move |q| (c + q - centre, sag))
+                        self.ground_points(i)
+                            .into_iter()
+                            .map(move |q| (q - centre, sag))
                     })
                     .map(|(q, sag)| {
                         let at = p.r + world(f, q);
@@ -528,6 +558,10 @@ impl Structure {
         let mut hit = 1.0_f64;
         let mut contacts = Vec::new();
         let mut crossed = false;
+        // parts still on the ground they met last step: KSP2 checks a part's crash tolerance only as it strikes
+        // (`PartBehavior.OnCollisionEnter`), not while it slides along or rests on the ground
+        let mut touching_before = vec![false; self.rigid.len()];
+        let met_before = std::mem::replace(&mut self.on_ground, vec![false; self.rigid.len()]);
         let ceiling = (body.radius_m + terrain.map(|t| t.max_m.max(0.0)).unwrap_or(0.0)).max(
             body.site
                 .as_ref()
@@ -535,7 +569,20 @@ impl Structure {
                 .unwrap_or(body.radius_m),
         );
         for i in (0..self.rigid.len()).filter(|&i| self.rigid.present[i]) {
-            let (centre, half) = self.part_box(i);
+            let (centre, _) = self.part_box(i);
+            let points = self.ground_points(i);
+            // a part whose every point stays clear of the ground through the step cannot touch it
+            let reach_m = points
+                .iter()
+                .map(|q| (*q - centre).length())
+                .fold(0.0, f64::max)
+                + 0.05;
+            let from_c = before.r + world(old_frame, centre - mass.centre_m);
+            let to_c = p.r + world(frame, centre - mass.centre_m);
+            let step_m = (to_c - from_c).length();
+            if from_c.length().min(to_c.length()) > ceiling + step_m + reach_m {
+                continue;
+            }
             let travel = if self.gear_out[i] {
                 self.gear_defs[i]
                     .as_ref()
@@ -544,8 +591,8 @@ impl Structure {
             } else {
                 0.0
             };
-            for corner in corners(half) {
-                let offset = centre + corner - mass.centre_m;
+            for point in points {
+                let offset = point - mass.centre_m;
                 let from = before.r + world(old_frame, offset);
                 let to = p.r + world(frame, offset);
                 let distance = (to - from).length();
@@ -553,6 +600,9 @@ impl Structure {
                     continue;
                 }
                 let from_clearance = from.length() - support(from, ut) + travel;
+                if met_before[i] && from_clearance <= RESTING_GAP_M {
+                    touching_before[i] = true;
+                }
                 let to_clearance = to.length() - support(to, ut + dt) + travel;
                 if from_clearance < 0.0 && to_clearance > from_clearance + 1e-8 {
                     continue;
@@ -626,6 +676,7 @@ impl Structure {
                 continue;
             }
             let v = velocity + omega.cross(r);
+            self.on_ground[i] = true;
             normal_impact = normal_impact.max((-v.dot(n)).max(0.0));
             let speed = if self.gear_out[i] && self.gear_defs[i].is_some() {
                 (-v.dot(n)).max(0.0)
@@ -639,7 +690,10 @@ impl Structure {
                 flight::CRASH_SPEED_MPS
             };
             // on another craft's hull a part breaks as part on part (KSP2 `IsSurvivableCrash`)
-            let breaks = if on_deck(at, ut + hit * dt) {
+            // only as it strikes: a part already on the ground slides or rests on it (`OnCollisionEnter`)
+            let breaks = if touching_before[i] {
+                false
+            } else if on_deck(at, ut + hit * dt) {
                 crate::collide::crash_breaks(speed, deck_mass, tolerance)
             } else {
                 speed > tolerance
@@ -654,13 +708,13 @@ impl Structure {
             // strikes with its next layer as it reaches the ground; one struck barely over it breaks and
             // the craft stops on it (KSP2 crash drops, `flight::CRASH_PASS_THROUGH_MPS`).
             targets.push(
-                if speed > tolerance && speed - tolerance > flight::CRASH_PASS_THROUGH_MPS {
+                if breaks && speed - tolerance > flight::CRASH_PASS_THROUGH_MPS {
                     v.dot(n).min(0.0)
                 } else {
                     0.0
                 },
             );
-            if speed <= tolerance {
+            if !breaks {
                 deepest = deepest.max(support(at, ut + hit * dt) - at.length() - travel);
             }
         }
@@ -720,7 +774,6 @@ impl Structure {
         let penetration = (0..self.rigid.len())
             .filter(|&i| self.rigid.present[i] && !out.contact_damage.contains(&i))
             .flat_map(|i| {
-                let (c, h) = self.part_box(i);
                 let travel = if self.gear_out[i] {
                     self.gear_defs[i]
                         .as_ref()
@@ -729,7 +782,9 @@ impl Structure {
                 } else {
                     0.0
                 };
-                corners(h).map(|q| (c + q - mass.centre_m, travel))
+                self.ground_points(i)
+                    .into_iter()
+                    .map(move |q| (q - mass.centre_m, travel))
             })
             .map(|(r, travel)| {
                 let at = p.r + world(end_frame, r);
@@ -749,7 +804,28 @@ impl Structure {
             p.facing.dot(up).clamp(-1.0, 1.0).acos()
         };
         p.tipped = lean.tan().abs() > p.footprint_m / p.ground_clearance_m.max(0.1);
+        // A craft lying on its side comes to rest only where it can: with its centre of mass over the ground it
+        // touches and the slope within its grip. A tank across a hillside rolls on down it, as on KSP2's
+        // colliders, instead of stopping dead where it first lay still for a tick.
+        let at_rest = !p.tipped || p.level || p.walker || {
+            let ground: Vec<DVec3> = (0..self.rigid.len())
+                .filter(|&i| self.rigid.present[i] && !out.contact_damage.contains(&i))
+                .flat_map(|i| {
+                    let sag = self.rest_sag_m(i);
+                    self.ground_points(i)
+                        .into_iter()
+                        .map(move |q| (q - mass.centre_m, sag))
+                })
+                .map(|(q, sag)| (p.r + world(end_frame, q), sag))
+                .filter(|&(at, sag)| at.length() - support(at, ut + dt) + sag < RESTING_GAP_M)
+                .map(|(at, _)| at - p.r)
+                .collect();
+            let normal = flight::ground_normal(body, terrain, p.r, ut + dt);
+            let slope = normal.dot(up).clamp(-1.0, 1.0).acos();
+            slope.tan() <= crate::contact::STATIC_FRICTION && over_support(&ground, up)
+        };
         p.landed = out.contact_damage.is_empty()
+            && at_rest
             && (aligned || p.tipped)
             && omega.length() < 0.1
             && velocity.dot(local(frame, up)).abs() < 0.1;
@@ -819,6 +895,8 @@ mod tests {
             craft.parts.push(child);
         }
         let mut st = Structure::build(&craft, &defs, &res);
+        // these are 2 m boxes, not the capsule's model
+        st.drop_model_hulls();
         let radius = 1_000_000.0;
         let body = Body {
             id: "Test".into(),
@@ -966,6 +1044,37 @@ mod tests {
             "a raised feature between clear endpoints must be detected"
         );
         assert!(!st.surface_loads.is_empty());
+    }
+
+    #[test]
+    fn a_part_breaks_as_it_strikes_the_ground_not_while_it_slides_along_it() {
+        // KSP2 checks a part's crash tolerance in `OnCollisionEnter` against the whole relative speed: its belly
+        // landing at 98 m/s broke the parts that struck first, while the cockpit then slid 38 m/s on a 40 m/s
+        // tolerance and the gear on 125 kept skidding along the runway (reference\ksp2-strike-belly)
+        let (mut st, mut p, mut body) = fixture(true);
+        body.mu = 0.0;
+        st.crash_tolerance[1] = 20.0;
+        // set down gently, then pushed along the ground at 50 m/s
+        p.r.y = body.radius_m + 2.01;
+        p.v = DVec3::new(0.0, -1.0, 0.0);
+        let out = step(&mut st, &mut p, &body, None, 0.02);
+        assert!(out.touched_down && out.contact_damage.is_empty(), "{out:?}");
+        p.landed = false;
+        p.v = DVec3::new(50.0, -0.1, 0.0);
+        for _ in 0..10 {
+            let out = step(&mut st, &mut p, &body, None, 0.02);
+            assert!(out.contact_damage.is_empty(), "sliding: {out:?}");
+            p.landed = false;
+            p.v.y = -0.1;
+        }
+        // the same part striking the ground at that speed breaks
+        let (mut st, mut p, mut body) = fixture(true);
+        body.mu = 0.0;
+        st.crash_tolerance[1] = 20.0;
+        p.r.y = body.radius_m + 2.05;
+        p.v = DVec3::new(50.0, -5.0, 0.0);
+        let out = step(&mut st, &mut p, &body, None, 0.02);
+        assert_eq!(out.contact_damage, vec![1], "striking");
     }
 
     #[test]
