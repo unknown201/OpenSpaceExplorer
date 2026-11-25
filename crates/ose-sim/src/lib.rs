@@ -1744,7 +1744,7 @@ impl Universe {
         // A piece is built from its own parts when the catalog is known: it floats, sinks and breaks part
         // by part like any craft, and keeps the propellant it carried. One carrying an engine that was
         // burning keeps burning (KSP2 leaves a separated stage's engines running) at the same throttle.
-        let (parent_tanks, parent_wet) = self
+        let (parent_tanks, parent_wet, parent_met) = self
             .world
             .get::<structure::Structure>(parent)
             .map(|st| {
@@ -1755,6 +1755,7 @@ impl Universe {
                         .copied()
                         .zip(st.water_drag.iter().copied())
                         .collect::<Vec<_>>(),
+                    st.on_ground.clone(),
                 )
             })
             .unwrap_or_default();
@@ -1801,11 +1802,16 @@ impl Universe {
                 if let Some(tanks) = fire.map(|f| &f.tanks).or(parent_tanks.as_ref()) {
                     st.carry_tanks_from(tanks, map);
                 }
-                // parts already in the sea do not strike it again
+                // parts already in the sea, or on the ground, do not strike it again
                 for (i, &(wet, drag)) in parent_wet.iter().enumerate() {
                     if let Some(j) = map.get(i).copied().flatten() {
                         st.in_water[j] = wet;
                         st.water_drag[j] = drag;
+                    }
+                }
+                for (i, &met) in parent_met.iter().enumerate() {
+                    if let Some(j) = map.get(i).copied().flatten() {
+                        st.on_ground[j] = met;
                     }
                 }
                 let engines: Vec<usize> = fire
@@ -2558,6 +2564,8 @@ impl Universe {
                     if let Some(st) = &mut structure {
                         let centre = st.rigid.rest_centre();
                         let mass_centre = st.mass_properties().centre_m;
+                        // `apart`: the root broke on what it struck, and only the struck parts went
+                        let mut apart = false;
                         let (off, lost) = if out.contact_damage.is_empty() {
                             let (_, off, lost) =
                                 st.crash(out.impact_mps, p.facing, out.impact_against, centre);
@@ -2565,14 +2573,22 @@ impl Universe {
                         } else if let Some(off) = st.contact_damage(&out.contact_damage, &p) {
                             (off, false)
                         } else {
-                            let (_, off, _) =
-                                st.crash(out.impact_mps, p.facing, out.impact_against, centre);
-                            (off, true)
+                            apart = true;
+                            (st.root_struck(&out.contact_damage, &p), true)
                         };
                         if !lost {
                             p.crashed = false;
                             out.crashed = false;
                             st.keep_in_place(&mut p, mass_centre);
+                            for piece in off {
+                                pieces.push((piece, p.r, p.v, p.facing));
+                            }
+                        } else if apart {
+                            // the root broke on the ground: the vessel is lost, and what it held carries on
+                            // as pieces, sliding or tumbling with the motion they had (KSP2 makes each child of
+                            // a destroyed part a vessel of its own)
+                            p.crashed = true;
+                            p.throttle = 0.0;
                             for piece in off {
                                 pieces.push((piece, p.r, p.v, p.facing));
                             }
@@ -4022,22 +4038,26 @@ mod tests {
 
     #[test]
     fn pieces_broken_off_in_the_sea_float_rather_than_vanish() {
-        let (mut u, _) = into_the_sea("Kerbal K1", 1.57, 40.0, 8.0);
+        // flat onto the water at about 22 m/s: past the pod's tolerance and some others', under the rest
+        let (mut u, _) = into_the_sea("Kerbal K1", 1.57, 20.0, 8.0);
         let mut pieces = Vec::new();
         for _ in 0..(5 * TICKS_PER_SECOND) {
             u.step();
             pieces.extend(u.take_broken_off().into_iter().map(|(_, d)| d));
         }
-        assert!(!pieces.is_empty(), "a flat 40 m/s impact breaks parts off");
-        let floating = pieces
+        assert!(!pieces.is_empty(), "the impact breaks parts off");
+        // a piece that breaks up again on the water leaves pieces of its own; what came through floats
+        let came_through: Vec<_> = pieces
             .iter()
-            .filter(|&&d| u.powered(d).is_some_and(|p| p.splashed && !p.crashed))
-            .count();
-        assert!(
-            floating * 2 > pieces.len(),
-            "most pieces float ({floating} of {})",
-            pieces.len()
-        );
+            .filter(|&&d| u.powered(d).is_some_and(|p| !p.crashed))
+            .collect();
+        assert!(!came_through.is_empty(), "some of it came through");
+        for &&d in &came_through {
+            assert!(
+                u.powered(d).unwrap().splashed,
+                "every piece that came through floats"
+            );
+        }
         for &d in &pieces {
             if let Some(p) = u.powered(d) {
                 assert!(p.r.length().is_finite() && p.mass_t > 0.0, "no empty hulls");
@@ -4479,6 +4499,11 @@ mod tests {
         let crafts: Vec<ose_data::craft::Craft> =
             serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
         let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        // the pieces are built part by part from the catalog
+        u.set_part_catalog(
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap(),
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap(),
+        );
         let v = u.spawn_powered_on_surface("K1", body, spec, 0.0, 0.0);
         u.set_craft(v, k1.clone());
         u.set_structure(v, st);
@@ -4510,8 +4535,10 @@ mod tests {
             .map(|c| c.parts.len())
             .sum();
         assert!(kept > 0 && kept < k1.parts.len(), "{kept} parts left");
-        for _ in 0..(10 * TICKS_PER_SECOND) {
+        // what breaks up again on the ground comes apart into more pieces
+        for _ in 0..(30 * TICKS_PER_SECOND) {
             u.step();
+            wreck.extend(u.take_broken_off().into_iter().map(|(_, d)| d));
         }
         let resting = wreck
             .iter()

@@ -18,8 +18,10 @@
        reference\ksp2-strike-<mode>:
          strike land   Stock04_Jet takes off from Runway_1 and is flown back down onto it, gear down
          strike belly  the same with the gear raised: a belly landing
-         strike tail   Stock04_Jet pulls up at 50 m/s, throttle cut as it lifts off: it settles back onto its tail
+         strike tail   Stock04_Jet cut at 38 m/s, stick held full back to 8 m/s: it rotates onto its tail
          strike stack  pod, tanks and Swivel set down upright on Runway_1 at 4 m/s
+         strike taxi   Stock04_Jet ground handling: settle, speed up to 25 m/s, coast, brake, full steering at
+                       10 m/s, stop; every wheel logged each tick (taxi-wheels.csv)
        Each lists every part's colliders (colliders.csv, collider-points.csv) and logs every contact a part
        makes with the ground (strike-contacts.csv), the craft (strike-trace.csv) and lost parts (strike-parts.csv).
     4. Always (also on failure or Ctrl+C) restores everything from step 2, so the KSP2 folder and the parity
@@ -39,11 +41,11 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $pilotDir = Join-Path $Ksp2 "BepInEx\ose-parity"
 $plugin = Join-Path $Ksp2 "BepInEx\plugins\OSE.ParityPilot.dll"
 $campaign = Join-Path $env:USERPROFILE "AppData\LocalLow\Intercept Games\Kerbal Space Program 2\Saves\SinglePlayer\OSE Parity"
-$outNames = @{ "strike tail" = "ksp2-strike-tail"; "strike belly" = "ksp2-strike-belly"; "strike land" = "ksp2-strike-land"; "strike stack" = "ksp2-strike-stack" }
+$outNames = @{ "strike tail" = "ksp2-strike-tail"; "strike belly" = "ksp2-strike-belly"; "strike land" = "ksp2-strike-land"; "strike stack" = "ksp2-strike-stack"; "strike taxi" = "ksp2-strike-taxi" }
 
 if (-not (Test-Path $pilotDir)) { throw "No ${pilotDir}: the parity pilot (BepInEx) is not installed in KSP2." }
 if (Get-Process -Name "KSP2_x64" -ErrorAction SilentlyContinue) { throw "KSP2 is running; close it first." }
-foreach ($s in $Scenarios) { if (-not $outNames.ContainsKey($s)) { throw "Unknown scenario '$s' (strike tail|belly|land|stack)." } }
+foreach ($s in $Scenarios) { if (-not $outNames.ContainsKey($s)) { throw "Unknown scenario '$s' (strike tail|belly|land|stack|taxi)." } }
 
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $work = Join-Path $env:TEMP "ose-parity-$stamp"

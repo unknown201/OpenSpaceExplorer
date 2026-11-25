@@ -3,7 +3,9 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using KSP;
 using KSP.Game;
+using KSP.Modules;
 using KSP.Sim;
 using KSP.Sim.impl;
 using UnityEngine;
@@ -21,8 +23,17 @@ namespace OpenSpaceExplorer.Validation
     //   land    Stock04_Jet (craft-jet.json) takes off from Runway_1, climbs to 25 m over the ground, throttle
     //           cut, and is flown down onto the runway (pitch held to sink at 1.5 m/s), gear down; 15 s rolling.
     //   belly   the same with the gear raised before the descent: it lands on its belly.
-    //   tail    Stock04_Jet rolls to 50 m/s and pulls full pitch up; the moment it leaves the runway the throttle
-//           is cut with the stick still back, so it stalls nose high and settles back onto its tail.
+    //   tail    rolls at full throttle to 38 m/s, cuts the throttle and holds the stick full back until it is down
+    //           to 8 m/s: too slow to fly away, it rotates on its main gear until the tail meets the runway.
+    //           (Run 2 cut as it lifted at 50 m/s and nosed over; run 3 held 18 degrees from 25 m and climbed to
+    //           470 m; run 4 cut at 52 m/s with the stick back and climbed to 49 m; run 5 centred the stick at
+    //           12 degrees and 52 m/s, hopped and rolled out on its wheels.)
+    //   taxi    ground handling on the runway, with every wheel logged each tick (taxi-wheels.csv: grounded, load,
+    //           forward and sideways slip, rpm, motor and brake torque, steer angle, suspension travel):
+    //             settle 5 s (engine staged at zero throttle, brakes on); accel brakes off, full throttle to 25 m/s;
+    //             coast throttle cut 12 s; brake brakes on until under 0.2 m/s (20 s at most); taxi brakes off,
+    //             full throttle to 10 m/s; steer throttle cut, SAS off, wheel steering full right 10 s while it
+    //             coasts; stop steering centred, brakes on 8 s.
     //   stack   the drop stack (craft-drop-stack.json: pod, tanks, Swivel) set down upright on Runway_1 at 4 m/s.
     // Only inputs and action groups are used; physics is never modified.
     public static class GroundStrike
@@ -30,6 +41,16 @@ namespace OpenSpaceExplorer.Validation
         static GameInstance G => GameManager.Instance.Game;
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
         static string F(double x) => x.ToString("R", Inv);
+
+        // every wheel collider of the craft, by part index
+        static IEnumerable<(int, WheelCollider)> Wheels(VesselComponent v)
+        {
+            foreach (var (i, _, frame) in Parts(v))
+            {
+                if (frame == null) continue;
+                foreach (var wc in frame.GetComponentsInChildren<WheelCollider>()) yield return (i, wc);
+            }
+        }
 
         public static string Craft(string mode) => mode == "stack" ? "craft-drop-stack.json" : "craft-jet.json";
 
@@ -194,6 +215,12 @@ namespace OpenSpaceExplorer.Validation
                 using (var pw = new StreamWriter(Path.Combine(dir, "out", "strike-parts.csv"), false))
                 {
                     w.WriteLine("t,phase,parts,srf_speed,vspeed,over_ground_m,pitch_deg,roll_deg,heading_deg,in_pitch,situation");
+                    StreamWriter ww = null;
+                    if (mode == "taxi")
+                    {
+                        ww = new StreamWriter(Path.Combine(dir, "out", "taxi-wheels.csv"), false);
+                        ww.WriteLine("t,phase,index,wheel,grounded,load_n,forward_slip,sideways_slip,rpm,motor_torque,brake_torque,steer_deg,travel_m,suspension_m,radius_m,throttle,wheel_steer,brakes,thrust_kn");
+                    }
                     pw.WriteLine("t,lost_id");
                     double last = double.NegativeInfinity;
                     var left = new HashSet<string>();
@@ -220,7 +247,25 @@ namespace OpenSpaceExplorer.Validation
                         if (root != null) over = OverGround(root.position, Up(v, root.position));
                         w.WriteLine(string.Join(",", new[] { F(t), phase, now.Count.ToString(Inv), F(v.SrfSpeedMagnitude), F(v.VerticalSrfSpeed), F(over),
                             F(v.Pitch_HorizonRelative), F(v.Roll_HorizonRelative), F(v.Heading), F(v.flightCtrlState.pitch), v.Situation.ToString() }));
+                        if (ww != null)
+                        {
+                            double thrust = 0;
+                            foreach (var part in v.SimulationObject.PartOwner.Parts)
+                                if (part.TryGetModuleData<PartComponentModule_Engine, Data_Engine>(out var de)) thrust += de.FinalThrustValue;
+                            string brakes = v.GetActionGroupState(KSPActionGroup.Brakes).ToString();
+                            foreach (var (i, wc) in Wheels(v))
+                            {
+                                bool grounded = wc.GetGroundHit(out var hit);
+                                wc.GetWorldPose(out var pos, out _);
+                                var top = wc.transform.TransformPoint(wc.center);
+                                ww.WriteLine(string.Join(",", new[] { F(t), phase, i.ToString(Inv), wc.name, grounded ? "1" : "0",
+                                    F(grounded ? hit.force : 0), F(grounded ? hit.forwardSlip : 0), F(grounded ? hit.sidewaysSlip : 0), F(wc.rpm),
+                                    F(wc.motorTorque), F(wc.brakeTorque), F(wc.steerAngle), F((top - pos).magnitude), F(wc.suspensionDistance), F(wc.radius),
+                                    F(v.flightCtrlState.mainThrottle), F(v.flightCtrlState.wheelSteer), brakes, F(thrust) }));
+                            }
+                        }
                     }
+                    ww?.Dispose();
                 }
             }
             void Phase(string p) { phase = p; mark("strike " + mode + " " + p); }
@@ -242,6 +287,43 @@ namespace OpenSpaceExplorer.Validation
                 Attach(G.ViewController.GetActiveSimVessel());
                 yield return new WaitForSeconds(11f);
             }
+            else if (mode == "taxi")
+            {
+                // SAS holds it straight while it speeds up, coasts and brakes; off for the steering
+                vessel.SetAutopilotEnableDisable(true);
+                SetGroup(KSPActionGroup.Brakes, true);
+                input.OverrideInputThrottleCutoff(true);
+                vessel.ActivateNextStage();
+                Phase("settle");
+                yield return new WaitForSeconds(5f);
+                SetGroup(KSPActionGroup.Brakes, false);
+                input.OverrideInputMaxThrottle(true);
+                Phase("accel");
+                t0 = 0;
+                while (t0 < 60 && (G.ViewController.GetActiveSimVessel()?.SrfSpeedMagnitude ?? 0) < 25) { t0 += Time.deltaTime; yield return null; }
+                input.OverrideInputThrottleCutoff(true);
+                Phase("coast");
+                yield return new WaitForSeconds(12f);
+                SetGroup(KSPActionGroup.Brakes, true);
+                Phase("brake");
+                t0 = 0;
+                while (t0 < 20 && (G.ViewController.GetActiveSimVessel()?.SrfSpeedMagnitude ?? 0) > 0.2) { t0 += Time.deltaTime; yield return null; }
+                SetGroup(KSPActionGroup.Brakes, false);
+                input.OverrideInputMaxThrottle(true);
+                Phase("taxi");
+                t0 = 0;
+                while (t0 < 30 && (G.ViewController.GetActiveSimVessel()?.SrfSpeedMagnitude ?? 0) < 10) { t0 += Time.deltaTime; yield return null; }
+                input.OverrideInputThrottleCutoff(true);
+                vessel.SetAutopilotEnableDisable(false);
+                InputHolder.WheelSteer = 1f;
+                Phase("steer");
+                yield return new WaitForSeconds(10f);
+                InputHolder.WheelSteer = null;
+                FlightCtrlStateInputOverride.InputWheelSteeringOverride = 0f;
+                SetGroup(KSPActionGroup.Brakes, true);
+                Phase("stop");
+                yield return new WaitForSeconds(8f);
+            }
             else
             {
                 vessel.SetAutopilotEnableDisable(true);
@@ -249,79 +331,82 @@ namespace OpenSpaceExplorer.Validation
                 input.OverrideInputMaxThrottle(true);
                 vessel.ActivateNextStage();
                 Phase("roll");
-                double rotateAt = mode == "tail" ? 50 : 60;
+                if (mode == "tail")
+                {
+                    t0 = 0;
+                    while (t0 < 90 && (G.ViewController.GetActiveSimVessel()?.SrfSpeedMagnitude ?? 0) < 38) { t0 += Time.deltaTime; yield return null; }
+                    input.OverrideInputThrottleCutoff(true);
+                    InputHolder.Pitch = 1f;
+                    Phase("cut and rotate");
+                    t0 = 0;
+                    bool flying = false;
+                    double maxPitch = -90;
+                    while (t0 < 40)
+                    {
+                        var v = G.ViewController.GetActiveSimVessel();
+                        if (v == null) break;
+                        maxPitch = Math.Max(maxPitch, v.Pitch_HorizonRelative);
+                        if (v.Situation == VesselSituations.Flying) flying = true;
+                        else if (flying) { Phase("struck"); flying = false; }
+                        if (v.SrfSpeedMagnitude < 8) break;
+                        t0 += Time.deltaTime; yield return null;
+                    }
+                    InputHolder.Pitch = null;
+                    SetGroup(KSPActionGroup.Brakes, true);
+                    Phase("after (pitch peaked at " + maxPitch.ToString("F1", Inv) + ")");
+                    yield return new WaitForSeconds(5f);
+                    goto done;
+                }
+                double rotateAt = 60;
                 t0 = 0;
                 while (t0 < 90 && (G.ViewController.GetActiveSimVessel()?.SrfSpeedMagnitude ?? 0) < rotateAt) { t0 += Time.deltaTime; yield return null; }
                 Phase("rotate");
                 InputHolder.Pitch = 1f;
-                if (mode == "tail")
+                t0 = 0;
+                while (t0 < 10 && (G.ViewController.GetActiveSimVessel()?.Pitch_HorizonRelative ?? 0) < 10) { t0 += Time.deltaTime; yield return null; }
+                InputHolder.Pitch = null;
+                Phase("climb");
+                t0 = 0;
+                while (t0 < 30)
                 {
-                    // full pitch up until it leaves the runway, then the throttle cut with the stick still back:
-                    // it stalls nose high and settles back tail first
-                    t0 = 0;
-                    while (t0 < 15 && (G.ViewController.GetActiveSimVessel()?.Situation ?? VesselSituations.Landed) != VesselSituations.Flying) { t0 += Time.deltaTime; yield return null; }
-                    input.OverrideInputThrottleCutoff(true);
-                    Phase("stall");
-                    t0 = 0;
-                    bool flew = true;
-                    while (t0 < 20)
-                    {
-                        var sit = G.ViewController.GetActiveSimVessel()?.Situation ?? VesselSituations.Landed;
-                        if (flew && sit != VesselSituations.Flying && t0 > 0.5f) { Phase("struck"); flew = false; }
-                        t0 += Time.deltaTime; yield return null;
-                        if (!flew && t0 > 3) break;
-                    }
-                    InputHolder.Pitch = null;
-                    Phase("after");
-                    yield return new WaitForSeconds(8f);
+                    var v = G.ViewController.GetActiveSimVessel();
+                    Transform root = null;
+                    if (v != null) foreach (var (_, _, frame) in Parts(v)) { root = frame; break; }
+                    if (root != null && OverGround(root.position, Up(v, root.position)) > 25) break;
+                    t0 += Time.deltaTime; yield return null;
                 }
-                else
+                if (mode == "belly")
                 {
-                    t0 = 0;
-                    while (t0 < 10 && (G.ViewController.GetActiveSimVessel()?.Pitch_HorizonRelative ?? 0) < 10) { t0 += Time.deltaTime; yield return null; }
-                    InputHolder.Pitch = null;
-                    Phase("climb");
-                    t0 = 0;
-                    while (t0 < 30)
-                    {
-                        var v = G.ViewController.GetActiveSimVessel();
-                        Transform root = null;
-                        if (v != null) foreach (var (_, _, frame) in Parts(v)) { root = frame; break; }
-                        if (root != null && OverGround(root.position, Up(v, root.position)) > 25) break;
-                        t0 += Time.deltaTime; yield return null;
-                    }
-                    if (mode == "belly")
-                    {
-                        // the group's state may not match the deployed gear at launch: raise it through a set
-                        SetGroup(KSPActionGroup.Gear, true);
-                        yield return new WaitForSeconds(0.2f);
-                        SetGroup(KSPActionGroup.Gear, false);
-                        Phase("gear up (group " + G.ViewController.GetActiveSimVessel()?.GetActionGroupState(KSPActionGroup.Gear) + ")");
-                        yield return new WaitForSeconds(3f);
-                    }
-                    input.OverrideInputThrottleCutoff(true);
-                    Phase("descend");
-                    // pitch held to sink at 1.5 m/s, nose kept between -5 and 12 degrees
-                    t0 = 0;
-                    while (t0 < 90)
-                    {
-                        var v = G.ViewController.GetActiveSimVessel();
-                        if (v == null) break;
-                        if (v.Situation == VesselSituations.Landed || v.Situation == VesselSituations.Splashed) break;
-                        double err = -1.5 - v.VerticalSrfSpeed;
-                        double pitch = v.Pitch_HorizonRelative;
-                        float cmd = Mathf.Clamp((float)(0.25 * err), -0.6f, 0.6f);
-                        if (pitch > 12) cmd = Mathf.Min(cmd, -0.2f);
-                        if (pitch < -5) cmd = Mathf.Max(cmd, 0.3f);
-                        InputHolder.Pitch = cmd;
-                        t0 += Time.deltaTime; yield return null;
-                    }
-                    InputHolder.Pitch = null;
-                    Phase("down");
-                    SetGroup(KSPActionGroup.Brakes, true);
-                    yield return new WaitForSeconds(15f);
+                    // the group's state may not match the deployed gear at launch: raise it through a set
+                    SetGroup(KSPActionGroup.Gear, true);
+                    yield return new WaitForSeconds(0.2f);
+                    SetGroup(KSPActionGroup.Gear, false);
+                    Phase("gear up (group " + G.ViewController.GetActiveSimVessel()?.GetActionGroupState(KSPActionGroup.Gear) + ")");
+                    yield return new WaitForSeconds(3f);
                 }
+                input.OverrideInputThrottleCutoff(true);
+                Phase("descend");
+                // pitch held to sink at 1.5 m/s, nose kept between -5 and 12 degrees
+                t0 = 0;
+                while (t0 < 90)
+                {
+                    var v = G.ViewController.GetActiveSimVessel();
+                    if (v == null) break;
+                    if (v.Situation == VesselSituations.Landed || v.Situation == VesselSituations.Splashed) break;
+                    double err = -1.5 - v.VerticalSrfSpeed;
+                    double pitch = v.Pitch_HorizonRelative;
+                    float cmd = Mathf.Clamp((float)(0.25 * err), -0.6f, 0.6f);
+                    if (pitch > 12) cmd = Mathf.Min(cmd, -0.2f);
+                    if (pitch < -5) cmd = Mathf.Max(cmd, 0.3f);
+                    InputHolder.Pitch = cmd;
+                    t0 += Time.deltaTime; yield return null;
+                }
+                InputHolder.Pitch = null;
+                Phase("down");
+                SetGroup(KSPActionGroup.Brakes, true);
+                yield return new WaitForSeconds(15f);
             }
+        done:
             InputHolder.Clear();
             logging = false;
             yield return new WaitForFixedUpdate();
