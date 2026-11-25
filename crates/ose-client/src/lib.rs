@@ -15981,8 +15981,11 @@ impl App {
             .and_then(|k| k.1.as_ref())
             .map(|c| c.parts.iter().map(|p| p.guid.clone()).collect());
         // the colonies on this body, for their markers in the view
-        let site_colonies: Vec<&ose_net::ColonyInfo> =
-            self.colonies.iter().filter(|c| c.body == body.id).collect();
+        let site_colonies: Vec<&ose_net::ColonyInfo> = self
+            .colonies
+            .iter()
+            .filter(|c| c.body == body.id && !c.orbital)
+            .collect();
         let sites: Vec<(f64, f64)> = site_colonies
             .iter()
             .map(|c| (c.lat_deg, c.lon_deg))
@@ -16428,7 +16431,15 @@ impl App {
                             b.radius_m / 1000.0 / self.orbit_dist_km * h >= COLONY_MARKER_MIN_PX
                         })
                 })
-                .and_then(|c| colony_position(scene, &self.body_spins, c, ut))
+                .and_then(|c| {
+                    // an orbital colony is where its station (the first of its vessels) is
+                    if c.orbital {
+                        let v = scene.vessel(*c.vessels.first()?)?;
+                        Some(scene.vessel_position(v, ut))
+                    } else {
+                        colony_position(scene, &self.body_spins, c, ut)
+                    }
+                })
                 .map(to_km);
             match place.filter(|p| !hidden_by_body(*p)).and_then(project) {
                 Some((x, y)) => {

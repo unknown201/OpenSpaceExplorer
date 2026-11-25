@@ -14,7 +14,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 81;
+pub const PROTOCOL_VERSION: u16 = 82;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -1511,6 +1511,10 @@ pub struct ColonyInfo {
     pub arrivals: u32,
     #[serde(default)]
     pub next_arrival_in_s: Option<f64>,
+    /// Protocol 82: an orbital colony, wherever its anchor vessel (the first of `vessels`) is; its site
+    /// (`lat_deg`, `lon_deg`) means nothing, and its pad is a dock in space behind the anchor.
+    #[serde(default)]
+    pub orbital: bool,
 }
 
 /// A delivery route (`ServerMessage::Routes`, protocol 73).

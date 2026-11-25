@@ -1946,6 +1946,34 @@ fn site_vessels(
     site: &ose_net::LaunchSite,
 ) -> Vec<(bevy_ecs::entity::Entity, u64, Option<u64>, String)> {
     let mut found = Vec::new();
+    // an orbital colony's dock: the vessels within 100 m of it, in space behind the anchor
+    let orbital = site.colony.and_then(|id| {
+        s.campaign
+            .lock()
+            .expect("campaign lock")
+            .colonies
+            .get(id)
+            .filter(|c| c.orbital())
+            .cloned()
+    });
+    if let Some(col) = orbital {
+        let list = s.vessels.lock().expect("vessels lock");
+        let Some(a) = ose_colonies::anchor_among(u, &col, list.iter().map(|x| x.0)) else {
+            return found;
+        };
+        let Some((around, at, _)) = ose_colonies::dock_behind(u, a) else {
+            return found;
+        };
+        for &(entity, vessel, owner) in list.iter() {
+            let near = entity != a
+                && ose_colonies::place(u, entity)
+                    .is_some_and(|(b, r, _, _)| b == around && (r - at).length() < 100.0);
+            if let (true, Some((v, _, _))) = (near, u.vessel(entity)) {
+                found.push((entity, vessel, owner, v.name.clone()));
+            }
+        }
+        return found;
+    }
     let Some(home) = u.body_entity(site.body.as_deref().unwrap_or("Kerbin")) else {
         return found;
     };
@@ -2287,18 +2315,47 @@ fn launch_on_pad_now(
         }
     }
     let (pad_lat, pad_lon) = (at.lat_deg, at.lon_deg);
-    let e = u.spawn_powered_on_surface(&name, body, spec, pad_lat, pad_lon);
-    if !is_level {
+    // an orbital colony's dock: the craft starts out in space behind the anchor, moving with it, nose
+    // forward (`ose_colonies::dock`)
+    let docked = match colony.as_ref().filter(|c| c.orbital()) {
+        None => None,
+        Some(col) => match ose_colonies::dock(&mut u, col) {
+            Some(d) => Some(d),
+            None => return fail(format!("{} is not in orbit", col.name)),
+        },
+    };
+    let e = if let Some((around, r, v)) = docked {
+        let e = u.spawn_vessel(&name, around, r, v);
+        u.rebuild_vessel(
+            e,
+            craft,
+            r,
+            v,
+            v.normalized(),
+            Vec::new(),
+            &s.parts,
+            &s.resources,
+            &|c| flight_spec_for(s, c),
+        );
+        e
+    } else {
+        u.spawn_powered_on_surface(&name, body, spec, pad_lat, pad_lon)
+    };
+    if docked.is_some() {
+        // the rebuild made its craft and structure, laid out in flight
+    } else if !is_level {
         // Rockets stand as KSP2's: top to the south, so D turns them east (the gravity turn). Before the
         // structure is built from the pose, so the craft stands that way on the pad too, not only once it flies.
         u.stand_south(e);
     }
-    u.set_craft(e, craft.clone());
-    u.set_structure(
-        e,
-        ose_sim::structure::Structure::build(craft, &s.parts, &s.resources),
-    );
-    if is_level {
+    if docked.is_none() {
+        u.set_craft(e, craft.clone());
+        u.set_structure(
+            e,
+            ose_sim::structure::Structure::build(craft, &s.parts, &s.resources),
+        );
+    }
+    if is_level && docked.is_none() {
         u.set_level(e, at.heading_deg);
     }
     let crewed = match &colony {
