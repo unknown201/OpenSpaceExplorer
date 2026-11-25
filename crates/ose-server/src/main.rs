@@ -211,6 +211,13 @@ struct PartInfo {
     compound: &'static str,
     docking: Option<ose_data::DockingPort>,
     rcs_thrust_kn: f64,
+    /// The part's modules without the `PartComponentModule_` prefix ("Command", "Heatshield"): the VAB's
+    /// engineer's report checks for them as KSP2's does.
+    modules: Vec<String>,
+    /// It draws electric charge (a probe core, reaction wheel, antenna or light) or makes it (an engine's
+    /// alternator, an RTG, a solar panel): KSP2's report flags a craft that draws with nothing to make it.
+    uses_charge: bool,
+    makes_charge: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -332,6 +339,21 @@ fn part_infos(parts: &[ose_data::PartDef]) -> Vec<PartInfo> {
                 },
                 docking: p.docking.clone(),
                 rcs_thrust_kn: p.rcs.as_ref().map(|r| r.thrust_kn).unwrap_or(0.0),
+                modules: p
+                    .module_names
+                    .iter()
+                    .map(|m| {
+                        m.strip_prefix("PartComponentModule_")
+                            .unwrap_or(m)
+                            .to_string()
+                    })
+                    .collect(),
+                uses_charge: p.electric.command_use > 0.0
+                    || (p.electric.wheel_use_per_knm > 0.0
+                        && p.electric.wheel_torque_vec_knm > 0.0)
+                    || p.electric.transmit_ec_per_s > 0.0
+                    || p.light.is_some(),
+                makes_charge: p.electric.generator_output > 0.0 || p.electric.solar_output > 0.0,
             }
         })
         .collect()

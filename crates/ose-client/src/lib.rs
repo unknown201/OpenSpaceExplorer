@@ -440,6 +440,9 @@ struct App {
     warp_to_sent_ms: f64,
     /// When the last "blocked by time warp" toast showed, so a held key does not stack them.
     warp_note_ms: std::cell::Cell<f64>,
+    /// When the player last raised the warp, until the server's rate answers it: if the rate stays below the
+    /// request for longer than a round trip, say why once.
+    warp_raise_ms: Option<f64>,
     apsis_ut: [f64; 2],
     toasts: hud::Toasts,
     /// The flown vessel as last seen, for event toasts (signal, charge, sphere of influence, orbit, landing).
@@ -1161,6 +1164,7 @@ pub fn start() -> Result<(), JsValue> {
         warp_to: None,
         warp_to_sent_ms: 0.0,
         warp_note_ms: std::cell::Cell::new(f64::NEG_INFINITY),
+        warp_raise_ms: None,
         apsis_ut: [f64::NAN; 2],
         toasts: hud::Toasts::default(),
         flight_watch: std::cell::RefCell::new(None),
@@ -3030,7 +3034,21 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 let craft = stored(&app.craft_link_key(id)).and_then(|s| s.parse::<u64>().ok());
                 app.start_flight(id, craft);
             } else if let Some(id) = num("data-ose-ts-recover") {
-                if let Some(ws) = &app.ws {
+                // KSP2's `MapUISelectableEntry.PopRecoverConfirmationDialog`
+                // (`Menu/TrackingStation/ConfirmationDialog/ConfirmObjectRecover`).
+                let name = app
+                    .scene
+                    .as_ref()
+                    .and_then(|s| s.vessel(id))
+                    .map(|v| v.name.clone())
+                    .unwrap_or_else(|| "this vessel".into());
+                let sure = web_sys::window()
+                    .and_then(|w| {
+                        w.confirm_with_message(&format!("Do you really wish to recover {name}?"))
+                            .ok()
+                    })
+                    .unwrap_or(true);
+                if let (true, Some(ws)) = (sure, &app.ws) {
                     send(ws, &ClientMessage::RecoverVessel { vessel: id });
                 }
             } else if let Some(id) = el
@@ -4333,6 +4351,30 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         "vab-launch",
         Box::new(|a| {
             a.borrow().lesson_event("VABLaunchButtonPressedMessage");
+            // KSP2's `IsClearedForLaunch`: a vehicle with no command part launches only once the player
+            // confirms `Menu/VAB/NoCommandModuleWarning`.
+            let commandless = {
+                let app = a.borrow();
+                !app.editor.craft.parts.is_empty()
+                    && !app.editor.craft.parts.iter().any(|p| {
+                        app.catalog
+                            .get(&p.part_id)
+                            .is_some_and(|s| s.category == "Pods")
+                    })
+            };
+            if commandless {
+                let sure = web_sys::window()
+                    .and_then(|w| {
+                        w.confirm_with_message(
+                            "Your vehicle will not be controllable without a command module. Do you want to launch anyway?",
+                        )
+                        .ok()
+                    })
+                    .unwrap_or(true);
+                if !sure {
+                    return;
+                }
+            }
             a.borrow_mut().vab_save(true)
         }),
     )?;
@@ -6499,6 +6541,7 @@ impl App {
     }
 
     fn request_warp(&mut self, factor: u32) {
+        self.warp_raise_ms = (factor > self.time.warp).then(now_ms);
         self.requested_warp = factor;
         if let Some(ws) = &self.ws {
             send(ws, &ClientMessage::RequestWarp { factor });
@@ -7413,7 +7456,9 @@ impl App {
             } => {
                 let now = now_ms();
                 let before = self.time.ut_at(now);
+                let warp_before = self.time.warp;
                 self.time.update(tick.seconds(), warp, now);
+                self.warp_limit_notes(warp_before, warp, warp_limited_by.is_some());
                 let step_ms = (self.time.ut_at(now) - before) * 1000.0 / warp.max(1) as f64;
                 self.net
                     .clock(now, tick.seconds(), warp, step_ms, self.time.pending_ms());
@@ -13289,6 +13334,45 @@ impl App {
     fn stop_warp(&mut self) {
         self.warp_to = None;
         self.request_warp(1);
+    }
+
+    /// KSP2's time-warp limit notifications in flight, when the height or physics cap (not another player)
+    /// holds the rate below the request: `TimewarpCantIncreaseDueToAltitudeMessage` once for a raise it
+    /// refuses, `ForceDecreaseTimewarpMessage` when it pulls a running warp down.
+    fn warp_limit_notes(&mut self, before: u32, now: u32, held_by_player: bool) {
+        if self.requested_warp <= now || held_by_player {
+            self.warp_raise_ms = None;
+        }
+        // Long enough for the request to have reached the server and its rate to have come back.
+        let raised = self.warp_raise_ms.is_some_and(|t| now_ms() - t > 800.0);
+        if raised {
+            self.warp_raise_ms = None;
+        }
+        if self.flying.is_none() || held_by_player || self.requested_warp <= now {
+            return;
+        }
+        if now < before {
+            let body = self
+                .flying
+                .and_then(|id| {
+                    let scene = self.scene.as_ref()?;
+                    let v = scene.vessel(id)?;
+                    scene.bodies.get(v.reference_body as usize)
+                })
+                .map(|b| b.id.clone())
+                .unwrap_or_else(|| "Celestial Body".into());
+            hud::push(
+                &self.doc,
+                &format!("Approaching {body}, lowering time warp to {now}x for safety!"),
+                "alert",
+            );
+        } else if raised {
+            hud::push(
+                &self.doc,
+                "Time warp limited due to proximity to celestial body",
+                "passive",
+            );
+        }
     }
 
     /// Whether the vessel flown warps on rails now (`interaction::rails_warp`): KSP2 locks its throttle,

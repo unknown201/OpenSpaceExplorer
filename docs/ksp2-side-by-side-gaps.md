@@ -68,6 +68,30 @@ listed here only so it is not lost.
 | SBS-F1 | Losing the vessel ends the flight with no way back | The crash report offers Revert to Launch / Revert to VAB as well as returning to the KSC | "The vessel was lost" report with only Continue, which goes to the Tracking Station; the revert points still exist (Esc menu) but are not offered | `ose-shots/12-map.png` | **done** in PR 36 (Revert to Launch / VAB on the loss report) |
 | SBS-F2 | Debris and the crash are not seen | The camera stays in flight on the wreck and debris | The view leaves flight as soon as the vessel is lost | `ose-shots/12-map.png` | **done** in PR 36 (camera stays on the crash site) |
 
+### UI and flow rules (sweep 2026-11-25)
+
+Found by diffing KSP2's English UI text (`assets/web/loc/en.json`) against OSE's code, then reading the decompiled
+rule behind each unmatched string (`reference/ksp2/Assembly-CSharp`) and the serialized VAB config
+(`oab_assets_all.bundle`, dumped read-only to `reference/parity-hunt/` on AI-House).
+
+| ID | Gap | KSP2 | OSE before | Owner |
+|---|---|---|---|---|
+| SBS-U1 | Throttle and staging during time warp | On rails warp (`IsWarping && !IsPhysicsTimeWarp`; physics warp is 2-4x in the air or rolling on the ground) Shift/Ctrl, Z and the HUD throttle are locked with "Throttle is locked while Time Warp is over 1x." (passive, at most every 0.5 s); X stops the warp and leaves the throttle; Space is refused with "That action cannot be performed while you are time warping" (`FlightInputHandler.OnThrottleDelta/OnThrottleMax/OnThrottleCutoff/OnStage`) | Throttle and staging worked at any warp; a throttle key only cancelled an automatic warp-to | **fixed** in this sweep's PR (`interaction::rails_warp`) |
+| SBS-U2 | EVA during time warp | The crew portraits' EVA button is disabled at any warp rate or while paused, tooltip "EVA is disabled because time warp is not 1x." (`IVAPortraits.UpdateEVAEnabled`) | EVA at any warp | **fixed** (client refuses with KSP2's text; the server refuses `GoEva` above 1x) |
+| SBS-U3 | Warp limit notices | Raising warp past the height/physics cap: "Time warp limited due to proximity to celestial body"; a running warp pulled down: "Approaching {body}, lowering time warp to {x}x for safety!" (`TimeWarp`, `NotificationEvents`) | Only a tooltip on the warp control | **fixed** (toasts in flight when the cap, not another player, holds the rate) |
+| SBS-U4 | Engineer's report checks and wording | 13 serialized checkers: no command part, VAB size, colony resources, TWR < 1 of the first engine stage, an engine without fuel (Critical); crewed pod without parachute, listed pods without heat shield, heat engine without radiator, docking port or landing gear/leg without RCS, Founder's Module without crew, no antenna on any vessel, EC users without a producer, EC users without a battery (Minimal); most severe first | Invented checks with own wording ("No engines", antenna only for probes, no heat shield, RCS or charge-producer checks) | **fixed**: the 10 checks OSE has data for, with KSP2's text and severity; size, colony resources, radiator (no engine heat curves in the catalog) and Founder's Module are open |
+| SBS-U5 | Launching without a command part | Asks "Your vehicle will not be controllable without a command module. Do you want to launch anyway?" (`ObjectAssemblyBuilder.IsClearedForLaunch`) | Launched silently | **fixed** |
+| SBS-U6 | Tracking Station recover | Asks "Do you really wish to recover {name}?" (`MapUISelectableEntry.PopRecoverConfirmationDialog`); Destroy has the same dialog | Recovered on the first click; no Destroy | **fixed** for Recover; Destroy is open (UI thread) |
+| SBS-U7 | Leaving a flight in a dangerous state | Esc menu to KSC/R&D/Mission Control/Training: "Vessel Destruction Warning ... This vessel will be destroyed if you leave this flight" when the vessel is not pre-launch or at rest and is below max(atmosphere, highest terrain) (`ViewController.CanObserverLeaveTheActiveVessel`) | The shared server keeps simulating the vessel | **Report for Josh**: a multiplayer design choice; keep OSE's behaviour unless he wants KSP2's |
+| SBS-U8 | Mission tracking | Track/Untrack per mission in Mission Control, any number, hidden for completed ones (`MissionControlMenuController.ToggleTrackMission`) | The tracker lists every accepted mission | open (UI thread) |
+| SBS-U9 | Burn timer delete | The burn timer's "Delete All Maneuvers" button removes the active node and every node after it (all of them for the first) (`ManeuverProvider.DeleteActiveNode`) | Only the map's per-node delete | Report (maneuver planner thread) |
+| SBS-U10 | EVA blocked by an obstacle | EVA disabled with "EVA is disabled due to an obstacle." when a 0.25 m capsule below the hatch hits something that is not the part (`IVAPortraitEVAObstacleDetector`) | Not checked | Report (EVA thread) |
+| SBS-U11 | Engineer's report statistics | "Assembly Statistics": total and dry mass, parts, Thrust/Weight, height, width, length | Parts, dry mass and stages in the side panel | open, minor |
+
+Checked and already matching: occupied-pad launch prompt, KSC recover prompt, flight notifications (out of fuel,
+ablator, recoverable, inactive SOI, lost link and control). Dead keys in KSP2 0.2.2 (not used by its code):
+`TimewarpThrottleReset`, `ConfirmRecoverOrLaunchMessage`, `Map/OutOfFuelManeuverNode`.
+
 ## What already matches
 
 HUD layout and widgets (navball, altimeter, staging stack, app bar, resources, Kerbal portrait), the VAB part picker
