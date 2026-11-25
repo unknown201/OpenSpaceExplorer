@@ -766,6 +766,10 @@ pub struct LandingGear {
     pub starts_extended: bool,
     /// Its shape folded out (the `EXTENDED` drag cube), when it folds.
     pub extended: Option<PartBounds>,
+    /// That `EXTENDED` drag cube itself: a wheel folded out drags and heats with it (`Module_WheelDeployment`
+    /// weights the cubes by how far out it is).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extended_cube: Option<DragCube>,
     /// Wheel radius, m (`Data_WheelBase.Radius`).
     #[serde(default)]
     pub radius_m: f64,

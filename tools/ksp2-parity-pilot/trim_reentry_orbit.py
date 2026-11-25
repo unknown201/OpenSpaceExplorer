@@ -2,8 +2,9 @@
 reads (crates/ose-sim/tests/data/ksp2-reentryorbit-*):
 
   start.csv     the trace row where the craft first passes 71 km on the way down (where OSE starts)
-  attitude.csv  from there on, every `every` ticks: KSP2's nose as components along the orbital velocity, the
-                local vertical square to it, and the side (the attitude OSE replays)
+  attitude.csv  from there on, every `every` ticks: KSP2's nose and its x axis (the roll) as components
+                along the orbital velocity, the local vertical square to it, and the side (the attitude OSE
+                replays)
   parts.csv     each part's temperature every second (by craft index; the names are in events.csv) (and every tick in the 2 s before a part is lost)
   events.csv    the part list changes, as logged
 
@@ -32,14 +33,17 @@ def dot(a, b):
 
 
 def nose_components(r):
+    """The control transform's up axis (0, 1, 0: the nose) and its x axis (1, 0, 0, which fixes the roll: where
+    a plane's wings and belly are) turned by the quaternion, each as components along the orbital velocity, the
+    local vertical square to it, and the side."""
     x, y, z, w = (float(r[k]) for k in ("qx", "qy", "qz", "qw"))
-    # the control transform's up axis (0, 1, 0) turned by the quaternion
     nose = [2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)]
+    right = [1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)]
     along = unit([float(r[k]) for k in ("vx", "vy", "vz")])
     down = unit([float(r[k]) for k in ("gx", "gy", "gz")])
     side = unit(cross(along, [-c for c in down]))
     up = cross(side, along)
-    return dot(nose, along), dot(nose, up), dot(nose, side)
+    return [dot(v, d) for v in (nose, right) for d in (along, up, side)]
 
 
 def main(run, out, every=5, start_alt=START_ALT_M):
@@ -57,10 +61,9 @@ def main(run, out, every=5, start_alt=START_ALT_M):
         w.writerow([trace[k0][k] for k in keep])
     with open(os.path.join(out, "attitude.csv"), "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["t", "along", "up", "side"])
+        w.writerow(["t", "along", "up", "side", "x_along", "x_up", "x_side"])
         for r in trace[max(0, k0 - 5)::every]:
-            a, b, s = nose_components(r)
-            w.writerow([f"{float(r['t']):.2f}", f"{a:.4f}", f"{b:.4f}", f"{s:.4f}"])
+            w.writerow([f"{float(r['t']):.2f}"] + [f"{c:.4f}" for c in nose_components(r)])
     with open(os.path.join(run, "reentryorbit-events.csv"), newline="") as f:
         events = f.read()
     with open(os.path.join(out, "events.csv"), "w", newline="") as f:

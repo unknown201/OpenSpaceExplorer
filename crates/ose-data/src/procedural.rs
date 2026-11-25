@@ -708,6 +708,9 @@ pub struct WingResult {
     pub meshes: Vec<PosedMesh>,
     /// Drag cube of every baked mesh, part frame.
     pub cube: Cube,
+    /// The drag cube flight uses (`Module_Drag.SetDragCube`: the whole baked model rendered by
+    /// `SynchronousRenderProceduralDragCube`), part frame.
+    pub drag_cube: crate::DragCube,
     pub mass_t: f64,
     /// `LiftingCtrlSurfaceArea` (the fixed part's `deflectionLiftCoeff`) and `CtrlSurfaceArea`.
     pub fixed_lift_coeff: f64,
@@ -1084,6 +1087,7 @@ pub fn evaluate(part_id: &str, shape: &WingShape, mirrored: bool) -> Option<Wing
         });
     }
     let cube = drag_cube(&all_points, &all_tris);
+    let rendered = render_drag_cube("Default", &all_points, &all_tris);
     let k = rig.mesh_area_lift_multiplier;
     // Lift along the part's -X (`Data_LiftingSurface.transformDir` X, sign -1 on every procedural wing).
     let total_area = cube.cross_section([-1.0, 0.0, 0.0]);
@@ -1134,6 +1138,7 @@ pub fn evaluate(part_id: &str, shape: &WingShape, mirrored: bool) -> Option<Wing
         measurements,
         inertia_per_t,
         cube,
+        drag_cube: rendered,
     })
 }
 
