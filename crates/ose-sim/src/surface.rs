@@ -558,6 +558,10 @@ impl Structure {
         let mut hit = 1.0_f64;
         let mut contacts = Vec::new();
         let mut crossed = false;
+        // parts still on the ground they met last step: KSP2 checks a part's crash tolerance only as it strikes
+        // (`PartBehavior.OnCollisionEnter`), not while it slides along or rests on the ground
+        let mut touching_before = vec![false; self.rigid.len()];
+        let met_before = std::mem::replace(&mut self.on_ground, vec![false; self.rigid.len()]);
         let ceiling = (body.radius_m + terrain.map(|t| t.max_m.max(0.0)).unwrap_or(0.0)).max(
             body.site
                 .as_ref()
@@ -591,6 +595,9 @@ impl Structure {
                     continue;
                 }
                 let from_clearance = from.length() - support(from, ut) + travel;
+                if met_before[i] && from_clearance <= RESTING_GAP_M {
+                    touching_before[i] = true;
+                }
                 let to_clearance = to.length() - support(to, ut + dt) + travel;
                 if from_clearance < 0.0 && to_clearance > from_clearance + 1e-8 {
                     continue;
@@ -664,6 +671,7 @@ impl Structure {
                 continue;
             }
             let v = velocity + omega.cross(r);
+            self.on_ground[i] = true;
             normal_impact = normal_impact.max((-v.dot(n)).max(0.0));
             let speed = if self.gear_out[i] && self.gear_defs[i].is_some() {
                 (-v.dot(n)).max(0.0)
@@ -677,7 +685,10 @@ impl Structure {
                 flight::CRASH_SPEED_MPS
             };
             // on another craft's hull a part breaks as part on part (KSP2 `IsSurvivableCrash`)
-            let breaks = if on_deck(at, ut + hit * dt) {
+            // only as it strikes: a part already on the ground slides or rests on it (`OnCollisionEnter`)
+            let breaks = if touching_before[i] {
+                false
+            } else if on_deck(at, ut + hit * dt) {
                 crate::collide::crash_breaks(speed, deck_mass, tolerance)
             } else {
                 speed > tolerance
@@ -692,13 +703,13 @@ impl Structure {
             // strikes with its next layer as it reaches the ground; one struck barely over it breaks and
             // the craft stops on it (KSP2 crash drops, `flight::CRASH_PASS_THROUGH_MPS`).
             targets.push(
-                if speed > tolerance && speed - tolerance > flight::CRASH_PASS_THROUGH_MPS {
+                if breaks && speed - tolerance > flight::CRASH_PASS_THROUGH_MPS {
                     v.dot(n).min(0.0)
                 } else {
                     0.0
                 },
             );
-            if speed <= tolerance {
+            if !breaks {
                 deepest = deepest.max(support(at, ut + hit * dt) - at.length() - travel);
             }
         }
@@ -1028,6 +1039,37 @@ mod tests {
             "a raised feature between clear endpoints must be detected"
         );
         assert!(!st.surface_loads.is_empty());
+    }
+
+    #[test]
+    fn a_part_breaks_as_it_strikes_the_ground_not_while_it_slides_along_it() {
+        // KSP2 checks a part's crash tolerance in `OnCollisionEnter` against the whole relative speed: its belly
+        // landing at 98 m/s broke the parts that struck first, while the cockpit then slid 38 m/s on a 40 m/s
+        // tolerance and the gear on 125 kept skidding along the runway (reference\ksp2-strike-belly)
+        let (mut st, mut p, mut body) = fixture(true);
+        body.mu = 0.0;
+        st.crash_tolerance[1] = 20.0;
+        // set down gently, then pushed along the ground at 50 m/s
+        p.r.y = body.radius_m + 2.01;
+        p.v = DVec3::new(0.0, -1.0, 0.0);
+        let out = step(&mut st, &mut p, &body, None, 0.02);
+        assert!(out.touched_down && out.contact_damage.is_empty(), "{out:?}");
+        p.landed = false;
+        p.v = DVec3::new(50.0, -0.1, 0.0);
+        for _ in 0..10 {
+            let out = step(&mut st, &mut p, &body, None, 0.02);
+            assert!(out.contact_damage.is_empty(), "sliding: {out:?}");
+            p.landed = false;
+            p.v.y = -0.1;
+        }
+        // the same part striking the ground at that speed breaks
+        let (mut st, mut p, mut body) = fixture(true);
+        body.mu = 0.0;
+        st.crash_tolerance[1] = 20.0;
+        p.r.y = body.radius_m + 2.05;
+        p.v = DVec3::new(50.0, -5.0, 0.0);
+        let out = step(&mut st, &mut p, &body, None, 0.02);
+        assert_eq!(out.contact_damage, vec![1], "striking");
     }
 
     #[test]

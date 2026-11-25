@@ -218,6 +218,8 @@ pub struct Structure {
     /// Parts under the sea surface after the last surface step, and those that struck the water this
     /// step faster than they can take: (part, speed m/s).
     pub(crate) in_water: Vec<bool>,
+    /// Parts that met the ground in the last surface step (`surface::resolve_surface`).
+    pub(crate) on_ground: Vec<bool>,
     pub(crate) water_strikes: Vec<(usize, f64)>,
     /// Each part's `buoyancy` scale and the water it displaces fully under, m^3 (`water::displacement_m3`).
     pub buoyancy: Vec<f64>,
@@ -623,6 +625,7 @@ impl Structure {
             self.wheel_queued_torque[j] = old.wheel_queued_torque[i];
             self.wheel_accepted_power[j] = old.wheel_accepted_power[i];
             self.in_water[j] = old.in_water[i];
+            self.on_ground[j] = old.on_ground[i];
             self.solar_angle_deg[j] = old.solar_angle_deg[i];
             self.water_drag[j] = old.water_drag[i];
             self.rcs_retained_delivery[j] = old.rcs_retained_delivery[i];
@@ -973,6 +976,7 @@ impl Structure {
             last_rcs_pressure_atm: 0.0,
             surface_loads: Vec::new(),
             in_water: vec![false; n],
+            on_ground: vec![false; n],
             water_strikes: Vec::new(),
             water_pending: vec![crate::water::PendingWater::default(); n],
             buoyancy: (0..n)
