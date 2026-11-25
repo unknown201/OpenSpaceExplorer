@@ -29,7 +29,7 @@ namespace OpenSpaceExplorer.Validation
             vessel = G.ViewController.GetActiveSimVessel();
             vessel.SetAutopilotEnableDisable(true);
             yield return new WaitForSeconds(5f);
-            Dump(dir, "deltav-start.txt", vessel.GetType().GetProperty("VesselDeltaV", Pub)?.GetValue(vessel), 2);
+            DumpDeltaV(dir, "deltav-start.txt", vessel);
             yield return shot("m00-orbit-flight");
 
             double ut = G.UniverseModel.UniverseTime;
@@ -52,7 +52,7 @@ namespace OpenSpaceExplorer.Validation
             if (map) { ToggleMap(dir, mark); yield return new WaitForSeconds(4f); }
             Texts(dir, "ui-short-flight.txt");
             yield return shot("m04-short-flight");
-            Dump(dir, "deltav-end.txt", vessel.GetType().GetProperty("VesselDeltaV", Pub)?.GetValue(vessel), 2);
+            DumpDeltaV(dir, "deltav-end.txt", vessel);
             mark("maneuver scenario done (small node " + (small != null) + ", short node " + (big != null) + ", map " + map + ")");
         }
 
@@ -96,10 +96,12 @@ namespace OpenSpaceExplorer.Validation
         {
             var m = Maneuvers(mark);
             var get = m?.GetType().GetMethods(Pub).FirstOrDefault(x => x.Name == "GetNodesForVessel" && x.GetParameters().Length == 1);
-            var list = get?.Invoke(m, new object[] { vessel.SimulationObject.GlobalId }) as IEnumerable;
+            IEnumerable list = null;
+            try { list = get?.Invoke(m, new object[] { vessel.SimulationObject.GlobalId }) as IEnumerable; }
+            catch (Exception e) { mark("GetNodesForVessel failed: " + (e.InnerException ?? e).Message); }
             var sb = new StringBuilder();
             int i = 0;
-            if (list != null) foreach (var n in list) { sb.AppendLine("# node " + i++); Props(sb, n, 1, "  "); }
+            if (list != null) foreach (var n in list) { if (i >= 8 || n == null) break; sb.AppendLine("# node " + i++); Props(sb, n, 0, "  "); }
             else sb.AppendLine("no GetNodesForVessel");
             File.WriteAllText(Path.Combine(dir, "out", file), sb.ToString());
             mark(file + ": " + i + " nodes");
@@ -127,6 +129,12 @@ namespace OpenSpaceExplorer.Validation
         // Every active TextMeshPro text on screen with its hierarchy path.
         static void Texts(string dir, string file)
         {
+            try { TextsUnsafe(dir, file); }
+            catch (Exception e) { File.WriteAllText(Path.Combine(dir, "out", file), "failed: " + e); }
+        }
+
+        static void TextsUnsafe(string dir, string file)
+        {
             var tmp = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("TMPro.TMP_Text")).FirstOrDefault(t => t != null);
             var sb = new StringBuilder();
             if (tmp == null) sb.AppendLine("no TMPro.TMP_Text");
@@ -144,29 +152,68 @@ namespace OpenSpaceExplorer.Validation
             File.WriteAllText(Path.Combine(dir, "out", file), sb.ToString());
         }
 
-        static void Dump(string dir, string file, object o, int depth)
+        // The vessel's delta-v by stage, read by name (a recursive walk of VesselDeltaV hung KSP2: some getters
+        // compute or loop): only these fields, each read on its own.
+        static readonly string[] TotalFields = { "TotalDeltaVActual", "TotalDeltaVVac", "TotalDeltaVASL", "TotalBurnTime", "TotalMass", "StartMass", "EndMass" };
+        static readonly string[] StageFields = { "Stage", "DeltaVActual", "DeltaVinVac", "DeltaVatASL", "StageBurnTime", "StartMass", "EndMass", "ThrustActual", "ThrustVac", "IspActual", "IspVac", "TWRActual" };
+
+        static void DumpDeltaV(string dir, string file, VesselComponent vessel)
         {
             var sb = new StringBuilder();
-            if (o == null) sb.AppendLine("null"); else Props(sb, o, depth, "");
+            object dv = Get(vessel, "VesselDeltaV");
+            if (dv == null) sb.AppendLine("no VesselDeltaV");
+            else
+            {
+                foreach (var f in TotalFields) Flat(sb, dv, f, "");
+                if (Get(dv, "StageInfo") is IEnumerable stages && !(stages is string))
+                {
+                    int i = 0;
+                    foreach (var st in stages)
+                    {
+                        if (i >= 12 || st == null) break;
+                        sb.AppendLine("stage[" + i++ + "]");
+                        foreach (var f in StageFields) Flat(sb, st, f, "  ");
+                    }
+                }
+                else sb.AppendLine("no StageInfo");
+            }
             File.WriteAllText(Path.Combine(dir, "out", file), sb.ToString());
         }
 
+        static object Get(object o, string name)
+        {
+            try { return o?.GetType().GetProperty(name, Pub)?.GetValue(o) ?? o?.GetType().GetField(name, Pub)?.GetValue(o); }
+            catch (Exception e) { return "<" + (e.InnerException ?? e).GetType().Name + ">"; }
+        }
+
+        // One field or property when it is a number, flag, enum, string or small struct (Vector3d): never walked.
+        static void Flat(StringBuilder sb, object o, string name, string indent)
+        {
+            var v = Get(o, name);
+            if (v == null) return;
+            var t = v.GetType();
+            if (v is string || t.IsPrimitive || t.IsEnum || t.IsValueType)
+            {
+                string text;
+                try { text = v is IFormattable f ? f.ToString(null, Inv) : v.ToString(); } catch (Exception e) { text = "<" + e.GetType().Name + ">"; }
+                sb.AppendLine(indent + name + " = " + text);
+            }
+        }
+
+        // A node's own fields: every simple public property and field, one level, no getters that return objects.
         static void Props(StringBuilder sb, object o, int depth, string indent)
         {
-            foreach (var p in o.GetType().GetProperties(Pub))
+            var t = o.GetType();
+            foreach (var p in t.GetProperties(Pub))
             {
                 if (p.GetIndexParameters().Length > 0) continue;
-                object v;
-                try { v = p.GetValue(o); } catch { continue; }
-                if (v == null || v is string || v.GetType().IsPrimitive || v.GetType().IsEnum || v.GetType().IsValueType)
-                    sb.AppendLine(indent + p.Name + " = " + Convert.ToString(v, Inv));
-                else if (v is IEnumerable list && depth > 0)
-                {
-                    int i = 0;
-                    foreach (var x in list) { if (i >= 12) break; sb.AppendLine(indent + p.Name + "[" + i++ + "]"); if (x != null) Props(sb, x, depth - 1, indent + "  "); }
-                }
-                else if (depth > 0 && v.GetType().Namespace?.StartsWith("KSP") == true) { sb.AppendLine(indent + p.Name + ":"); Props(sb, v, depth - 1, indent + "  "); }
-                else sb.AppendLine(indent + p.Name + " = " + v.GetType().Name);
+                var pt = p.PropertyType;
+                if (pt == typeof(string) || pt.IsPrimitive || pt.IsEnum || pt.IsValueType) Flat(sb, o, p.Name, indent);
+            }
+            foreach (var f in t.GetFields(Pub))
+            {
+                var ft = f.FieldType;
+                if (ft == typeof(string) || ft.IsPrimitive || ft.IsEnum || ft.IsValueType) Flat(sb, o, f.Name, indent);
             }
         }
     }
