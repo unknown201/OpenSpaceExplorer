@@ -21,7 +21,8 @@ namespace OpenSpaceExplorer.Validation
     //   land    Stock04_Jet (craft-jet.json) takes off from Runway_1, climbs to 25 m over the ground, throttle
     //           cut, and is flown down onto the runway (pitch held to sink at 1.5 m/s), gear down; 15 s rolling.
     //   belly   the same with the gear raised before the descent: it lands on its belly.
-    //   tail    Stock04_Jet rolls to 55 m/s and holds full pitch up for 6 s: the tail strikes the runway.
+    //   tail    Stock04_Jet rolls to 50 m/s and pulls full pitch up; the moment it leaves the runway the throttle
+//           is cut with the stick still back, so it stalls nose high and settles back onto its tail.
     //   stack   the drop stack (craft-drop-stack.json: pod, tanks, Swivel) set down upright on Runway_1 at 4 m/s.
     // Only inputs and action groups are used; physics is never modified.
     public static class GroundStrike
@@ -42,6 +43,14 @@ namespace OpenSpaceExplorer.Validation
             public Transform Frame;
             readonly List<ContactPoint> points = new List<ContactPoint>(16);
 
+            static bool Claims(PartBehavior owner, Collider col)
+            {
+                var m = typeof(PartBehavior).GetProperty("Colliders");
+                object v = m != null ? m.GetValue(owner) : typeof(PartBehavior).GetField("Colliders")?.GetValue(owner);
+                if (v is Collider[] arr) return Array.IndexOf(arr, col) >= 0;
+                return false;
+            }
+
             void OnCollisionEnter(Collision c) => Log("enter", c);
             void OnCollisionStay(Collision c) => Log("stay", c);
 
@@ -51,13 +60,22 @@ namespace OpenSpaceExplorer.Validation
                 double t = G.UniverseModel.UniverseTime - Start;
                 c.GetContacts(points);
                 var rel = c.relativeVelocity;
+                // which rigidbody took the contact, whether that body's part claims the collider (KSP2's
+                // HandleCollisionEnter ignores one it does not), and the vessel the part belongs to now
+                var body = c.contactCount > 0 && points.Count > 0 && points[0].thisCollider != null ? points[0].thisCollider.attachedRigidbody : null;
+                var owner = body != null ? body.GetComponent<PartBehavior>() : null;
+                string bodyName = body != null ? body.name + "#" + body.GetInstanceID().ToString(Inv) : "";
+                string ownerName = owner != null ? owner.Model?.Name ?? "" : "";
+                string vesselName = owner != null ? owner.Model?.PartOwner?.SimulationObject?.Vessel?.Name ?? "" : "";
+                string physics = owner != null ? owner.Model?.PhysicsMode.ToString() ?? "" : "";
                 foreach (var p in points)
                 {
                     var at = Frame.InverseTransformPoint(p.point);
+                    string claimed = owner != null && p.thisCollider != null ? (Claims(owner, p.thisCollider) ? "1" : "0") : "";
                     W.WriteLine(string.Join(",", new[] { F(t), kind, Index.ToString(Inv), Part, p.thisCollider != null ? p.thisCollider.name : "",
                         p.otherCollider != null ? p.otherCollider.name : "", p.otherCollider != null ? p.otherCollider.gameObject.layer.ToString(Inv) : "",
                         F(at.x), F(at.y), F(at.z), F(p.normal.x), F(p.normal.y), F(p.normal.z), F(p.separation),
-                        F(c.impulse.magnitude), F(rel.magnitude), F(Vector3.Dot(rel, p.normal)) }));
+                        F(c.impulse.magnitude), F(rel.magnitude), F(Vector3.Dot(rel, p.normal)), bodyName, ownerName, claimed, vesselName, physics }));
                 }
             }
         }
@@ -88,7 +106,7 @@ namespace OpenSpaceExplorer.Validation
             using (var w = new StreamWriter(Path.Combine(dir, "out", "colliders.csv"), false))
             using (var pw = new StreamWriter(Path.Combine(dir, "out", "collider-points.csv"), false))
             {
-                w.WriteLine("index,part,collider,type,enabled,trigger,layer,convex,cx,cy,cz,sx,sy,sz,radius,height,direction,suspension,vertices");
+                w.WriteLine("index,part,collider,type,enabled,trigger,layer,convex,cx,cy,cz,sx,sy,sz,radius,height,direction,suspension,vertices,attached_body,physics_mode");
                 pw.WriteLine("index,part,collider,x,y,z");
                 foreach (var (i, part, frame) in Parts(v))
                 {
@@ -124,7 +142,8 @@ namespace OpenSpaceExplorer.Validation
                             }
                         }
                         w.WriteLine(string.Join(",", new[] { i.ToString(Inv), part.Name, col.name, type, col.enabled ? "1" : "0", col.isTrigger ? "1" : "0", col.gameObject.layer.ToString(Inv), convex,
-                            F(centre.x), F(centre.y), F(centre.z), F(size.x), F(size.y), F(size.z), radius, height, direction, suspension, verts }));
+                            F(centre.x), F(centre.y), F(centre.z), F(size.x), F(size.y), F(size.z), radius, height, direction, suspension, verts,
+                            col.attachedRigidbody != null ? col.attachedRigidbody.name + "#" + col.attachedRigidbody.GetInstanceID().ToString(Inv) : "", part.PhysicsMode.ToString() }));
                         // the collider's points in the part's frame (collider-local -> world -> part)
                         foreach (var q in pts)
                         {
@@ -167,7 +186,7 @@ namespace OpenSpaceExplorer.Validation
             foreach (var (i, part, _) in Parts(vessel)) names[i] = part.Name;
             ContactLog.Start = G.UniverseModel.UniverseTime;
             ContactLog.W = new StreamWriter(Path.Combine(dir, "out", "strike-contacts.csv"), false);
-            ContactLog.W.WriteLine("t,kind,index,part,collider,other,other_layer,px,py,pz,nx,ny,nz,separation,impulse,rel_speed,rel_normal");
+            ContactLog.W.WriteLine("t,kind,index,part,collider,other,other_layer,px,py,pz,nx,ny,nz,separation,impulse,rel_speed,rel_normal,body,body_part,claimed,vessel,physics_mode");
             Attach(vessel);
             IEnumerator Log()
             {
@@ -230,18 +249,31 @@ namespace OpenSpaceExplorer.Validation
                 input.OverrideInputMaxThrottle(true);
                 vessel.ActivateNextStage();
                 Phase("roll");
-                double rotateAt = mode == "tail" ? 55 : 60;
+                double rotateAt = mode == "tail" ? 50 : 60;
                 t0 = 0;
                 while (t0 < 90 && (G.ViewController.GetActiveSimVessel()?.SrfSpeedMagnitude ?? 0) < rotateAt) { t0 += Time.deltaTime; yield return null; }
                 Phase("rotate");
                 InputHolder.Pitch = 1f;
                 if (mode == "tail")
                 {
-                    yield return new WaitForSeconds(6f);
-                    InputHolder.Pitch = null;
+                    // full pitch up until it leaves the runway, then the throttle cut with the stick still back:
+                    // it stalls nose high and settles back tail first
+                    t0 = 0;
+                    while (t0 < 15 && (G.ViewController.GetActiveSimVessel()?.Situation ?? VesselSituations.Landed) != VesselSituations.Flying) { t0 += Time.deltaTime; yield return null; }
                     input.OverrideInputThrottleCutoff(true);
+                    Phase("stall");
+                    t0 = 0;
+                    bool flew = true;
+                    while (t0 < 20)
+                    {
+                        var sit = G.ViewController.GetActiveSimVessel()?.Situation ?? VesselSituations.Landed;
+                        if (flew && sit != VesselSituations.Flying && t0 > 0.5f) { Phase("struck"); flew = false; }
+                        t0 += Time.deltaTime; yield return null;
+                        if (!flew && t0 > 3) break;
+                    }
+                    InputHolder.Pitch = null;
                     Phase("after");
-                    yield return new WaitForSeconds(10f);
+                    yield return new WaitForSeconds(8f);
                 }
                 else
                 {

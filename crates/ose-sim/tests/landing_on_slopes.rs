@@ -18,17 +18,20 @@ fn data() -> (
 }
 
 struct Landing {
-    /// deepest any part's box corner went under the ground after the first second down, m
+    /// deepest any part's model (or box) went under the ground after the first second down, m
     sunk_m: f64,
     /// angle of the craft's axis from the local vertical at the end, degrees
     tilt_deg: f64,
     landed: bool,
     tipped: bool,
+    /// how far it went along the ground from where it came down, m
+    moved_m: f64,
 }
 
 /// `json` (a parity-pilot drop craft) set down `drop_m` above ground sloping `slope_deg` to the east (a 1000 m
-/// high ramp round the equator at 90 degrees east), left for 10 s.
-fn land(json: &str, slope_deg: f64, drop_m: f64) -> Landing {
+/// high ramp round the equator at 90 degrees east), left for 10 s: upright, or `lying` on its side with its axis
+/// pointing north, along the slope's contour, and turned `roll` degrees about it.
+fn land(json: &str, slope_deg: f64, drop_m: f64, lying: Option<f64>) -> Landing {
     let (bodies, defs, res) = data();
     let mut kerbin = bodies.into_iter().find(|b| b.id == "Kerbin").unwrap();
     kerbin.parent = None;
@@ -69,6 +72,37 @@ fn land(json: &str, slope_deg: f64, drop_m: f64) -> Landing {
     let ground = surface::solid_radius(&b, Some(&terrain), p.r, u.ut());
     p.r = up * (ground + p.ground_clearance_m + drop_m);
     p.facing = up;
+    if let Some(roll) = lying {
+        // on its side, its lowest model point `drop_m` over the ground
+        let north = DVec3::new(0.0, 0.0, 1.0);
+        let east = north.cross(up);
+        p.facing = north;
+        let roll = roll.to_radians();
+        flight::set_vessel_top(&mut p, up * roll.cos() + east * roll.sin());
+        let st = u.structure(e).unwrap();
+        let f = flight::vessel_basis(&p);
+        let centre = st.mass_properties().centre_m;
+        let lowest = (0..st.rigid.len())
+            .filter(|&i| st.rigid.present[i])
+            .flat_map(|i| st.ground_points(i))
+            .map(|q| {
+                let q = q - centre;
+                (f.0 * q.x + f.1 * q.y + f.2 * q.z).dot(up)
+            })
+            .fold(f64::INFINITY, f64::min);
+        p.r = up * (ground + 2.0 - lowest);
+        let below = (0..st.rigid.len())
+            .filter(|&i| st.rigid.present[i])
+            .flat_map(|i| st.ground_points(i))
+            .map(|q| {
+                let q = q - centre;
+                let at = p.r + f.0 * q.x + f.1 * q.y + f.2 * q.z;
+                at.length() - surface::solid_radius(&b, Some(&terrain), at, u.ut())
+            })
+            .fold(f64::INFINITY, f64::min);
+        p.r = p.r - up * (below - drop_m);
+    }
+    let (start, t0) = (p.r, u.ut());
     p.v = DVec3::new(0.0, 0.0, std::f64::consts::TAU / b.rotation_period_s).cross(p.r);
     p.landed = false;
     p.attitude = flight::Attitude::Free;
@@ -85,14 +119,8 @@ fn land(json: &str, slope_deg: f64, drop_m: f64) -> Landing {
         let f = flight::vessel_basis(p);
         let centre = st.mass_properties().centre_m;
         for i in (0..st.rigid.len()).filter(|&i| st.rigid.present[i]) {
-            let (c, h) = st.part_box(i);
-            for k in 0..8 {
-                let q = c - centre
-                    + DVec3::new(
-                        if k & 1 == 0 { -h.x } else { h.x },
-                        if k & 2 == 0 { -h.y } else { h.y },
-                        if k & 4 == 0 { -h.z } else { h.z },
-                    );
+            for q in st.ground_points(i) {
+                let q = q - centre;
                 let at = p.r + f.0 * q.x + f.1 * q.y + f.2 * q.z;
                 sunk_m =
                     sunk_m.max(surface::solid_radius(&b, Some(&terrain), at, u.ut()) - at.length());
@@ -110,6 +138,16 @@ fn land(json: &str, slope_deg: f64, drop_m: f64) -> Landing {
             .to_degrees(),
         landed: p.landed,
         tipped: p.tipped,
+        moved_m: {
+            // where the ground under its start point turned to
+            let a = std::f64::consts::TAU / b.rotation_period_s * (u.ut() - t0);
+            let s = DVec3::new(
+                start.x * a.cos() - start.y * a.sin(),
+                start.x * a.sin() + start.y * a.cos(),
+                start.z,
+            );
+            (p.r - s).length()
+        },
     }
 }
 
@@ -119,7 +157,7 @@ const STACK: &str = include_str!("../../../tools/ksp2-parity-pilot/craft-drop-st
 #[test]
 fn a_squat_craft_set_down_on_a_slope_rests_flush_with_it_and_nothing_sinks() {
     for slope in [5.0, 15.0, 30.0] {
-        let l = land(PODTANK, slope, 0.05);
+        let l = land(PODTANK, slope, 0.05, None);
         println!(
             "pod and tank on {slope} degrees: sunk {:.3} m, tilt {:.1}",
             l.sunk_m, l.tilt_deg
@@ -138,7 +176,7 @@ fn a_squat_craft_set_down_on_a_slope_rests_flush_with_it_and_nothing_sinks() {
 fn a_rocket_stands_on_a_gentle_slope_and_falls_over_on_a_steeper_one() {
     // the Swivel stack's centre of mass is 7.2 m over its bell's 0.38 m rim: KSP2's stood on 2.74 degrees and
     // fell over on 3.38 (reference\ksp2-slope on AI-House, `slope stack 1 <degrees>`)
-    let gentle = land(STACK, 2.74, 0.05);
+    let gentle = land(STACK, 2.74, 0.05, None);
     assert!(gentle.landed && !gentle.tipped, "2.74 degrees: stands");
     assert!(
         gentle.sunk_m < 0.02,
@@ -150,11 +188,32 @@ fn a_rocket_stands_on_a_gentle_slope_and_falls_over_on_a_steeper_one() {
         "flush, tilt {:.1}",
         gentle.tilt_deg
     );
-    let steep = land(STACK, 3.38, 0.05);
+    let steep = land(STACK, 3.38, 0.05, None);
     assert!(steep.tipped, "3.38 degrees: falls over");
     assert!(
         steep.tilt_deg > 60.0,
         "lying down, tilt {:.1}",
         steep.tilt_deg
     );
+}
+
+#[test]
+fn a_stack_lying_across_a_hillside_rolls_on_down_it_and_lies_still_on_the_flat() {
+    // it meets the ground on its parts' model shapes (round tanks, the bell's rim), not on their boxes, and
+    // comes to rest only with its centre of mass over what it lies on
+    let flat = land(STACK, 0.0, 0.05, Some(0.0));
+    println!("flat: moved {:.2} m, sunk {:.3}", flat.moved_m, flat.sunk_m);
+    assert!(flat.landed && flat.moved_m < 1.0, "lies still on the flat");
+    assert!(flat.sunk_m < 0.02, "sunk {:.3}", flat.sunk_m);
+    let hill = land(STACK, 10.0, 0.05, Some(0.0));
+    println!(
+        "10 degrees: moved {:.2} m, sunk {:.3}",
+        hill.moved_m, hill.sunk_m
+    );
+    assert!(
+        hill.moved_m > 3.0,
+        "rolls downhill, moved {:.2} m",
+        hill.moved_m
+    );
+    assert!(hill.sunk_m < 0.05, "sunk {:.3}", hill.sunk_m);
 }

@@ -18,7 +18,7 @@
        reference\ksp2-strike-<mode>:
          strike land   Stock04_Jet takes off from Runway_1 and is flown back down onto it, gear down
          strike belly  the same with the gear raised: a belly landing
-         strike tail   Stock04_Jet holds full pitch up from 55 m/s: a tail strike on the runway
+         strike tail   Stock04_Jet pulls up at 50 m/s, throttle cut as it lifts off: it settles back onto its tail
          strike stack  pod, tanks and Swivel set down upright on Runway_1 at 4 m/s
        Each lists every part's colliders (colliders.csv, collider-points.csv) and logs every contact a part
        makes with the ground (strike-contacts.csv), the craft (strike-trace.csv) and lost parts (strike-parts.csv).
@@ -30,7 +30,9 @@
 param(
     [string]$Ksp2 = "C:\Program Files (x86)\Steam\steamapps\common\Kerbal Space Program 2",
     [string[]]$Scenarios = @("strike tail", "strike belly", "strike land", "strike stack"),
-    [int]$TimeoutMinutes = 20
+    [int]$TimeoutMinutes = 20,
+    # appended to each output folder, so a rerun keeps the earlier captures
+    [string]$Suffix = ""
 )
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -100,7 +102,7 @@ try {
             Stop-Process -Name "KSP2_x64" -Force
             Start-Sleep -Seconds 5
         }
-        $dest = Join-Path $repo ("reference\" + $outNames[$s])
+        $dest = Join-Path $repo ("reference\" + $outNames[$s] + $Suffix)
         if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
         if (Test-Path $out) { Copy-Item -Recurse -Force $out $dest }
         $ok = Test-Path (Join-Path $dest "done.txt")

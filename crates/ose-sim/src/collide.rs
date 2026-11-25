@@ -54,6 +54,24 @@ impl ModelHull {
     }
 }
 
+/// A shaped part's hull from its own baked meshes (`points`: part frame, Unity axes), as it sits in a craft: a
+/// procedural wing collides on the colliders baked with its shape (`col_wing_*_staticCollision`), not on the
+/// authored start shape.
+pub fn model_hull_from_points(
+    points: &[[f64; 3]],
+    turn: ose_data::craft::Quat,
+) -> Option<ModelHull> {
+    let pts: Vec<Vector> = points
+        .iter()
+        .map(|p| Vector::new(p[0], p[1], -p[2]))
+        .collect();
+    let hull = ConvexPolyhedron::from_convex_hull(&pts)?;
+    Some(ModelHull {
+        shape: Arc::new(hull),
+        turn: crate::rigid::quat_to_vessel(turn),
+    })
+}
+
 /// Part `id`'s model hull as it sits in a craft (`turn`: its authored local rotation).
 pub fn model_hull(id: &str, turn: ose_data::craft::Quat) -> Option<ModelHull> {
     model_hulls().get(id).map(|shape| ModelHull {
