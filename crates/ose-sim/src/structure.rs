@@ -4828,6 +4828,46 @@ impl Structure {
         Some(self.split_off(x, y, z))
     }
 
+    /// The root struck the ground harder than it takes (with whatever else broke in the same blow): those parts
+    /// go, and everything they held comes apart into pieces, one per part tree left, each carrying on with its
+    /// own motion. KSP2 destroys just the struck root (`PartBehavior.HandlePartDestruction`) and its children
+    /// become vessels of their own: its Stock04_Jet nosing into the runway lost its cockpit, nose gear and front
+    /// tank, and the other nine parts slid on together (reference\ksp2-strike-tail-run2). Offsets and
+    /// velocities are from the craft's centre of mass as it was.
+    pub fn root_struck(&mut self, parts: &[usize], p: &Powered) -> Vec<Piece> {
+        let all: Vec<usize> = (0..self.rigid.len())
+            .filter(|&i| self.rigid.present[i])
+            .collect();
+        let (all_c, all_v) = self.rigid.centre_of(&all);
+        self.rigid.remove_parts(parts);
+        self.net.remove_parts(parts);
+        self.airflow_last_tick = None;
+        let (x, y, z) = crate::flight::vessel_basis(p);
+        let to_inertial = |v: DVec3| x * v.x + y * v.y + z * v.z;
+        let mut pieces = Vec::new();
+        for g in self.rigid.groups() {
+            if g.iter().all(|&i| !self.rigid.present[i]) {
+                continue;
+            }
+            let (c, v) = self.rigid.centre_of(&g);
+            let mass = self.net.mass_of(&g);
+            let dry: f64 = g.iter().map(|&i| self.net.dry_t[i]).sum();
+            pieces.push(Piece {
+                mass_t: mass,
+                propellant_t: mass - dry,
+                offset_m: to_inertial(c - all_c),
+                dv_mps: to_inertial(v - all_v),
+                spin: DVec3::ZERO,
+                parts: g,
+            });
+        }
+        for piece in &pieces {
+            self.rigid.remove_parts(&piece.parts);
+            self.net.remove_parts(&piece.parts);
+        }
+        pieces
+    }
+
     /// Destroy parts that burned up: they leave the structure, and whatever only they held on breaks off
     /// as pieces. `None` when the root burned (the vessel is lost).
     pub fn burn_up(&mut self, parts: &[usize], facing: DVec3) -> Option<Vec<Piece>> {
