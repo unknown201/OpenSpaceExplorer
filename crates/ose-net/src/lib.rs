@@ -307,14 +307,6 @@ pub enum ClientMessage {
         y: f32,
         z: f32,
     },
-    /// The player's camera while flying a Kerbal on EVA (protocol 82): its forward and up, unit vectors in
-    /// the reference body's inertial frame (the same frame as `FlightReadout::facing`), `None` when it is
-    /// not to be used. The jetpack pushes along the camera's axes and the Kerbal turns to face along it, as
-    /// KSP2's `JetpackKerbalCharacterStateHandler.UpdateInputCameraFeatures`. No reply.
-    EvaCamera {
-        vessel: u64,
-        camera: Option<CameraAxes>,
-    },
     /// Rotation input, each -1..1 and held until changed: pitch turns
     /// the nose toward craft +Z (the navball's top), yaw toward craft +X, roll clockwise about the nose. The
     /// reaction wheels (and RCS with its group on) set how fast the spin builds. SAS controls turn rate
@@ -529,6 +521,15 @@ pub enum ClientMessage {
     RouteStayed {
         id: u64,
         what: StayedRun,
+    },
+    /// Kept last so the other variants keep their postcard discriminants (tests match on them).
+    /// The player's camera while flying a Kerbal on EVA (protocol 82): its forward and up, unit vectors in
+    /// the reference body's inertial frame (the same frame as `FlightReadout::facing`), `None` when it is
+    /// not to be used. The jetpack pushes along the camera's axes and the Kerbal turns to face along it, as
+    /// KSP2's `JetpackKerbalCharacterStateHandler.UpdateInputCameraFeatures`. No reply.
+    EvaCamera {
+        vessel: u64,
+        camera: Option<CameraAxes>,
     },
 }
 

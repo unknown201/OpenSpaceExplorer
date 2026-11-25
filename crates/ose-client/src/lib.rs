@@ -12202,9 +12202,6 @@ impl App {
         self.send_controls();
     }
 
-    /// Where the vessel points now as pitch above the horizon and compass heading, from the flight view's
-    /// navball frame (None before the first flight frame).
-    /// The compass heading the flight camera looks along, once it has drawn (degrees).
     /// The camera's forward and up in the flown vessel's inertial frame (the frame of its readout's
     /// `facing`), from the last rendered frame.
     fn eva_camera_now(&self) -> Option<EvaCamera> {
@@ -12250,6 +12247,9 @@ impl App {
         }
     }
 
+    /// Where the vessel points now as pitch above the horizon and compass heading, from the flight view's
+    /// navball frame (None before the first flight frame).
+    /// The compass heading the flight camera looks along, once it has drawn (degrees).
     fn camera_look_heading(&self) -> Option<f64> {
         #[cfg(target_arch = "wasm32")]
         return self.flight3d.look_heading_deg;
