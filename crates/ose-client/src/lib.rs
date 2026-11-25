@@ -449,11 +449,11 @@ struct App {
     toasts: hud::Toasts,
     /// The flown vessel as last seen, for event toasts (signal, charge, sphere of influence, orbit, landing).
     flight_watch: std::cell::RefCell<Option<hud::FlightWatch>>,
-    /// G-force meter: (game time, velocity relative to the body, smoothed g) as last sampled.
-    gmeter: std::cell::RefCell<Option<(f64, ose_math::DVec3, f64)>>,
     /// Your other vessels' reference bodies as last seen (the original's inactive-vessel SOI notices).
     soi_seen: std::cell::RefCell<std::collections::HashMap<u64, u16>>,
     crash_report_due: std::cell::Cell<Option<(u64, f64)>>,
+    /// When the open flight report's records were last refreshed, ms.
+    report_refresh_ms: std::cell::Cell<f64>,
     /// The flown vessel's records for the flight report.
     flight_records: std::cell::RefCell<Option<hud::FlightRecords>>,
     /// The records of the other vessels flown this session (a Kerbal's EVA, the craft it left), by vessel.
@@ -1171,9 +1171,9 @@ pub fn start() -> Result<(), JsValue> {
         apsis_ut: [f64::NAN; 2],
         toasts: hud::Toasts::default(),
         flight_watch: std::cell::RefCell::new(None),
-        gmeter: Default::default(),
         soi_seen: Default::default(),
         crash_report_due: std::cell::Cell::new(None),
+        report_refresh_ms: std::cell::Cell::new(0.0),
         flight_records: std::cell::RefCell::new(None),
         flight_records_shelf: Default::default(),
         staged: Default::default(),
@@ -2633,7 +2633,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                     e.class_list().remove_1("open").ok();
                 }
             } else {
-                app.show_flight_report("In flight", None, None);
+                app.show_flight_report(hud::FlightOutcome::InFlight, None, None);
             }
         }),
     )?;
@@ -7484,7 +7484,7 @@ impl App {
                     .retain(|c| !reports.iter().any(|r| r.key == c.key));
                 self.render_inventory();
                 if recovered {
-                    self.show_flight_report("Recovered", Some(earned), None);
+                    self.show_flight_report(hud::FlightOutcome::Recovered, Some(earned), None);
                     self.tracking_open = false;
                     self.end_flight();
                     self.open_ksc();
@@ -9166,17 +9166,80 @@ impl App {
         self.render_vab();
     }
 
-    /// The flight report window for the flight's records, how it ended and the science recovered.
-    fn show_flight_report(&self, ended: &str, science: Option<f64>, lost: Option<Option<&str>>) {
-        let Some(r) = self.flight_records.borrow().clone() else {
-            return;
+    /// The flight report window (KSP2's `FlightReportUIManager`) for the flight's travel log and records, how it
+    /// stands and the science recovered. A recovery or a loss logs it and picks one of KSP2's statuses.
+    fn show_flight_report(
+        &self,
+        outcome: hud::FlightOutcome,
+        science: Option<f64>,
+        lost: Option<Option<&str>>,
+    ) {
+        let ut = self.time.ut_at(now_ms());
+        let pick = |list: &[(&str, &str)]| {
+            let i = ((js_sys::Math::random() * list.len() as f64) as usize).min(list.len() - 1);
+            self.tr(list[i].0, list[i].1)
+        };
+        let status = match outcome {
+            hud::FlightOutcome::InFlight => {
+                self.tr("Flight/FlightReport/InFlightStatus", "Flight in progress")
+            }
+            hud::FlightOutcome::Recovered => pick(&hud::SUCCESS_STATUSES),
+            hud::FlightOutcome::Lost => pick(&hud::FAILURE_STATUSES),
+        };
+        let eva = self.flown_eva();
+        let r = {
+            let mut rec = self.flight_records.borrow_mut();
+            let Some(r) = rec.as_mut() else {
+                return;
+            };
+            match outcome {
+                hud::FlightOutcome::Recovered => r.event(ut, "Vessel recovered".into(), true),
+                hud::FlightOutcome::Lost if eva => {
+                    r.event(ut, format!("{} Missing In Action", r.name), false)
+                }
+                hud::FlightOutcome::Lost => r.event(ut, "Vessel destroyed".into(), false),
+                hud::FlightOutcome::InFlight => {}
+            }
+            r.clone()
         };
         let Some(el) = self.doc.get_element_by_id("flight-report") else {
             return;
         };
-        let ut = self.time.ut_at(now_ms());
-        el.set_inner_html(&hud::flight_report_html(&r, ended, ut, science, lost));
+        el.set_inner_html(&hud::flight_report_html(
+            &r, outcome, &status, ut, science, lost,
+        ));
         el.class_list().add_1("open").ok();
+    }
+
+    /// The vessel flown is a Kerbal on EVA.
+    fn flown_eva(&self) -> bool {
+        let Some(id) = self.flight_records.borrow().as_ref().map(|r| r.vessel) else {
+            return false;
+        };
+        self.scene.as_ref().is_some_and(|sc| {
+            sc.vessels
+                .iter()
+                .any(|v| v.id == id && v.flight.as_ref().is_some_and(|f| f.eva))
+        })
+    }
+
+    /// An open flight report's records and log, as they stand now.
+    fn refresh_flight_report(&self, ut: f64) {
+        let Some(el) = self.doc.get_element_by_id("flight-report") else {
+            return;
+        };
+        if !el.class_list().contains("open") {
+            return;
+        }
+        let Some(r) = self.flight_records.borrow().clone() else {
+            return;
+        };
+        if let Some(t) = self.doc.get_element_by_id("fr-records") {
+            t.set_inner_html(&hud::flight_records_html(&r, ut));
+        }
+        if let Some(l) = self.doc.get_element_by_id("fr-log") {
+            l.set_inner_html(&hud::flight_log_html(&r));
+        }
     }
 
     /// Fill the delta-v tool's body list: Kerbin at sea level, then every body with a surface, in vacuum.
@@ -14013,16 +14076,46 @@ impl App {
                 if let Some(old) = rec.take() {
                     shelf.insert(old.vessel, old);
                 }
-                *rec = Some(shelf.remove(&id).unwrap_or_else(|| hud::FlightRecords {
-                    vessel: id,
-                    name: v.name.clone(),
-                    launch_ut,
-                    ..Default::default()
-                }));
+                *rec = Some(
+                    shelf
+                        .remove(&id)
+                        .unwrap_or_else(|| hud::FlightRecords::new(id, &v.name, launch_ut)),
+                );
             }
             if let (Some(r), Some(b)) = (rec.as_mut(), body) {
-                r.note(f.altitude_m, f.surface_speed_mps.max(0.0), &b.id);
+                if r.launch_ut <= 0.0 && launch_ut > 0.0 {
+                    r.launch_ut = launch_ut;
+                }
+                // height above the ground or the sea under the craft (KSP2's `AltitudeFromSurface`)
+                #[cfg(target_arch = "wasm32")]
+                let surface = self
+                    .flight3d
+                    .agl_m
+                    .map(|h| h.min(f.altitude_m))
+                    .unwrap_or(f.altitude_m);
+                #[cfg(not(target_arch = "wasm32"))]
+                let surface = f.altitude_m;
+                let landed = matches!(
+                    f.situation,
+                    ose_net::FlightSituation::Landed | ose_net::FlightSituation::Splashed
+                );
+                let speed = f.surface_speed_mps.max(0.0);
+                r.note(&hud::RecordSample {
+                    ut,
+                    altitude_m: surface,
+                    speed_mps: speed,
+                    g_force: f.g_force,
+                    landed_or_splashed: landed,
+                    at_rest: landed && speed * speed < 0.1,
+                    body: &b.id,
+                    crew: f.crew.iter().map(|c| c.1.clone()).collect(),
+                });
             }
+        }
+        // KSP2 refreshes an open report's records and log (`_recordsUpdateRate`, 0.9 s).
+        if now_ms() - self.report_refresh_ms.get() > 900.0 {
+            self.report_refresh_ms.set(now_ms());
+            self.refresh_flight_report(ut);
         }
         if f.situation == ose_net::FlightSituation::Crashed
             && self.flight_watch.borrow().as_ref().is_some_and(|w| {
@@ -14046,7 +14139,7 @@ impl App {
                 } else {
                     None
                 };
-                self.show_flight_report("Vessel Destroyed", None, Some(revert_off));
+                self.show_flight_report(hud::FlightOutcome::Lost, None, Some(revert_off));
             }
         }
         // Event toasts from what changed since the last frame.
@@ -14575,47 +14668,14 @@ impl App {
     }
 
     /// Refresh the flight HUD from the vessel's readout.
-    /// VESSEL-RESOURCES: the G-force the crew feels (the change in velocity against the body, less gravity,
-    /// smoothed) and charge, monopropellant and ablator.
-    fn update_vessel_resources(&self, v: &ose_net::VesselState, f: &ose_net::FlightReadout) {
-        let Some(scene) = &self.scene else { return };
-        let rb = v.reference_body as usize;
-        let (Some(body), Some(snap)) = (scene.bodies.get(rb), scene.snapshot.get(rb)) else {
-            return;
+    /// VESSEL-RESOURCES: the G-force the crew feels (the server works it out as KSP2's `geeForce`: the change
+    /// in velocity over the last steps less gravity) and charge, monopropellant and ablator.
+    fn update_vessel_resources(&self, _v: &ose_net::VesselState, f: &ose_net::FlightReadout) {
+        let g = if f.g_force.is_finite() {
+            f.g_force
+        } else {
+            0.0
         };
-        let ut = self.time.ut_at(now_ms());
-        let rel_v = v.velocity_mps - snap.velocity_mps;
-        let r = v.position_m - snap.position_m;
-        let mut meter = self.gmeter.borrow_mut();
-        let g = match *meter {
-            // A new state from the server (the velocity moved): the acceleration since the last one.
-            Some((t0, v0, g0)) if rel_v != v0 && ut > t0 + 1e-3 => {
-                let a = (rel_v - v0) * (1.0 / (ut - t0));
-                let grav = -r * (body.mu / r.length().powi(3).max(1.0));
-                let felt = (a - grav).length() / 9.80665;
-                let g = if felt.is_finite() {
-                    g0 + (felt - g0) * 0.3
-                } else {
-                    g0
-                };
-                *meter = Some((ut, rel_v, g));
-                g
-            }
-            Some((_, _, g0)) => g0,
-            None => {
-                *meter = Some((
-                    ut,
-                    rel_v,
-                    if f.situation == ose_net::FlightSituation::Landed {
-                        1.0
-                    } else {
-                        0.0
-                    },
-                ));
-                return;
-            }
-        };
-        drop(meter);
         set_text(&self.doc, "fh-g-text", &format!("{g:.1} g"));
         if let Some(i) = self
             .doc
