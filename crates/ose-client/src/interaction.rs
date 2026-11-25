@@ -88,6 +88,26 @@ pub fn throttle_preset(full: bool) -> f64 {
     }
 }
 
+/// KSP2's on-rails time warp for the flown vessel (`TimeWarp.IsWarping && !IsPhysicsTimeWarp`). Physics warp
+/// (`GetMaxRateIndexInternal`) only exists up to 4x, inside the atmosphere or on the ground while moving; a
+/// craft at rest on the ground (surface speed squared under 0.1) or anything above the air warps on rails.
+/// On rails KSP2's `FlightInputHandler` locks the throttle keys (`VesselThrottleLockedDueToTimewarpingMessage`),
+/// turns X into "stop time warp" and blocks staging (`ActionBlockedByTimeWarpMessage`).
+pub fn rails_warp(warp: u32, situation: ose_net::FlightSituation, surface_speed_mps: f64) -> bool {
+    use ose_net::FlightSituation as S;
+    if warp <= 1 {
+        return false;
+    }
+    if warp > 4 {
+        return true;
+    }
+    match situation {
+        S::Flying => false,
+        S::Landed | S::Splashed => surface_speed_mps * surface_speed_mps < 0.1,
+        _ => true,
+    }
+}
+
 /// A camera drag whose mouseup never reached the page: a mouse move reports no button held (`MouseEvent.buttons`)
 /// while a drag is still open. The button was let go outside the window or while it lost focus.
 pub fn drag_orphaned(buttons: u16, dragging: bool) -> bool {
@@ -97,6 +117,21 @@ pub fn drag_orphaned(buttons: u16, dragging: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warp_is_on_rails_outside_physics_warp() {
+        use ose_net::FlightSituation as S;
+        assert!(!rails_warp(1, S::Orbit, 0.0));
+        // 2x-4x in the air or rolling on the ground is physics warp: the throttle still works
+        assert!(!rails_warp(4, S::Flying, 300.0));
+        assert!(!rails_warp(2, S::Landed, 5.0));
+        // at rest on the ground, or above the air, the same rates run on rails
+        assert!(rails_warp(2, S::Landed, 0.1));
+        assert!(rails_warp(2, S::Orbit, 2200.0));
+        assert!(rails_warp(4, S::SubOrbital, 900.0));
+        // past 4x there is only rails warp
+        assert!(rails_warp(10, S::Flying, 300.0));
+    }
 
     #[test]
     fn wheel_notches_follow_the_dom_modes() {

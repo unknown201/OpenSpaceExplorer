@@ -136,7 +136,8 @@ pub fn render_info(r: &Row) -> String {
          <dt>Apoapsis</dt><dd>{ap}</dd><dt>Periapsis</dt><dd>{pe}</dd></dl>\
          <div class=\"ts-actions\"><button data-ose=\"ts-focus\" data-ose-ts-focus=\"{id}\">Focus</button>\
          <button data-ose=\"ts-fly\" data-ose-ts-fly=\"{id}\"{fly}>Fly</button>\
-         <button data-ose=\"ts-recover\" data-ose-ts-recover=\"{id}\"{rec}>Recover</button></div>",
+         <button data-ose=\"ts-recover\" data-ose-ts-recover=\"{id}\"{rec}>Recover</button>\
+         <button data-ose=\"ts-destroy\" data-ose-ts-destroy=\"{id}\"{fly}>Destroy</button></div>",
         name = esc(&r.name),
         owner = if r.mine {
             "Your vessel".to_string()
