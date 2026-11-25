@@ -32,6 +32,8 @@ test("a lost vessel's report offers the reverts and Revert to Launch flies again
   const hints = page.getByRole("button", { name: "No more hints" });
   if (await hints.isVisible()) await hints.click();
   await page.waitForTimeout(3000);
+  // Standing on the pad the crew feels the ground holding them up: about 1 g (KSP2's geeForce).
+  await expect(page.locator("#fh-g-text")).toHaveText(/^(0\.9|1\.0) g$/);
   const start = Number(await flight.getAttribute("data-ose-altitude"));
   await page.locator('[data-ose="flight-throttle-full"]').click();
   await page.locator('[data-ose="flight-stage"]').click();
@@ -54,6 +56,12 @@ test("a lost vessel's report offers the reverts and Revert to Launch flies again
     "KSC",
     "Continue",
   ]);
+  // KSP2's report: a failure status in red, the travel log and the seven records.
+  await expect(report.locator("#fr-status")).toHaveClass(/bad/);
+  await expect(report.locator("#fr-log")).toContainText("Vessel launched");
+  await expect(report.locator("#fr-log")).toContainText("Vessel destroyed");
+  await expect(report.locator("#fr-records tr")).toHaveCount(7);
+  await expect(report.locator("#fr-records")).toContainText("Highest G-Force Experienced:");
   await expect(report.locator("#fr-revert-launch")).toBeEnabled();
   await report.locator("#fr-revert-launch").click();
   await expect(page.locator("#flight-report")).not.toHaveClass(/open/);

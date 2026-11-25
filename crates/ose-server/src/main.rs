@@ -1510,6 +1510,7 @@ fn flight_readout(
             })
             .unwrap_or_default(),
         jet: p.jet.is_some(),
+        g_force: p.gee.g,
         lights: p.groups.lights,
         rcs: p.groups.rcs,
         abort: p.groups.abort,

@@ -2246,6 +2246,8 @@ impl Universe {
                     .insert(p);
                 continue;
             }
+            // where it was going before this step, for the g-force after it
+            let (gee_v0, gee_r0) = (p.v, p.r);
             // under power the planned burns are flown by hand: once the next one's time comes, the one
             // before is done
             if self
@@ -2703,6 +2705,13 @@ impl Universe {
                     }
                 }
             }
+            // the g-force over this step: the velocity's change less gravity's pull (at the middle of the way)
+            {
+                let mid = (gee_r0 + p.r) * 0.5;
+                let r = mid.length().max(1.0);
+                let gravity = mid * (-body.mu / (r * r * r));
+                p.gee.note(gee_v0, p.v, steps as f64 * step_dt, gravity);
+            }
             let orbit = Orbit::from_state_vectors(body.mu, p.r, p.v, ut);
             // back on rails only when the coast cannot hit anything: periapsis above the atmosphere and the
             // highest terrain (or an escape trajectory)
@@ -2924,6 +2933,45 @@ mod tests {
             drag_area_m2: 1.0,
             drag_cd: flight::DEFAULT_CD,
         }
+    }
+
+    /// KSP2's `geeForce`: about 1 g held up by the ground, none coasting in orbit, thrust over mass under power.
+    #[test]
+    fn the_g_force_is_what_the_crew_feels() {
+        let mut u = Universe::with_bodies(&[kerbin_def()]);
+        let body = u.body_entity("Kerbin").unwrap();
+        let pad = u.spawn_powered_on_surface("pad", body, upper_stage(), 0.0, 0.0);
+        for _ in 0..(2 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        // gravity less the turning ground's pull toward the axis: 9.81 - 0.05 m/s²
+        let g = u.powered(pad).unwrap().gee.g;
+        let r = 600_000.0_f64;
+        let omega = std::f64::consts::TAU / 21_549.425;
+        let want = (1.00034160493135 * ose_data::G0 - omega * omega * r) / flight::G0_MPS2;
+        assert!((g - want).abs() < 0.01, "on the pad {g} g, want {want}");
+
+        let v = u.spawn_vessel_in_circular_orbit("upper", body, 100_000.0);
+        let (_, _, o0) = u.vessel(v).unwrap();
+        let (r0, v0) = o0.state_at(u.ut());
+        u.set_dormant(v, flight::Powered::new(upper_stage(), r0, v0, false));
+        assert!(u.set_controls(v, 0.0, flight::Attitude::OrbitPrograde));
+        for _ in 0..TICKS_PER_SECOND {
+            u.step();
+        }
+        let coasting = u.powered(v).unwrap().gee.g;
+        assert!(coasting < 0.01, "coasting {coasting} g");
+        assert!(u.set_controls(v, 1.0, flight::Attitude::OrbitPrograde));
+        for _ in 0..TICKS_PER_SECOND {
+            u.step();
+        }
+        let p = u.powered(v).unwrap();
+        let want = p.thrust_kn(0.0) / p.mass_t / flight::G0_MPS2;
+        assert!(
+            (p.gee.g - want).abs() < 0.03 * want,
+            "burning {} g, want {want}",
+            p.gee.g
+        );
     }
 
     #[test]
