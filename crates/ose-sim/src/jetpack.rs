@@ -15,6 +15,7 @@ pub fn resolve(
     p: &mut Powered,
     pressure_atm: f64,
     throttle_allowed: bool,
+    high: bool,
     omega: f64,
     dt: f64,
 ) -> Step {
@@ -35,6 +36,29 @@ pub fn resolve(
     } else {
         DVec3::ZERO
     };
+    // KSP2 reads the push against the player's camera and lets the Kerbal turn to face along it, in the air
+    // only (`UpdateInputCameraFeatures`; on the ground there is no sideways push and no turning)
+    let camera = p
+        .eva_camera
+        .filter(|_| enabled && !p.landed && settings.align.enabled);
+    if let Some((forward, up)) = camera {
+        if movement.length_squared() > 1e-12 {
+            // `UpdateMoveInputCameraRelative`: the keys push along the camera's axes
+            let w = up.cross(forward) * movement.x + up * movement.y + forward * movement.z;
+            movement = DVec3::new(w.dot(x), w.dot(y), w.dot(z));
+            p.eva_align = true;
+        }
+    }
+    let raw = p.rotation_input + p.trim;
+    let manual = clamp(DVec3::new(-raw.x, raw.z + p.roll_input, raw.y));
+    // `UpdateRotateInputAlignToCamera`: with no turn asked for and fuel in the pack, turn toward the camera
+    // after a push until within `min_angle_deg` (heading only, unless falling above the high altitude)
+    let align = camera
+        .filter(|_| manual.length_squared() <= 1e-12 && p.eva_align && p.propellant_t > 0.0)
+        .and_then(|(forward, up)| align_input(&settings.align, (x, y, z), forward, up, high));
+    if camera.is_some() && manual.length_squared() <= 1e-12 && align.is_none() {
+        p.eva_align = false;
+    }
     if enabled && throttle_allowed && p.ignited {
         movement.y = (movement.y + p.throttle.clamp(0.0, 1.0)).clamp(-1.0, 1.0);
     }
@@ -50,9 +74,14 @@ pub fn resolve(
     // KSP2 turns the pack only while it is not moving (`ProcessJetpackForces`: the torques, and the spin
     // reset, are worked out only when there is no move input), so translating and turning never share fuel
     let moving = movement.length_squared() > 1e-12;
-    if enabled && !p.landed && !moving {
-        let raw = p.rotation_input + p.trim;
-        let input = clamp(DVec3::new(-raw.x, raw.z + p.roll_input, raw.y));
+    if let Some(input) = align.filter(|_| enabled && !p.landed) {
+        // the camera turn, while the pack pushes too (KSP2 works the torques out apart from the push)
+        let base_rate = settings.rotate_torque_knm * pressure_scale / p.mass_t.max(0.001);
+        rotation_effort = input.length().min(1.0);
+        target_rate = world(input) * base_rate;
+        steering = world(input);
+    } else if enabled && !p.landed && !moving {
+        let input = manual;
         let base_rate = settings.rotate_torque_knm * pressure_scale / p.mass_t.max(0.001);
         if input.length_squared() > 1e-12 {
             rotation_effort = input.length();
@@ -121,6 +150,54 @@ pub fn resolve(
         fraction,
         rate_cap: settings.rotate_max_speed_deg_s.to_radians().max(0.0),
     }
+}
+
+/// The turn input that brings a Kerbal with axes `(x, y, z)` (right, head, front) round to face along the
+/// camera's `forward` with its `up` (`ApplyAngleAsRotateInput` on each angle of the Kerbal-to-camera
+/// rotation), in the Kerbal's axes, or `None` once every angle used is within `min_angle_deg`. Heading turns
+/// about the head axis; pitch and roll count only when `high`.
+pub fn align_input(
+    align: &ose_data::JetpackAlign,
+    (x, y, z): (DVec3, DVec3, DVec3),
+    forward: DVec3,
+    up: DVec3,
+    high: bool,
+) -> Option<DVec3> {
+    let mut input = DVec3::ZERO;
+    let mut any = false;
+    let level = forward - y * forward.dot(y);
+    if level.length_squared() > 1e-12 {
+        let yaw = z.cross(level).dot(y).atan2(z.dot(level)).to_degrees();
+        if let Some(i) = align.input(yaw) {
+            input.y = i;
+            any = true;
+        }
+    }
+    if high {
+        // the rotation taking the Kerbal's axes onto the camera's: R = sum(camera_i (x) kerbal_i)
+        let right = up.cross(forward);
+        let m = |r: usize, c: usize| {
+            let g = |v: DVec3, i: usize| [v.x, v.y, v.z][i];
+            g(right, r) * g(x, c) + g(up, r) * g(y, c) + g(forward, r) * g(z, c)
+        };
+        let trace = m(0, 0) + m(1, 1) + m(2, 2);
+        let angle = ((trace - 1.0) / 2.0).clamp(-1.0, 1.0).acos();
+        let axis = DVec3::new(m(2, 1) - m(1, 2), m(0, 2) - m(2, 0), m(1, 0) - m(0, 1));
+        if angle > 1e-9 && axis.length_squared() > 1e-18 {
+            let turn = axis.normalized() * angle.to_degrees();
+            for (k, a) in [(0, turn.dot(x)), (2, turn.dot(z))] {
+                if let Some(i) = align.input(a) {
+                    if k == 0 {
+                        input.x = i;
+                    } else {
+                        input.z = i;
+                    }
+                    any = true;
+                }
+            }
+        }
+    }
+    any.then_some(input)
 }
 
 impl Step {
@@ -199,7 +276,7 @@ mod tests {
             let before = p.mass_t;
             let (x, y, _) = flight::vessel_basis(&p);
             let burn = 0.25 * 2.0_f64.sqrt() / (240.0 * ose_data::G0) * 0.1;
-            let step = resolve(&mut p, pressure, true, 0.0, 0.1);
+            let step = resolve(&mut p, pressure, true, false, 0.0, 0.1);
             assert!((before - p.mass_t - burn).abs() < 1e-12);
             assert!((step.force_kn - (x + y) * (0.25 * isp / 240.0)).length() < 1e-12);
             let mut out = StepOutcome::default();
@@ -211,7 +288,7 @@ mod tests {
             let before = p.mass_t;
             let (_, _, z) = flight::vessel_basis(&p);
             let burn = 0.125 / 0.25 / (240.0 * ose_data::G0) * 0.1;
-            let step = resolve(&mut p, pressure, true, 0.0, 0.1);
+            let step = resolve(&mut p, pressure, true, false, 0.0, 0.1);
             assert!((before - p.mass_t - burn).abs() < 1e-12);
             assert!(step.force_kn.length() < 1e-12);
             let mut out = StepOutcome::default();
@@ -293,13 +370,13 @@ mod tests {
         p.throttle = 1.0;
         p.rcs.translate = DVec3::new(0.0, 1.0, 0.0);
         let before = p.propellant_t;
-        let step = resolve(&mut p, 0.0, true, 0.0, 0.1);
+        let step = resolve(&mut p, 0.0, true, false, 0.0, 0.1);
         assert!((step.force_kn.length() - 0.25).abs() < 1e-12);
         assert!((before - p.propellant_t - 0.25 / (240.0 * ose_data::G0) * 0.1).abs() < 1e-12);
         p.eva_hop = true;
         p.rotation_input = DVec3::new(1.0, 1.0, 1.0);
         let fuel = p.propellant_t;
-        let step = resolve(&mut p, 0.0, true, 0.0, 0.1);
+        let step = resolve(&mut p, 0.0, true, false, 0.0, 0.1);
         assert_eq!(step.force_kn, DVec3::ZERO);
         assert_eq!(p.propellant_t, fuel);
     }
@@ -309,7 +386,7 @@ mod tests {
         p.mass_t = 0.01;
         p.propellant_t = 0.005;
         p.rotation_input = DVec3::new(0.0, 1.0, 0.0);
-        let step = resolve(&mut p, 0.0, true, 0.0, 0.02);
+        let step = resolve(&mut p, 0.0, true, false, 0.0, 0.02);
         let mut out = StepOutcome::default();
         step.turn(&mut p, 0.02, &mut out);
         assert!((out.angvel.length() - 280.0_f64.to_radians()).abs() < 1e-12);
@@ -317,7 +394,7 @@ mod tests {
         p.roll_rate = 6.0;
         p.angvel = DVec3::ZERO;
         let previous = p.facing * 6.0;
-        let step = resolve(&mut p, 0.0, true, 0.0, 0.02);
+        let step = resolve(&mut p, 0.0, true, false, 0.0, 0.02);
         step.turn(&mut p, 0.02, &mut out);
         assert!((out.angvel - previous).length() < 1e-12);
     }
@@ -338,5 +415,72 @@ mod tests {
         let top = flight::vessel_top(&p);
         flight::integrate(&mut p, &body(), None, None, 0.02, 0.5);
         assert!((flight::vessel_top(&p) - top).length() < 1e-12);
+    }
+    #[test]
+    fn the_push_follows_the_camera_and_the_kerbal_turns_to_face_it() {
+        let align = ose_data::JetpackAlign::default();
+        // ApplyAngleAsRotateInput: nothing within 3 degrees, 0.01 at 3, full at 60 and beyond, signed
+        assert_eq!(align.input(2.9), None);
+        assert!((align.input(31.5).unwrap() - 0.505).abs() < 1e-12);
+        assert_eq!(align.input(-90.0), Some(-1.0));
+        let mut p = fixture();
+        let (x, y, z) = flight::vessel_basis(&p);
+        // the camera looks along the Kerbal's right, its up the Kerbal's head: W pushes to the Kerbal's right
+        p.eva_camera = Some((x, y));
+        p.rcs.translate = DVec3::new(0.0, 0.0, 1.0);
+        let step = resolve(&mut p, 0.0, false, false, 0.0, 0.02);
+        assert!(
+            (step.force_kn.normalized() - x).length() < 1e-9,
+            "{:?}",
+            step.force_kn
+        );
+        assert!(p.eva_align);
+        // and the Kerbal yaws about its head toward the camera's heading, at full input (90 degrees off)
+        let mut out = StepOutcome::default();
+        step.turn(&mut p, 0.02, &mut out);
+        assert!(out.angvel.dot(y) * z.cross(x).dot(y).signum() > 0.0);
+        assert!(out.angvel.normalized().dot(y).abs() > 0.999);
+        // the keys let go, it keeps turning until it faces the camera, then stops asking
+        p.rcs.translate = DVec3::ZERO;
+        let mut t = 0.0;
+        while p.eva_align && t < 10.0 {
+            let step = resolve(&mut p, 0.0, false, false, 0.0, 0.02);
+            let mut out = StepOutcome::default();
+            step.turn(&mut p, 0.02, &mut out);
+            t += 0.02;
+        }
+        assert!(!p.eva_align, "still turning after {t} s");
+        let front = flight::vessel_top(&p);
+        let level = front - p.facing * front.dot(p.facing);
+        assert!(
+            level.normalized().dot(x) > 3.5_f64.to_radians().cos(),
+            "{front:?}"
+        );
+        // a turn key takes over from the camera
+        p.eva_align = true;
+        p.rotation_input = DVec3::new(0.0, 0.0, 1.0);
+        p.eva_camera = Some((-z, y));
+        let step = resolve(&mut p, 0.0, false, false, 0.0, 0.02);
+        let (x2, _, _) = flight::vessel_basis(&p);
+        assert!(step.target_rate.dot(x2).abs() < 1e-12 || p.eva_align);
+    }
+    #[test]
+    fn high_up_the_kerbal_lines_up_in_pitch_and_roll_too() {
+        let align = ose_data::JetpackAlign::default();
+        let p = fixture();
+        let (x, y, z) = flight::vessel_basis(&p);
+        // the camera pitched 30 degrees about the Kerbal's right axis: same heading
+        let (s, c) = 30.0_f64.to_radians().sin_cos();
+        let forward = z * c + y * s;
+        let up = y * c - z * s;
+        assert_eq!(align_input(&align, (x, y, z), forward, up, false), None);
+        let turn = align_input(&align, (x, y, z), forward, up, true).unwrap();
+        assert!(
+            turn.x.abs() > 0.4 && turn.y == 0.0 && turn.z == 0.0,
+            "{turn:?}"
+        );
+        // turning about the right axis by the input's sign brings the front toward the camera's forward
+        let moved = flight::rotate(z, x * turn.x.signum(), 0.1);
+        assert!(moved.dot(forward) > z.dot(forward));
     }
 }

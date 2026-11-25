@@ -4297,6 +4297,16 @@ fn handle_message(
             };
             out.push((reply).clone());
         }
+        Ok(ClientMessage::EvaCamera { vessel, camera }) => {
+            if let Some(e) = owned_vessel(s, vessel, player_id) {
+                let v =
+                    |(x, y, z): (f32, f32, f32)| ose_math::DVec3::new(x as f64, y as f64, z as f64);
+                s.universe
+                    .lock()
+                    .expect("sim lock")
+                    .set_eva_camera(e, camera.map(|(f, u)| (v(f), v(u))));
+            }
+        }
         Ok(ClientMessage::Translate { vessel, x, y, z }) => {
             let reply = match owned_vessel(s, vessel, player_id) {
                 Some(e) => {
