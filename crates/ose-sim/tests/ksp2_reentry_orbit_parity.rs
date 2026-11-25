@@ -40,7 +40,21 @@ fn num(r: &Row, k: &str) -> f64 {
 
 fn craft(json: &str) -> ose_data::craft::Craft {
     let v: serde_json::Value = serde_json::from_str(json).unwrap();
-    ose_importer::craft::craft_from_value(&v).unwrap()
+    let mut c = ose_importer::craft::craft_from_value(&v).unwrap();
+    // as the server takes a craft at launch: shaped wings and fairings weigh what their shapes do
+    let defs = catalog().0;
+    c.apply_shapes(&defs);
+    // the fairing craft was written by script, not built in KSP2's editor, so its fairing carried no panel
+    // mass (`MassModifierAmount` 0 in the file; KSP2's craft weighed 1.0675 t, pod and fairing base, all the
+    // way down)
+    for p in &mut c.parts {
+        if ose_data::fairing::def(&p.part_id).is_some() {
+            if let (Some(f), Some(d)) = (&mut p.flight, defs.iter().find(|d| d.id == p.part_id)) {
+                f.dry_mass_t = Some(d.mass_t);
+            }
+        }
+    }
+    c
 }
 
 /// One KSP2 run, trimmed.
@@ -62,13 +76,16 @@ macro_rules! run {
     };
 }
 
-/// One second of a flight: altitude, surface speed and each part's temperature (craft order; `None` once gone).
+/// One second of a flight: altitude, surface speed and each part's temperature (craft order; `None` once gone),
+/// and how much of it the airflow reached and the re-entry heat it took, kW (`None` where not logged).
 #[derive(Clone, Debug)]
 struct Sample {
     t: f64,
     alt: f64,
     speed: f64,
     temps: Vec<Option<f64>>,
+    exposed: Vec<Option<f64>>,
+    flux: Vec<Option<f64>>,
 }
 
 #[derive(Debug)]
@@ -113,12 +130,17 @@ fn ksp2_flight(run: &Run, limits: &[f64]) -> Flight {
                 alt: num(r, "alt_m"),
                 speed: num(r, "srf_speed"),
                 temps: vec![None; n],
+                exposed: vec![None; n],
+                flux: vec![None; n],
             });
         }
         let idx: usize = r["index"].parse().unwrap();
         if let Some(&i) = alive.get(idx) {
             let temp = num(r, "temp_k");
-            samples.last_mut().unwrap().temps[i] = Some(temp);
+            let s = samples.last_mut().unwrap();
+            s.temps[i] = Some(temp);
+            s.exposed[i] = r.get("exposed").map(|_| num(r, "exposed"));
+            s.flux[i] = r.get("reentry_flux").map(|_| num(r, "reentry_flux"));
             if t >= 0.0 {
                 peak[i] = peak[i].max(temp);
             }
@@ -218,16 +240,20 @@ fn ose_flight(c: &ose_data::craft::Craft, run: &Run, seconds: f64, replay: bool)
 
     // KSP2's nose as components along the orbital velocity, the vertical square to it, and the side
     let t0 = num(start, "t");
-    let attitude: Vec<(f64, DVec3)> = run
+    let attitude: Vec<(f64, DVec3, Option<DVec3>)> = run
         .attitude
         .iter()
         .map(|r| {
             (
                 num(r, "t") - t0,
                 DVec3::new(num(r, "along"), num(r, "up"), num(r, "side")),
+                r.contains_key("x_along")
+                    .then(|| DVec3::new(num(r, "x_along"), num(r, "x_up"), num(r, "x_side"))),
             )
         })
         .collect();
+    // KSP2's frame is left-handed: its side (along x up, worked out in its own axes) points the other way
+    let side_sign = -1.0;
     let mut samples = Vec::new();
     let mut lost = Vec::new();
     let mut peak = vec![0.0f64; n];
@@ -236,15 +262,31 @@ fn ose_flight(c: &ose_data::craft::Craft, run: &Run, seconds: f64, replay: bool)
     for k in 1..=(seconds / DT) as usize {
         if replay {
             let t = (k - 1) as f64 * DT;
-            let a = attitude[attitude
+            let (_, a, x) = attitude[attitude
                 .partition_point(|x| x.0 < t - 1e-6)
-                .min(attitude.len() - 1)]
-            .1;
+                .min(attitude.len() - 1)];
             let mut p = u.powered(v).unwrap().clone();
             let along = p.v.normalized();
-            let side = along.cross(p.r.normalized()).normalized();
-            let up = side.cross(along);
-            p.facing = (along * a.x + up * a.y + side * a.z).normalized();
+            let side = along.cross(p.r.normalized()).normalized() * side_sign;
+            let up = side.cross(along) * side_sign;
+            let world = |c: DVec3| along * c.x + up * c.y + side * c.z;
+            let nose = world(a).normalized();
+            p.facing = nose;
+            if let Some(x) = x {
+                // KSP2's control transform (its x and y axes, the nose) made the root's control frame here: the
+                // vessel's own axes follow through the root's control rotation (z is mirrored, as with every
+                // KSP2 rotation brought in)
+                let cx = world(x);
+                let cx = (cx - nose * cx.dot(nose)).normalized();
+                let cz = cx.cross(nose);
+                let q = p.control_rotation;
+                let to_world = |e: DVec3| {
+                    let l = ose_sim::aero::rotate_inverse(q, e);
+                    cx * l.x + nose * l.y + cz * l.z
+                };
+                p.facing = to_world(DVec3::new(0.0, 1.0, 0.0)).normalized();
+                flight::set_vessel_top(&mut p, to_world(DVec3::new(0.0, 0.0, 1.0)));
+            }
             p.angvel = DVec3::ZERO;
             u.set_powered(v, p);
         }
@@ -279,10 +321,13 @@ fn ose_flight(c: &ose_data::craft::Craft, run: &Run, seconds: f64, replay: bool)
         }
         if k % TICKS_PER_SECOND as usize == 0 {
             let srf = p.v - DVec3::new(0.0, 0.0, spin).cross(p.r);
+            let here = |x: &[f64]| (0..n).map(|i| temps[i].map(|_| x[i])).collect();
             samples.push(Sample {
                 t,
                 alt,
                 speed: srf.length(),
+                exposed: here(&st.exposed),
+                flux: here(&st.reentry_flux_kw),
                 temps,
             });
         }
@@ -345,10 +390,40 @@ fn at(f: &Flight, t: f64) -> Option<&Sample> {
 /// `flight::rotating_frame_error`), every part's temperature (within 4% + 8 K), and the
 /// same parts lost at about the same time.
 fn compare(name: &str, c: &ose_data::craft::Craft, run: &Run) {
+    compare_until(name, c, run, f64::INFINITY);
+}
+
+/// When KSP2's craft first swings more than 5 degrees off retrograde, s from the start row: SAS lost it and it
+/// starts to swing and then tumble (KSP2's K1, K2 and the jet between 30 and 38 km).
+fn tumbles_at(run: &Run) -> f64 {
+    let t0 = num(&run.start, "t");
+    run.attitude
+        .iter()
+        .map(|r| (num(r, "t") - t0, num(r, "along")))
+        .find(|(t, along)| *t >= 0.0 && *along > -(5f64.to_radians().cos()))
+        .map_or(f64::INFINITY, |(t, _)| t)
+}
+
+/// `compare` up to `until` s: the parts' heat and the fall are held while the craft holds retrograde. Past that
+/// it tumbles, which the replay (attitude only, every 0.1 s) does not carry well enough to hold a part's
+/// temperature or the speed to these tolerances (`docs/ksp2-side-by-side-gaps.md` T13), so peaks and losses
+/// are not held.
+fn compare_until(name: &str, c: &ose_data::craft::Craft, run: &Run, until: f64) {
     let n = c.parts.len();
     let ksp2 = ksp2_flight(run, &limits(c));
-    let end = ksp2.samples.last().unwrap().t;
-    let ose = ose_flight(c, run, end, true);
+    let end = ksp2.samples.last().unwrap().t.min(until);
+    // a craft KSP2 burned up may go a few seconds later here (the losses are held to 5 s below)
+    let whole = until.is_infinite();
+    let ose = ose_flight(
+        c,
+        run,
+        if ksp2.destroyed && whole {
+            end + 5.0
+        } else {
+            end
+        },
+        true,
+    );
     println!("== {name}");
     let mut t = 10.0;
     while t <= end {
@@ -394,8 +469,35 @@ fn compare(name: &str, c: &ose_data::craft::Craft, run: &Run) {
                     c.parts[i].part_id
                 );
             }
+            // where the run logged them: how much of the part the airflow reaches (its shadowing by the parts
+            // ahead) and the re-entry heat it takes
+            if let (Some(a), Some(b)) = (k.exposed[i], o.exposed[i]) {
+                assert!(
+                    (a - b).abs() < 0.03,
+                    "{name} t {t}: part {i} {} {b:.3} exposed, KSP2 {a:.3}",
+                    c.parts[i].part_id
+                );
+            }
+            // for a part well out in the air (one at the edge of a shadow is held by its exposure above): the runs
+            // logged with it hold steady attitudes, the older swinging ones are held to their temperatures
+            if let (Some(a), Some(b), Some(ka), Some(oa)) =
+                (k.flux[i], o.flux[i], k.exposed[i], o.exposed[i])
+            {
+                if ka.min(oa) < 0.1 {
+                    continue;
+                }
+                assert!(
+                    (a - b).abs() < 0.1 * a + 2.0,
+                    "{name} t {t}: part {i} {} takes {b:.1} kW, KSP2 {a:.1} kW",
+                    c.parts[i].part_id
+                );
+            }
         }
         t += 10.0;
+    }
+    if !whole {
+        println!("{name}: tumbles at {until:.0} s; held to there");
+        return;
     }
     for (i, p) in c.parts.iter().enumerate() {
         println!(
@@ -498,4 +600,43 @@ fn ksp2_free_tumbling_pod_keeps_tumbling_and_burns_up() {
         o.1,
         k.1
     );
+}
+
+/// Complex craft (Josh 2026-11-25): the stock Kerbal K1 (38 parts: core, four radial Hammer boosters with nose
+/// cones, fins, solar panels and radial batteries), the stock K2 (48 parts, 2.5 m core, Thumper boosters, radial
+/// monopropellant tanks), the stock jet (wings, stabilizers, gear, intake) and the Mk1 pod under a closed fairing
+/// nose, each brought down from orbit with SAS holding retrograde, part by part.
+#[test]
+fn ksp2_k1_reentry_part_by_part() {
+    let c = craft(include_str!(
+        "../../../tools/ksp2-parity-pilot/craft-k1.json"
+    ));
+    let run = run!("ksp2-reentryorbit-k1");
+    compare_until("K1", &c, &run, tumbles_at(&run));
+}
+
+#[test]
+fn ksp2_k2_reentry_part_by_part() {
+    let c = craft(include_str!(
+        "../../../tools/ksp2-parity-pilot/craft-k2.json"
+    ));
+    let run = run!("ksp2-reentryorbit-k2");
+    compare_until("K2", &c, &run, tumbles_at(&run));
+}
+
+#[test]
+fn ksp2_jet_reentry_part_by_part() {
+    let c = craft(include_str!(
+        "../../../tools/ksp2-parity-pilot/craft-jet.json"
+    ));
+    let run = run!("ksp2-reentryorbit-jet");
+    compare_until("jet", &c, &run, tumbles_at(&run));
+}
+
+#[test]
+fn ksp2_fairing_nose_reentry_part_by_part() {
+    let c = craft(include_str!(
+        "../../../tools/ksp2-parity-pilot/craft-fairing-nose.json"
+    ));
+    compare("fairing nose", &c, &run!("ksp2-reentryorbit-fairing"));
 }

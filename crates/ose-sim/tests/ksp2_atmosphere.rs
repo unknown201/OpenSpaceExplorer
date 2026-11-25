@@ -70,11 +70,8 @@ fn every_bodys_air_is_ksp2s_at_every_height() {
             off(air.pressure_kpa(alt), p, p0 * 1e-4),
             off(air.temperature_k.evaluate(alt.min(air.depth_m)), t, 1.0),
             off(air.density(alt), rho, air.density(0.0) * 1e-4),
-            if c > 0.0 {
-                off(air.speed_of_sound(alt), c, 1.0)
-            } else {
-                0.0
-            },
+            // KSP2 has no sound in air thinner than 1e-7 kg/m^3: no Mach, so no re-entry heat there
+            off(air.speed_of_sound(alt), c, 1.0),
         ];
         let w = worst.entry(name.clone()).or_default();
         for k in 0..4 {

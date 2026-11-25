@@ -839,7 +839,12 @@ impl Atmo {
     /// Duna and Jool, so Mach, drag and heating were read too low there).
     pub fn speed_of_sound(&self, alt_m: f64) -> f64 {
         let t = self.temperature_k.evaluate(alt_m.min(self.depth_m));
-        if t <= 0.0 || self.molar_mass <= 0.0 {
+        // none in air thinner than 1e-7 kg/m^3 (Kerbin's top 400 m): no Mach there, so no re-entry heat
+        if t <= 0.0
+            || self.molar_mass <= 0.0
+            || self.pressure_kpa(alt_m) <= 0.0
+            || self.density(alt_m) <= 1e-7
+        {
             return 0.0;
         }
         (self.adiabatic_index * IDEAL_GAS_CONSTANT * t / self.molar_mass).sqrt()
