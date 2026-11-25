@@ -75,8 +75,8 @@ namespace OpenSpaceExplorer.Validation
     {
         const string Campaign = "OSE Parity";
         string dir;
-        StreamWriter trace, comLog, wheels;
-        double start, last;
+        StreamWriter trace, comLog, wheels, travel;
+        double start, last, travelLast;
         string vesselId;
         bool done;
 
@@ -298,6 +298,7 @@ namespace OpenSpaceExplorer.Validation
                 yield return Shot("v3-pad-day");
             }
             if (scenario == "hop") { yield return Hop(vessel); yield break; }
+            if (scenario == "travellog") { yield return Hop(vessel, true); yield break; }
             if (scenario == "k1") { yield return Staged(vessel); yield break; }
 
             vessel.SetAutopilotEnableDisable(true);
@@ -376,12 +377,21 @@ namespace OpenSpaceExplorer.Validation
 
         // T2 subsonic drag + T12 parachute: 8 s of full throttle straight up, cut, then the parachute stage
         // below 2.5 km on the way down; logs until the craft is down.
-        IEnumerator Hop(VesselComponent vessel)
+        // With `travelLog` (scenario "travellog", flight report records): also writes travellog.csv, the
+        // TravelLogManager statistics the flight report shows next to the speeds, altitudes and g-force they are
+        // fed from, and lists the vessel's travel-log events (the report's log) in steps.log at the end.
+        IEnumerator Hop(VesselComponent vessel, bool travelLog = false)
         {
             vessel.SetAutopilotEnableDisable(true);
             G.ViewController.flightInputHandler.OverrideInputMaxThrottle(true);
             yield return new WaitForSeconds(0.5f);
             Begin(vessel, "hop-trace.csv");
+            if (travelLog)
+            {
+                travel = new StreamWriter(Path.Combine(dir, "out", "travellog.csv"), false) { AutoFlush = true };
+                travel.WriteLine("t,rel_speed,orbital_speed,srf_speed,alt_surface,alt_sea,alt_terrain,gee,gee_immediate,landed,max_alt,max_speed,max_speed_over_ground,max_ground_speed,distance,ground_distance,max_gee,situation");
+                travelLast = double.NegativeInfinity;
+            }
             vessel.ActivateNextStage();
             Mark("staged");
             yield return new WaitForSeconds(8f);
@@ -399,6 +409,15 @@ namespace OpenSpaceExplorer.Validation
                 if (apo && !chute && alt < 2500) { chute = true; vessel.ActivateNextStage(); Mark("parachute staged at " + alt.ToString("F0", CultureInfo.InvariantCulture)); yield return Shot("10-chute"); }
                 if (apo && (vessel.Situation == VesselSituations.Landed || vessel.Situation == VesselSituations.Splashed)) { Mark("down " + vessel.Situation); yield return Shot("11-down"); break; }
                 yield return null;
+            }
+            if (travelLog)
+            {
+                LogTravel(G.ViewController.GetActiveSimVessel(), true);
+                var v = G.ViewController.GetActiveSimVessel();
+                if (v != null)
+                    foreach (var e in G.TravelLogManager.GetVesselTravelEvents(v))
+                        Mark("travel event " + e.EventKey + " ut " + e.UT.ToString("R", CultureInfo.InvariantCulture) + ": " + e.FlightReportMessage);
+                travel.Dispose(); travel = null;
             }
             Stop();
             Mark("finished hop");
@@ -1052,9 +1071,29 @@ namespace OpenSpaceExplorer.Validation
                     vessel.flightCtrlState.wheelThrottle, vessel.flightCtrlState.wheelSteer, tmax, tpod, teng };
                 trace.WriteLine(string.Join(",", Array.ConvertAll(v, x => x.ToString("R", CultureInfo.InvariantCulture))) + "," + vessel.Situation + "," + ut.ToString("R", CultureInfo.InvariantCulture));
                 if (comLog != null) LogCom(vessel, ut - start);
+                if (travel != null) LogTravel(vessel, false);
                 if (wheels != null) LogWheels(vessel, ut - start);
             }
             catch (Exception e) { Logger.LogError(e); Stop(); }
+        }
+
+        // One travellog.csv row, at most every 0.25 s of game time (always when `force`).
+        void LogTravel(VesselComponent vessel, bool force)
+        {
+            if (vessel == null || travel == null) return;
+            double ut = G.UniverseModel.UniverseTime;
+            if (!force && ut - travelLast < 0.25) return;
+            travelLast = ut;
+            var inv = CultureInfo.InvariantCulture;
+            string stats = ",,,,,,";
+            if (G.TravelLogManager.TryGetTravelObject(vessel.TravelObjectId, out var to))
+            {
+                var st = to.Statistics;
+                stats = string.Join(",", Array.ConvertAll(new double[] { st.MaxAltitude, st.MaxSpeed, st.MaxSpeedOverGround, st.MaxGroundSpeed, st.DistanceTravelled, st.GroundDistanceTravelled, st.MaxGeeForce }, x => x.ToString("R", inv)));
+            }
+            double[] v = { ut - start, vessel.Velocity.relativeVelocity.magnitude, vessel.OrbitalVelocity.vector.magnitude, vessel.SurfaceVelocity.vector.magnitude,
+                vessel.AltitudeFromSurface, vessel.AltitudeFromSeaLevel, vessel.AltitudeFromTerrain, vessel.geeForce, vessel.geeForce_immediate, vessel.LandedOrSplashed ? 1 : 0 };
+            travel.WriteLine(string.Join(",", Array.ConvertAll(v, x => x.ToString("R", inv))) + "," + stats + "," + vessel.Situation);
         }
 
         // the centre of mass (PartOwnerComponent.CenterOfMass) in the root part's frame, Unity axes
