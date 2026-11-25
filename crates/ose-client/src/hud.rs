@@ -1569,6 +1569,8 @@ pub struct RecordSample<'a> {
     pub ut: f64,
     /// Height above the ground or the sea under the craft, m (`AltitudeFromSurface`).
     pub altitude_m: f64,
+    /// Surface speed: KSP2 feeds its records `Velocity.relativeVelocity`, which the `travellog` capture shows
+    /// is the speed over the turning ground (it read 0 on the pad, where the orbital speed is 175 m/s).
     pub speed_mps: f64,
     pub g_force: f64,
     pub landed_or_splashed: bool,
@@ -1576,6 +1578,8 @@ pub struct RecordSample<'a> {
     pub at_rest: bool,
     pub body: &'a str,
     pub crew: Vec<String>,
+    /// Out of pre-launch: the first stage has fired (engines burning) or the craft has left the ground.
+    pub launched: bool,
 }
 
 /// The flight's travel log and records for the flight report (KSP2's `TravelLogManager` statistics and events,
@@ -1617,7 +1621,7 @@ impl FlightRecords {
     }
 
     /// Add one readout: KSP2's `UpdateVesselStatistics` with the distance flown since the last one, and the
-    /// log's Vessel launched (`launch_ut` once set), entered SOI and Vessel landed (at rest after climbing over
+    /// log's Vessel launched, entered SOI and Vessel landed (at rest after climbing over
     /// 100 m).
     pub fn note(&mut self, s: &RecordSample) {
         if let Some(t0) = self.last_ut {
@@ -1641,9 +1645,11 @@ impl FlightRecords {
         if !s.crew.is_empty() || !self.launched {
             self.crew = s.crew.clone();
         }
-        if !self.launched && self.launch_ut > 0.0 {
+        // KSP2's `VesselLaunchedMessage`: when the vessel leaves pre-launch (the first stage fires), not when it
+        // is rolled out (the `travellog` capture logs it at the staging, UT 495.22).
+        if !self.launched && s.launched {
             self.launched = true;
-            self.event(self.launch_ut, "Vessel launched".into(), true);
+            self.event(s.ut, "Vessel launched".into(), true);
         }
         match self.bodies.last() {
             None => self.bodies.push(s.body.to_string()),
@@ -2913,13 +2919,14 @@ mod tests {
             at_rest: landed && speed_mps < 0.3,
             body: "Kerbin",
             crew: vec!["Jebediah Kerman".into()],
+            launched: ut >= 11.0,
         }
     }
 
     /// KSP2's `TravelLogManager.UpdateVesselStatistics` and its log events.
     #[test]
     fn records_and_log_follow_the_travel_log() {
-        let mut r = FlightRecords::new(1, "Kerbal X", 10.0);
+        let mut r = FlightRecords::new(1, "Kerbal X", 5.0);
         r.note(&sample(10.0, 0.0, 0.0, true));
         // rolling along the ground at 20 m/s for 2 s: ground distance and speed over land
         r.note(&sample(11.0, 0.5, 20.0, true));

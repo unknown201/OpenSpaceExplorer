@@ -14109,6 +14109,7 @@ impl App {
                     at_rest: landed && speed * speed < 0.1,
                     body: &b.id,
                     crew: f.crew.iter().map(|c| c.1.clone()).collect(),
+                    launched: !f.firing_engines.is_empty() || !landed,
                 });
             }
         }
