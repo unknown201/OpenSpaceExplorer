@@ -42,8 +42,7 @@ fn hits(
     (0..st.rigid.len())
         .filter(|&j| st.rigid.present[j] && Some(j) != skip)
         .filter_map(|j| {
-            let (c, h) = st.part_box(j);
-            sweep_box(origin, dir, jet.radius, c, h)
+            sweep_part(&st.part_corners(j), origin, dir, jet.radius)
                 .filter(|&d| d <= jet.range)
                 .map(|d| (j, d))
         })
@@ -218,6 +217,40 @@ pub fn sweep_box(
         }
     }
     Some(t0)
+}
+
+/// `sweep_box` against a part's own box, turned with it (the corners of its bounds, `Structure::part_corners`):
+/// a fin or wing mounted at an angle is met where it is, not across the box square to the craft around it.
+pub fn sweep_part(corners: &[DVec3; 8], origin: DVec3, dir: DVec3, radius: f64) -> Option<f64> {
+    let centre = corners.iter().fold(DVec3::ZERO, |a, &c| a + c) * 0.125;
+    // the corners go +x+y+z, -x+y+z, +x-y+z, ... (`thermal::box_corners`): half of each edge from corner 0
+    let axes = [
+        (corners[0] - corners[1]) * 0.5,
+        (corners[0] - corners[2]) * 0.5,
+        (corners[0] - corners[4]) * 0.5,
+    ];
+    let unit = |a: DVec3| {
+        if a.length_squared() > 0.0 {
+            a.normalized()
+        } else {
+            a
+        }
+    };
+    let local = |v: DVec3| {
+        DVec3::new(
+            v.dot(unit(axes[0])),
+            v.dot(unit(axes[1])),
+            v.dot(unit(axes[2])),
+        )
+    };
+    let half = DVec3::new(axes[0].length(), axes[1].length(), axes[2].length());
+    sweep_box(
+        local(origin - centre),
+        local(dir),
+        radius,
+        DVec3::ZERO,
+        half,
+    )
 }
 
 /// The blast's strength at a hit `distance` m from the sweep's start: a hit at the start counts as 1 m.

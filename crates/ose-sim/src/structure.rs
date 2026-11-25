@@ -44,6 +44,9 @@ pub struct AeroForces {
 pub struct Airflow {
     pub frame: (DVec3, DVec3, DVec3),
     pub velocity: DVec3,
+    /// The craft's velocity through space, inertial (KSP2's thermal job shadows parts along it,
+    /// `ThermalBehavior`: `OrbitalMovementVelocity`, not the airflow).
+    pub orbital_velocity: DVec3,
     /// Craft angular velocity relative to the co-rotating atmosphere, inertial rad/s.
     pub angular_velocity: DVec3,
     pub density: f64,
@@ -65,6 +68,7 @@ impl Airflow {
         Self {
             frame: crate::flight::vessel_basis(p),
             velocity: p.v - omega.cross(p.r),
+            orbital_velocity: p.v,
             angular_velocity: if p.landed {
                 DVec3::ZERO
             } else {
@@ -79,6 +83,7 @@ impl Airflow {
         Self {
             frame,
             velocity,
+            orbital_velocity: velocity,
             density,
             angular_velocity: DVec3::ZERO,
             speed_of_sound: if mach > 0.0 {
@@ -281,6 +286,8 @@ pub struct Structure {
     pub max_temp_k: Vec<f64>,
     pub thermal_mass: Vec<f64>,
     pub reentry_flux_kw: Vec<f64>,
+    /// How much of each part the airflow reached at the last heat step (`ExposedAreaProportion`), 0..1.
+    pub exposed: Vec<f64>,
     /// Heat each part takes from engine exhaust blasting it (`exhaust`), kW, as of the last step.
     pub exhaust_flux_kw: Vec<f64>,
     /// Heat each part takes from other craft's exhaust (`Universe::exhaust_on_other_vessels`), kW.
@@ -295,6 +302,10 @@ pub struct Structure {
     /// Each part's bounds as a box (centre relative to the part origin, half size), vessel frame; landing
     /// gear also folded out.
     stowed_box: Vec<(DVec3, DVec3)>,
+    /// The corners of each part's bounds turned with it (vessel frame, from its rest position): its outline
+    /// across the airflow (`ThermalOcclusionData.CreateCornerArray`), folded and folded out.
+    stowed_corners: Vec<Option<[DVec3; 8]>>,
+    extended_corners: Vec<Option<[DVec3; 8]>>,
     /// Each stack part's hull as the frustum between its bottom and top stack nodes (`None` for any other
     /// part, which keeps its box): a Mk1 pod narrows from 1.25 m at its base to 0.625 m at its top.
     hull_taper: Vec<Option<Taper>>,
@@ -572,6 +583,16 @@ fn vessel_box(q: ose_data::craft::Quat, b: ose_data::PartBounds) -> (DVec3, DVec
     (to_vessel(b.center_m), half)
 }
 
+/// The eight corners of a part's bounds turned with it, in the vessel frame from the part's position.
+fn vessel_corners(q: ose_data::craft::Quat, b: ose_data::PartBounds) -> [DVec3; 8] {
+    let q = q.normalized();
+    let q = [q.x, q.y, q.z, q.w];
+    thermal::box_corners(b.center_m, b.size_m * 0.5).map(|c| {
+        let u = aero::rotate(q, c);
+        DVec3::new(u.x, u.y, -u.z)
+    })
+}
+
 /// An orthonormal basis with `y` along the vessel axis.
 pub(crate) fn basis(facing: DVec3) -> (DVec3, DVec3, DVec3) {
     let y = facing.normalized();
@@ -717,13 +738,18 @@ impl Structure {
         let sizes = rigid.sizes_m.clone();
         let thermal_mass: Vec<f64> = (0..craft.parts.len())
             .map(|i| {
-                let modifier = defs
-                    .iter()
-                    .find(|d| d.id == craft.parts[i].part_id)
-                    .map(|d| d.thermal_mass_modifier)
-                    .unwrap_or(1.0);
-                (rigid.dry_masses_t[i] * thermal::SPECIFIC_HEAT * modifier)
-                    .max(thermal::MIN_THERMAL_MASS)
+                let def = defs.iter().find(|d| d.id == craft.parts[i].part_id);
+                let modifier = def.map(|d| d.thermal_mass_modifier).unwrap_or(1.0);
+                // `PartComponent.OnStart` takes the part's own mass: a fairing's panels are a mass modifier
+                // (`Data_Fairing.MassModifierAmount`) it leaves out (KSP2's 1.25 m fairing heats as its
+                // 0.19 t base however tall its shell)
+                let mass = match def {
+                    Some(d) if ose_data::fairing::def(&d.id).is_some() => {
+                        rigid.dry_masses_t[i].min(d.mass_t)
+                    }
+                    _ => rigid.dry_masses_t[i],
+                };
+                (mass * thermal::SPECIFIC_HEAT * modifier).max(thermal::MIN_THERMAL_MASS)
             })
             .collect();
         let root = craft
@@ -1180,6 +1206,7 @@ impl Structure {
                 .collect(),
             thermal_mass,
             reentry_flux_kw: vec![0.0; n],
+            exposed: vec![0.0; n],
             exhaust_flux_kw: vec![0.0; n],
             outside_exhaust_flux_kw: vec![0.0; n],
             jets: Vec::new(),
@@ -1234,6 +1261,18 @@ impl Structure {
                         );
                     }
                     crate::collide::model_hull(&def.id, craft.parts[i].local_rotation)
+                })
+                .collect(),
+            stowed_corners: (0..n)
+                .map(|i| {
+                    let b = def_of(i).and_then(|d| d.bounds)?;
+                    Some(vessel_corners(craft.parts[i].local_rotation, b))
+                })
+                .collect(),
+            extended_corners: (0..n)
+                .map(|i| {
+                    let g = def_of(i).and_then(|d| d.landing_gear.as_ref())?;
+                    Some(vessel_corners(craft.parts[i].local_rotation, g.extended?))
                 })
                 .collect(),
             extended_box: (0..n)
@@ -2699,6 +2738,25 @@ impl Structure {
     }
 
     /// A part's box at rest (centre, half size), vessel frame, with landing gear as it is now.
+    /// Part `i`'s outline for the airflow: the corners of its bounds turned with it (`part_box` is the box
+    /// square to the vessel around them, a padded outline for a part mounted at an angle).
+    pub fn part_corners(&self, i: usize) -> [DVec3; 8] {
+        let corners = match (&self.extended_corners[i], self.gear_out[i]) {
+            (Some(c), true) => Some(c),
+            _ => self.stowed_corners[i].as_ref(),
+        };
+        match corners {
+            Some(c) => {
+                let at = self.rigid.rest_position(i);
+                c.map(|k| at + k)
+            }
+            None => {
+                let (c, h) = self.part_box(i);
+                thermal::box_corners(c, h)
+            }
+        }
+    }
+
     pub fn part_box(&self, i: usize) -> (DVec3, DVec3) {
         let (offset, half) = match (&self.extended_box[i], self.gear_out[i]) {
             (Some(b), true) => *b,
@@ -4368,16 +4426,30 @@ impl Structure {
             .collect();
         let (bx, by, bz) = flow.frame;
         let centre = self.mass_properties().centre_m;
-        let boxes: Vec<(DVec3, DVec3)> = present.iter().map(|&i| self.part_box(i)).collect();
+        let boxes: Vec<[DVec3; 8]> = present.iter().map(|&i| self.part_corners(i)).collect();
         let local =
             |velocity: DVec3| DVec3::new(velocity.dot(bx), velocity.dot(by), velocity.dot(bz));
-        let exposed = if flow.angular_velocity.length_squared() == 0.0
-            && flow.velocity.length_squared() > 0.0
-        {
-            thermal::exposed_proportions(
+        // KSP2 shadows parts once for the whole craft (`OcclusionAlgorithmJob`), along its velocity through space
+        // and with each outline boxed along the world's x and y axes: the corners projected square to the flow
+        // keep only those two components (`OcclusionUpdateParallelJob`). KSP2's y is the spin axis and its x
+        // lies in the equator, so for a craft in an equatorial orbit that is north and across the flow, which
+        // is what is used here for every flow (KSP2's x itself would collapse every outline twice an orbit,
+        // where the flow runs along it); a flow along the spin axis takes the craft's own axes. A craft only
+        // spinning in still air takes each part's own upstream direction instead.
+        let travel = if flow.orbital_velocity.length_squared() > 0.0 {
+            flow.orbital_velocity
+        } else {
+            flow.velocity
+        };
+        let exposed = if flow.velocity.length_squared() > 0.0 {
+            let d = local(travel).normalized();
+            let north = local(DVec3::new(0.0, 0.0, 1.0));
+            let side = d.cross(north);
+            thermal::exposed_proportions_across(
                 &boxes,
-                local(flow.velocity).normalized(),
+                d,
                 flow.mach(flow.velocity.length()),
+                (side.length_squared() > 1e-6).then_some((side, north)),
             )
         } else {
             present
@@ -4406,16 +4478,11 @@ impl Structure {
             };
             let du = DVec3::new(d.x, d.y, -d.z);
             let local = aero::rotate_inverse(self.part_rot[i], du);
-            let (airstream, cd, wetted) = match &self.drag_faces(i) {
-                Some(f) => {
-                    let (a, cd) = f.airstream(&self.curves, local, mach);
-                    (a, cd, f.wetted())
-                }
-                None => {
-                    let s = self.rigid.sizes_m[i];
-                    (0.0, 0.0, 2.0 * (s.x * s.y + s.y * s.z + s.x * s.z))
-                }
+            let (airstream, cd) = match &self.drag_faces(i) {
+                Some(f) => f.airstream(&self.curves, local, mach),
+                None => (0.0, 0.0),
             };
+            let wetted = self.wetted_m2(i);
             // under a fairing or in a closed bay the airflow does not reach it
             let reach = if self.shielded[i] { 0.0 } else { exposed[k] };
             let mut flux = thermal::reentry_flux(mach, reach, airstream, flow.density, cd);
@@ -4444,6 +4511,7 @@ impl Structure {
                 }
             }
             self.reentry_flux_kw[i] = flux;
+            self.exposed[i] = reach;
             self.temperature_k[i] = thermal::step_temperature(
                 self.temperature_k[i],
                 self.thermal_mass[i],
@@ -4503,12 +4571,9 @@ impl Structure {
         self.exhaust_flux_kw.fill(0.0);
         self.jets.clear();
         let mut pushes = Vec::new();
-        let boxes: Vec<(usize, DVec3, DVec3)> = (0..self.rigid.len())
+        let boxes: Vec<(usize, [DVec3; 8])> = (0..self.rigid.len())
             .filter(|&i| self.rigid.present[i])
-            .map(|i| {
-                let (c, h) = self.part_box(i);
-                (i, c, h)
-            })
+            .map(|i| (i, self.part_corners(i)))
             .collect();
         for i in 0..self.rigid.len() {
             let Some(def) = self.exhaust_defs[i].filter(|_| self.rigid.present[i]) else {
@@ -4546,9 +4611,9 @@ impl Structure {
                 });
                 let hits: Vec<(usize, f64)> = boxes
                     .iter()
-                    .filter(|&&(j, _, _)| j != i)
-                    .filter_map(|&(j, c, h)| {
-                        crate::exhaust::sweep_box(origin, dir, radius, c, h)
+                    .filter(|&&(j, _)| j != i)
+                    .filter_map(|&(j, corners)| {
+                        crate::exhaust::sweep_part(&corners, origin, dir, radius)
                             .filter(|&d| d <= range)
                             .map(|d| (j, d))
                     })
@@ -5034,7 +5099,42 @@ impl Structure {
     fn drag_faces(&self, i: usize) -> Option<Faces> {
         self.chute_faces(i)
             .or_else(|| self.fairing_faces(i))
+            .or_else(|| self.gear_faces(i))
             .or(self.faces[i])
+    }
+
+    /// Part `i`'s area open to the air, m^2 (`WettedArea`), what it cools into the air through.
+    pub fn wetted_m2(&self, i: usize) -> f64 {
+        // a shaped fairing's shell drags, but its wetted area stays its base's (`Module_Drag.SetExposedArea` is
+        // not run again once the shell's cube is weighted in: KSP2's 1.25 m fairing cools through 2.0 m^2)
+        let faces = if self.fairing_faces(i).is_some() {
+            self.faces[i]
+        } else {
+            self.drag_faces(i)
+        };
+        match faces {
+            Some(f) => f.wetted(),
+            None => {
+                let s = self.rigid.sizes_m[i];
+                2.0 * (s.x * s.y + s.y * s.z + s.x * s.z)
+            }
+        }
+    }
+
+    /// A wheel or leg folded out: its `EXTENDED` cube (KSP2's gear on the jet reaches 2.9 m^2 of air out,
+    /// 1.9 folded), covered by its attach nodes as the folded one.
+    fn gear_faces(&self, i: usize) -> Option<Faces> {
+        if !self.gear_out.get(i).copied().unwrap_or(false) || self.faces[i].is_none() {
+            return None;
+        }
+        let cube = self.gear_defs.get(i)?.as_ref()?.extended_cube.as_ref()?;
+        let mut faces = Faces::from_cube(cube);
+        for cover in &self.face_covers[i] {
+            if cover.attached(&self.rigid.present) {
+                faces.cover(cover.direction, cover.area);
+            }
+        }
+        Some(faces)
     }
 
     /// A shaped fairing's faces while its panels are on: the shell's own cube (`SetDragCubes(jettisoned:
@@ -6369,6 +6469,8 @@ mod tests {
         s.heatshields.fill(None);
         s.stowed_box[0] = (DVec3::ZERO, DVec3::new(1.0, 1.0, 1.0));
         s.stowed_box[1] = (DVec3::ZERO, DVec3::new(0.5, 0.5, 0.5));
+        s.stowed_corners[0] = Some(thermal::box_corners(DVec3::ZERO, DVec3::new(1.0, 1.0, 1.0)));
+        s.stowed_corners[1] = Some(thermal::box_corners(DVec3::ZERO, DVec3::new(0.5, 0.5, 0.5)));
         s
     }
 
@@ -6554,6 +6656,7 @@ mod tests {
         let flow = Airflow {
             frame: crate::flight::vessel_basis(&p),
             velocity: DVec3::ZERO,
+            orbital_velocity: DVec3::ZERO,
             angular_velocity: DVec3::new(3.0, 5.0, 7.0),
             density: 1.0,
             speed_of_sound: 100.0,
@@ -6631,6 +6734,7 @@ mod tests {
         let flow = Airflow {
             frame: crate::flight::vessel_basis(&p),
             velocity: DVec3::ZERO,
+            orbital_velocity: DVec3::ZERO,
             angular_velocity: DVec3::new(0.0, 0.0, 10.0),
             density: 1.0,
             speed_of_sound: 1.0,
@@ -6742,6 +6846,7 @@ mod tests {
         let flow = Airflow {
             frame: crate::flight::vessel_basis(&p),
             velocity: DVec3::ZERO,
+            orbital_velocity: DVec3::ZERO,
             angular_velocity: DVec3::new(0.0, 0.0, 1.0),
             density: 1.0,
             speed_of_sound: 100.0,
@@ -7079,6 +7184,7 @@ mod tests {
                 DVec3::new(0.0, 0.0, 1.0),
             ),
             velocity: DVec3::ZERO,
+            orbital_velocity: DVec3::ZERO,
             angular_velocity: DVec3::new(0.0, 0.0, 1.0),
             density: 1.0,
             speed_of_sound: 100.0,
@@ -7241,7 +7347,7 @@ mod tests {
         // the moment arithmetic about the part's origin (a shaped wing lifts at its mesh centre otherwise)
         s.lift_defs[wing].as_mut().unwrap().0.pressure_offset_m = DVec3::ZERO;
         let frame = crate::flight::vessel_basis(&p);
-        let r = s.part_box(wing).0 - s.mass_properties().centre_m;
+        let r = s.rigid.rest_position(wing) - s.mass_properties().centre_m;
         let axis = DVec3::new(0.0, 0.0, 1.0);
         let spin = r.cross(axis).normalized();
         let v = spin.cross(r);
@@ -7250,6 +7356,7 @@ mod tests {
         let flow = Airflow {
             frame,
             velocity: DVec3::ZERO,
+            orbital_velocity: DVec3::ZERO,
             angular_velocity: spin,
             density: 1.0,
             speed_of_sound: 340.0,
@@ -7278,6 +7385,7 @@ mod tests {
         let flow = Airflow {
             frame,
             velocity: DVec3::new(2.0, 1.0, 0.0),
+            orbital_velocity: DVec3::new(2.0, 1.0, 0.0),
             angular_velocity: DVec3::new(2.0, -1.0, 3.0),
             density: 1.0,
             speed_of_sound: 10.0,
@@ -7297,6 +7405,7 @@ mod tests {
             Airflow {
                 frame: (turn(frame.0), turn(frame.1), turn(frame.2)),
                 velocity: turn(flow.velocity),
+                orbital_velocity: turn(flow.orbital_velocity),
                 angular_velocity: turn(flow.angular_velocity),
                 ..flow
             },
@@ -7372,6 +7481,7 @@ mod tests {
             let flow = Airflow {
                 frame: crate::flight::vessel_basis(&p),
                 velocity: p.v,
+                orbital_velocity: p.v,
                 angular_velocity: p.angvel + p.facing * p.roll_rate,
                 density: 1.0,
                 speed_of_sound: 340.0,
@@ -7418,10 +7528,14 @@ mod tests {
             &settings,
             0.02,
         );
-        p.roll_rad = std::f64::consts::FRAC_PI_2;
+        // the craft and the flow turned together about the spin axis: shadows are boxed on north and across the
+        // flow (KSP2's world axes), so only a turn that keeps north leaves them as they were
+        let _ = &mut p;
+        let turn = |v: DVec3| DVec3::new(-v.y, v.x, v.z);
+        let (x, y, z) = crate::flight::vessel_basis(&p);
         b.update_heat(
-            crate::flight::vessel_basis(&p),
-            DVec3::new(200.0, 100.0, -1200.0),
+            (turn(x), turn(y), turn(z)),
+            turn(DVec3::new(1200.0, 100.0, 200.0)),
             0.02,
             4.0,
             220.0,
@@ -9841,6 +9955,7 @@ mod tests {
                     Airflow {
                         frame,
                         velocity,
+                        orbital_velocity: velocity,
                         angular_velocity: DVec3::new(0.1, -0.2, 0.3),
                         density: 1.2,
                         speed_of_sound: 340.0,

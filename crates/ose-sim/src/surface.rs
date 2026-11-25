@@ -1235,6 +1235,7 @@ mod tests {
             retractable: true,
             starts_extended: true,
             extended: None,
+            extended_cube: None,
             radius_m: 0.0,
             motor: None,
             brake_torque_knm: 0.0,

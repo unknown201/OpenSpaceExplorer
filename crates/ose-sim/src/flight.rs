@@ -259,6 +259,46 @@ pub enum Situation {
     Crashed,
 }
 
+/// Standard gravity, m/s² (KSP2 divides by it: its `0.10197162129779283`).
+pub const G0_MPS2: f64 = ose_data::G0;
+
+/// How many steps the g-force averages over (KSP2's `_accelSmoothingMaxNumSamples`).
+pub const GEE_SAMPLES: usize = 20;
+
+/// The g-force the crew feels, as KSP2 works it out (`VesselComponent.UpdateAcceleration`): the change of the
+/// orbital (inertial) velocity over each step, averaged over the last `GEE_SAMPLES` steps, less gravity, in
+/// g. At rest on the ground that is the ground holding the craft up (about 1 g); falling freely or coasting
+/// in orbit it is 0.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GeeForce {
+    samples: std::collections::VecDeque<DVec3>,
+    /// The latest reading, g.
+    pub g: f64,
+}
+
+impl GeeForce {
+    /// One step: the inertial velocity before and after it, how long it was, and gravity's pull (m/s²) over
+    /// it.
+    pub fn note(&mut self, v_before: DVec3, v_after: DVec3, dt: f64, gravity: DVec3) {
+        if dt.is_nan() || dt <= 0.0 {
+            return;
+        }
+        if self.samples.len() == GEE_SAMPLES {
+            self.samples.pop_front();
+        }
+        self.samples.push_back((v_after - v_before) * (1.0 / dt));
+        let n = self.samples.len() as f64;
+        let mean = self.samples.iter().fold(DVec3::ZERO, |a, s| a + *s) * (1.0 / n);
+        self.g = (mean - gravity).length() / G0_MPS2;
+    }
+
+    /// Start over (a new vessel, or one that jumped: docking, a sphere-of-influence change).
+    pub fn reset(&mut self) {
+        self.samples.clear();
+        self.g = 0.0;
+    }
+}
+
 /// Powered-flight state. While present the vessel is integrated here and its `OnRails` orbit is refreshed
 /// from `(r, v)` each step so everything that reads orbits keeps working.
 #[derive(Component, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -269,6 +309,9 @@ pub struct Powered {
     /// extrapolate a powered vessel between snapshots without flying it.
     #[serde(default)]
     pub accel_ng_mps2: DVec3,
+    /// The g-force the crew feels (KSP2's `VesselComponent.geeForce`), worked out after each step.
+    #[serde(skip)]
+    pub gee: GeeForce,
     /// Index into `spec.stages` of the stage currently able to burn; `>= len` when all are spent.
     pub stage: usize,
     pub propellant_t: f64,
@@ -822,6 +865,8 @@ pub struct Atmo {
     pub pressure_kpa: Curve,
     pub temperature_k: Curve,
     pub molar_mass: f64,
+    /// `atmosphereAdiabaticIndex`: 1.4 for Kerbin's and Laythe's air, 1.2 for Eve's and Duna's, 1.43 for Jool's.
+    pub adiabatic_index: f64,
 }
 
 impl Atmo {
@@ -832,13 +877,20 @@ impl Atmo {
             self.pressure_kpa.evaluate(alt_m).max(0.0)
         }
     }
-    /// Speed of sound, m/s (ideal diatomic gas).
+    /// Speed of sound, m/s: `AeroUtilities.GetSoundSpeed`, sqrt(adiabatic index x pressure / density), which for
+    /// the ideal gas is sqrt(index x R x T / M) with the body's own index (it was 1.4 everywhere: 8% fast on Eve,
+    /// Duna and Jool, so Mach, drag and heating were read too low there).
     pub fn speed_of_sound(&self, alt_m: f64) -> f64 {
         let t = self.temperature_k.evaluate(alt_m.min(self.depth_m));
-        if t <= 0.0 || self.molar_mass <= 0.0 {
+        // none in air thinner than 1e-7 kg/m^3 (Kerbin's top 400 m): no Mach there, so no re-entry heat
+        if t <= 0.0
+            || self.molar_mass <= 0.0
+            || self.pressure_kpa(alt_m) <= 0.0
+            || self.density(alt_m) <= 1e-7
+        {
             return 0.0;
         }
-        (1.4 * IDEAL_GAS_CONSTANT * t / self.molar_mass).sqrt()
+        (self.adiabatic_index * IDEAL_GAS_CONSTANT * t / self.molar_mass).sqrt()
     }
 
     pub fn density(&self, alt_m: f64) -> f64 {
@@ -1049,6 +1101,7 @@ impl Powered {
         Powered {
             spec,
             accel_ng_mps2: DVec3::ZERO,
+            gee: GeeForce::default(),
             stage: 0,
             propellant_t: prop,
             mass_t: mass,
@@ -3241,6 +3294,7 @@ mod tests {
             pressure_kpa: Curve { keys },
             temperature_k: Curve { keys: tkeys },
             molar_mass: 0.0289644,
+            adiabatic_index: 1.4,
         }
     }
 

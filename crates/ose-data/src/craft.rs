@@ -286,6 +286,20 @@ impl CraftPart {
                 lift.pressure_offset_m = DVec3::new(c[0], c[1], c[2]);
             }
         }
+        // A shaped part's drag (and the re-entry heat and occlusion that read it) comes from its baked mesh
+        // (`Module_Drag.SetDragCube` renders the posed model): the catalog has no cube for it.
+        if let Some(shape) = self.shape.as_ref().filter(|s| s.valid_for(&def.id)) {
+            let mirrored = self.flight.as_ref().is_some_and(|f| f.mirrored);
+            if let Some(r) = crate::procedural::evaluate_cached(&def.id, shape, mirrored) {
+                result.drag_cubes = vec![r.drag_cube.clone()];
+                // and its outline (what shadows the parts behind it from the airflow) is the mesh's bounds
+                let v = |a: [f64; 3]| DVec3::new(a[0], a[1], a[2]);
+                result.bounds = Some(crate::PartBounds {
+                    size_m: v(r.cube.size),
+                    center_m: v(r.cube.center),
+                });
+            }
+        }
         // A shaped wing's moving surface turns about its own swept hinge and lifts along its own axis
         // (`Module_ControlSurface` mixes inputs with the pivot bone's posed `CtrlTransformRotAxis`), not the
         // authored default part's. Taken unmirrored: the mirror sign handles the second wing of a pair.

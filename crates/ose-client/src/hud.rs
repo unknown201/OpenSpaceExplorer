@@ -1550,52 +1550,308 @@ pub fn fmt_met(s: f64) -> String {
     }
 }
 
-/// The flight's records for the flight report (`FlightReportUIManager`): highest altitude, fastest speed,
-/// furthest from home is left out (no ground track yet).
+/// KSP2's `TravelLogManager.MaxSpeedOverGroundAltitudeLimit`: "speed over land" counts below this height
+/// above the surface, m.
+pub const SPEED_OVER_LAND_ALTITUDE_M: f64 = 25.0;
+
+/// One line of the flight report's log (KSP2's `TravelObjectEvent`): when (universal time), what, and whether
+/// it reads as good news (green) or bad (red).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LogEntry {
+    pub ut: f64,
+    pub text: String,
+    pub good: bool,
+}
+
+/// What a flight readout tells the records (KSP2's `TravelObjectVesselUpdateData`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RecordSample<'a> {
+    pub ut: f64,
+    /// Height above the ground or the sea under the craft, m (`AltitudeFromSurface`).
+    pub altitude_m: f64,
+    /// Surface speed: KSP2 feeds its records `Velocity.relativeVelocity`, which the `travellog` capture shows
+    /// is the speed over the turning ground (it read 0 on the pad, where the orbital speed is 175 m/s).
+    pub speed_mps: f64,
+    pub g_force: f64,
+    pub landed_or_splashed: bool,
+    /// Standing still on the ground or the sea (`IsVesselAtRest`).
+    pub at_rest: bool,
+    pub body: &'a str,
+    pub crew: Vec<String>,
+    /// Out of pre-launch: the first stage has fired (engines burning) or the craft has left the ground.
+    pub launched: bool,
+}
+
+/// The flight's travel log and records for the flight report (KSP2's `TravelLogManager` statistics and events,
+/// shown by `FlightReportUIManager`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FlightRecords {
     pub vessel: u64,
     pub name: String,
     pub launch_ut: f64,
     pub max_altitude_m: f64,
+    /// Highest Speed Overall.
     pub max_speed_mps: f64,
+    /// Highest Speed Over Land: below `SPEED_OVER_LAND_ALTITUDE_M`.
+    pub max_speed_over_land_mps: f64,
+    /// Total Distance Traveled, and the part of it on the ground or the sea (Ground Distance Covered).
+    pub distance_m: f64,
+    pub ground_distance_m: f64,
+    pub max_g: f64,
+    /// The bodies whose sphere of influence the flight has been in, first the one it started in.
     pub bodies: Vec<String>,
+    /// The crew aboard as last seen.
+    pub crew: Vec<String>,
+    pub log: Vec<LogEntry>,
+    last_ut: Option<f64>,
+    launched: bool,
+    /// Highest point since the last landing, for KSP2's `VesselLandedAfterFlight` (over 100 m).
+    climb_m: f64,
+    at_rest: bool,
 }
 
 impl FlightRecords {
-    pub fn note(&mut self, altitude_m: f64, speed_mps: f64, body: &str) {
-        self.max_altitude_m = self.max_altitude_m.max(altitude_m);
-        self.max_speed_mps = self.max_speed_mps.max(speed_mps);
-        if !self.bodies.iter().any(|b| b == body) {
-            self.bodies.push(body.to_string());
+    pub fn new(vessel: u64, name: &str, launch_ut: f64) -> Self {
+        FlightRecords {
+            vessel,
+            name: name.to_string(),
+            launch_ut,
+            ..Default::default()
+        }
+    }
+
+    /// Add one readout: KSP2's `UpdateVesselStatistics` with the distance flown since the last one, and the
+    /// log's Vessel launched, entered SOI and Vessel landed (at rest after climbing over
+    /// 100 m).
+    pub fn note(&mut self, s: &RecordSample) {
+        if let Some(t0) = self.last_ut {
+            let dt = s.ut - t0;
+            // a long gap (warp on rails, a reconnect) is not flown at the last speed
+            if dt > 0.0 && dt < 5.0 && s.speed_mps > 0.01 {
+                let d = s.speed_mps * dt;
+                self.distance_m += d;
+                if s.landed_or_splashed {
+                    self.ground_distance_m += d;
+                }
+            }
+        }
+        self.last_ut = Some(s.ut);
+        self.max_g = self.max_g.max(s.g_force);
+        self.max_altitude_m = self.max_altitude_m.max(s.altitude_m);
+        self.max_speed_mps = self.max_speed_mps.max(s.speed_mps);
+        if s.altitude_m < SPEED_OVER_LAND_ALTITUDE_M {
+            self.max_speed_over_land_mps = self.max_speed_over_land_mps.max(s.speed_mps);
+        }
+        if !s.crew.is_empty() || !self.launched {
+            self.crew = s.crew.clone();
+        }
+        // KSP2's `VesselLaunchedMessage`: when the vessel leaves pre-launch (the first stage fires), not when it
+        // is rolled out (the `travellog` capture logs it at the staging, UT 495.22).
+        if !self.launched && s.launched {
+            self.launched = true;
+            self.event(s.ut, "Vessel launched".into(), true);
+        }
+        match self.bodies.last() {
+            None => self.bodies.push(s.body.to_string()),
+            Some(b) if b != s.body => {
+                self.bodies.push(s.body.to_string());
+                self.event(s.ut, format!("Vessel entered {}'s SOI", s.body), true);
+            }
+            _ => {}
+        }
+        self.climb_m = self.climb_m.max(s.altitude_m);
+        if s.at_rest && !self.at_rest && self.climb_m > 100.0 {
+            self.event(s.ut, "Vessel landed".into(), true);
+            self.climb_m = 0.0;
+        }
+        self.at_rest = s.at_rest;
+    }
+
+    /// Log an event (KSP2's `AddObjectsEvent`: the same event at the same time is logged once).
+    pub fn event(&mut self, ut: f64, text: String, good: bool) {
+        if !self.log.iter().any(|e| e.ut == ut && e.text == text) {
+            self.log.push(LogEntry { ut, text, good });
         }
     }
 }
 
-/// The flight report window: how the flight ended, its records and the science it brought home. After a loss
-/// (`lost`) it offers what the original's `FlightReportUIManager.OnActiveVesselDestroyed` enables: Revert to
-/// Launch and Revert to VAB (off, with the reason, when `lost` holds one), the Tracking Station and the KSC.
+/// KSP2's flight report statuses (`_successMessageLocTerms`, `_failureMessageLocTerms`): one is picked at
+/// random when the vessel is recovered or lost. (key, English).
+pub const SUCCESS_STATUSES: [(&str, &str); 12] = [
+    ("Flight/FlightReport/SuccessStatus1", "Well done, pilot!"),
+    (
+        "Flight/FlightReport/SuccessStatus2",
+        "Excellent, you didn't crash!",
+    ),
+    ("Flight/FlightReport/SuccessStatus3", "Bravo, bravo!"),
+    ("Flight/FlightReport/SuccessStatus4", "Outstanding job."),
+    (
+        "Flight/FlightReport/SuccessStatus5",
+        "That was some good flying.",
+    ),
+    (
+        "Flight/FlightReport/SuccessStatus6",
+        "Very good, Jeb is proud of you.",
+    ),
+    ("Flight/FlightReport/SuccessStatus7", "Nicely done."),
+    (
+        "Flight/FlightReport/SuccessStatus8",
+        "You've earned your wings.",
+    ),
+    ("Flight/FlightReport/SuccessStatus9", "Mastery in motion!"),
+    (
+        "Flight/FlightReport/SuccessStatus10",
+        "You made that look easy!",
+    ),
+    (
+        "Flight/FlightReport/SuccessStatus11",
+        "Not bad, not bad at all.",
+    ),
+    (
+        "Flight/FlightReport/SuccessStatus12",
+        "I knew you could do it!",
+    ),
+];
+pub const FAILURE_STATUSES: [(&str, &str); 12] = [
+    (
+        "Flight/FlightReport/FailureStatus1",
+        "That could have gone better.",
+    ),
+    ("Flight/FlightReport/FailureStatus2", "Try again?"),
+    (
+        "Flight/FlightReport/FailureStatus3",
+        "Is that part supposed to be there?",
+    ),
+    (
+        "Flight/FlightReport/FailureStatus4",
+        "That was problematic.",
+    ),
+    (
+        "Flight/FlightReport/FailureStatus5",
+        "Well, that backfired.",
+    ),
+    ("Flight/FlightReport/FailureStatus6", "That looked cool!"),
+    (
+        "Flight/FlightReport/FailureStatus7",
+        "Came in a little hot!",
+    ),
+    (
+        "Flight/FlightReport/FailureStatus8",
+        "That was kind of ugly.",
+    ),
+    ("Flight/FlightReport/FailureStatus9", "What did we learn?"),
+    (
+        "Flight/FlightReport/FailureStatus10",
+        "I think that fizzled.",
+    ),
+    (
+        "Flight/FlightReport/FailureStatus11",
+        "You have this next time.",
+    ),
+    (
+        "Flight/FlightReport/FailureStatus12",
+        "Back to the drawing board.",
+    ),
+];
+
+/// How the flight stands in the report: KSP2's in-flight status (white), a success (green) or a failure (red).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlightOutcome {
+    InFlight,
+    Recovered,
+    Lost,
+}
+
+/// A log time as KSP2 prints it (`FlightReportLogItem`: the universal time's hours of the day, minutes and
+/// seconds, `[hh:mm:ss]`).
+pub fn fmt_log_time(ut: f64) -> String {
+    let t = ut.max(0.0) as u64;
+    format!("[{:02}:{:02}:{:02}]", t / 3600 % 24, t / 60 % 60, t % 60)
+}
+
+/// The report's records (`Flight/FlightReport/Records/*`), refreshed while it is open.
+pub fn flight_records_html(r: &FlightRecords, ut: f64) -> String {
+    let row = |k: &str, v: String| format!("<tr><td>{k}</td><td>{v}</td></tr>");
+    let mut rows = String::new();
+    rows.push_str(&row(
+        "Mission Time:",
+        if r.launch_ut > 0.0 {
+            fmt_met(ut - r.launch_ut)
+        } else {
+            fmt_met(0.0)
+        },
+    ));
+    rows.push_str(&row("Highest Altitude:", fmt_dist(r.max_altitude_m)));
+    rows.push_str(&row(
+        "Highest Speed Over Land:",
+        format!("{:.1} m/s", r.max_speed_over_land_mps),
+    ));
+    rows.push_str(&row(
+        "Highest Speed Overall:",
+        format!("{:.1} m/s", r.max_speed_mps),
+    ));
+    rows.push_str(&row(
+        "Ground Distance Covered:",
+        fmt_dist(r.ground_distance_m),
+    ));
+    rows.push_str(&row("Total Distance Traveled:", fmt_dist(r.distance_m)));
+    rows.push_str(&row(
+        "Highest G-Force Experienced:",
+        format!("{:.2} g", r.max_g),
+    ));
+    rows
+}
+
+/// The report's log, oldest first.
+pub fn flight_log_html(r: &FlightRecords) -> String {
+    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
+    r.log
+        .iter()
+        .map(|e| {
+            format!(
+                "<li class=\"{}\"><span>{}</span> {}</li>",
+                if e.good { "good" } else { "bad" },
+                fmt_log_time(e.ut),
+                esc(&e.text)
+            )
+        })
+        .collect()
+}
+
+/// The flight report window (KSP2's `FlightReportUIManager`): the status (`status`, coloured by `outcome`),
+/// the crew, the log, the records and the science recovered. After a loss (`lost`) it offers what
+/// `OnActiveVesselDestroyed` enables: Revert to Launch and Revert to VAB (off, with the reason, when `lost`
+/// holds one), the Tracking Station and the KSC.
 pub fn flight_report_html(
     r: &FlightRecords,
-    ended: &str,
+    outcome: FlightOutcome,
+    status: &str,
     ut: f64,
     science: Option<f64>,
     lost: Option<Option<&str>>,
 ) -> String {
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
-    let row = |k: &str, v: String| format!("<tr><td>{k}</td><td>{v}</td></tr>");
-    let mut rows = String::new();
-    if r.launch_ut > 0.0 {
-        rows.push_str(&row("Mission time", fmt_met(ut - r.launch_ut)));
-    }
-    rows.push_str(&row("Highest altitude", fmt_dist(r.max_altitude_m)));
-    rows.push_str(&row("Fastest speed", format!("{:.0} m/s", r.max_speed_mps)));
-    if !r.bodies.is_empty() {
-        rows.push_str(&row("Visited", esc(&r.bodies.join(", "))));
-    }
-    if let Some(s) = science {
-        rows.push_str(&row("Science", format!("{s:.0}")));
-    }
+    let class = match outcome {
+        FlightOutcome::InFlight => "",
+        FlightOutcome::Recovered => " good",
+        FlightOutcome::Lost => " bad",
+    };
+    let crew = if r.crew.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<div class=\"fr-crew\">{}</div>",
+            r.crew
+                .iter()
+                .map(|c| format!("<span>{}</span>", esc(c)))
+                .collect::<String>()
+        )
+    };
+    let science = science
+        .map(|s| {
+            format!("<table class=\"fr-science\"><tr><td>Science</td><td>{s:.0}</td></tr></table>")
+        })
+        .unwrap_or_default();
     let mut buttons = String::new();
     if let Some(revert_off) = lost {
         let off = revert_off
@@ -1606,9 +1862,11 @@ pub fn flight_report_html(
         ));
     }
     format!(
-        "<h3>Flight report</h3><div class=\"fr-name\">{}</div><div class=\"fr-ended\">{}</div><table>{rows}</table>{buttons}<button id=\"fr-close\" data-ose=\"fr-close\">Continue</button>",
-        esc(&r.name),
-        esc(ended)
+        "<h3>Flight Report</h3><div class=\"fr-name\">{name}</div><div class=\"fr-ended{class}\" id=\"fr-status\">{status}</div>{crew}<ul class=\"fr-log\" id=\"fr-log\">{log}</ul><table id=\"fr-records\">{records}</table>{science}{buttons}<button id=\"fr-close\" data-ose=\"fr-close\">Continue</button>",
+        name = esc(&r.name),
+        status = esc(status),
+        log = flight_log_html(r),
+        records = flight_records_html(r, ut),
     )
 }
 
@@ -2660,39 +2918,119 @@ mod tests {
         assert!(flight_events(&a, &c, "Kerbin").is_empty());
     }
 
+    fn sample(ut: f64, altitude_m: f64, speed_mps: f64, landed: bool) -> RecordSample<'static> {
+        RecordSample {
+            ut,
+            altitude_m,
+            speed_mps,
+            g_force: 1.0,
+            landed_or_splashed: landed,
+            at_rest: landed && speed_mps < 0.3,
+            body: "Kerbin",
+            crew: vec!["Jebediah Kerman".into()],
+            launched: ut >= 11.0,
+        }
+    }
+
+    /// KSP2's `TravelLogManager.UpdateVesselStatistics` and its log events.
     #[test]
-    fn records_keep_the_highest_and_fastest() {
-        let mut r = FlightRecords::default();
-        r.note(1000.0, 200.0, "Kerbin");
-        r.note(500.0, 900.0, "Kerbin");
-        r.note(80_000.0, 2200.0, "Mun");
-        assert_eq!(r.max_altitude_m, 80_000.0);
-        assert_eq!(r.max_speed_mps, 2200.0);
+    fn records_and_log_follow_the_travel_log() {
+        let mut r = FlightRecords::new(1, "Kerbal X", 5.0);
+        r.note(&sample(10.0, 0.0, 0.0, true));
+        // rolling along the ground at 20 m/s for 2 s: ground distance and speed over land
+        r.note(&sample(11.0, 0.5, 20.0, true));
+        r.note(&sample(12.0, 0.5, 20.0, true));
+        // climbing: above 25 m the speed no longer counts as over land
+        r.note(&sample(13.0, 24.0, 30.0, false));
+        r.note(&sample(14.0, 900.0, 200.0, false));
+        let mut hot = sample(15.0, 1500.0, 150.0, false);
+        hot.g_force = 4.5;
+        r.note(&hot);
+        let mut mun = sample(16.0, 3000.0, 100.0, false);
+        mun.body = "Mun";
+        r.note(&mun);
+        // down again and still: landed after flying over 100 m
+        for t in [17.0, 18.0] {
+            r.note(&RecordSample {
+                body: "Mun",
+                ..sample(t, 0.4, 0.0, true)
+            });
+        }
+        assert_eq!(r.max_altitude_m, 3000.0);
+        assert_eq!(r.max_speed_mps, 200.0);
+        assert_eq!(r.max_speed_over_land_mps, 30.0);
+        assert_eq!(r.ground_distance_m, 40.0);
+        assert_eq!(r.distance_m, 40.0 + 30.0 + 200.0 + 150.0 + 100.0);
+        assert_eq!(r.max_g, 4.5);
         assert_eq!(r.bodies, vec!["Kerbin", "Mun"]);
+        let log: Vec<&str> = r.log.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(
+            log,
+            vec![
+                "Vessel launched",
+                "Vessel entered Mun's SOI",
+                "Vessel landed"
+            ]
+        );
+        // the same event at the same time is logged once
+        r.event(17.0, "Vessel landed".into(), true);
+        assert_eq!(r.log.len(), 3);
+        // a gap on rails is not flown at the last speed
+        r.note(&RecordSample {
+            body: "Mun",
+            ..sample(500.0, 0.4, 3.0, true)
+        });
+        assert_eq!(r.ground_distance_m, 40.0);
         assert_eq!(fmt_met(3725.0), "01:02:05");
         assert_eq!(fmt_met(21_600.0 + 61.0), "1d 00:01:01");
-        let recovered = flight_report_html(&r, "Recovered", 100.0, Some(12.0), None);
-        assert!(recovered.contains("Fastest speed"));
-        assert!(!recovered.contains("Revert"));
+        assert_eq!(fmt_log_time(86_400.0 + 3725.0), "[01:02:05]");
+        let html = flight_report_html(
+            &r,
+            FlightOutcome::Recovered,
+            "Nicely done.",
+            100.0,
+            Some(12.0),
+            None,
+        );
+        for want in [
+            "Highest Speed Over Land:",
+            "Highest G-Force Experienced:",
+            "4.50 g",
+            "Jebediah Kerman",
+            "fr-ended good",
+            "<li class=\"good\"><span>[00:00:16]</span> Vessel entered Mun's SOI</li>",
+        ] {
+            assert!(html.contains(want), "{want} in {html}");
+        }
+        assert!(!html.contains("Revert"));
     }
 
     #[test]
     fn loss_report_offers_the_reverts_and_the_way_back() {
         let r = FlightRecords::default();
-        let html = flight_report_html(&r, "Vessel Destroyed", 0.0, None, Some(None));
+        let html = flight_report_html(
+            &r,
+            FlightOutcome::Lost,
+            "Back to the drawing board.",
+            0.0,
+            None,
+            Some(None),
+        );
         for want in [
             "data-save-action=\"RevertToLaunch\">Revert to Launch",
             "data-save-action=\"RevertToEditor\">Revert to VAB",
             ">Tracking Station<",
             ">KSC<",
             "id=\"fr-close\"",
+            "fr-ended bad",
         ] {
             assert!(html.contains(want), "{want} in {html}");
         }
         assert!(!html.contains("disabled"));
         let off = flight_report_html(
             &r,
-            "Vessel Destroyed",
+            FlightOutcome::Lost,
+            "x",
             0.0,
             None,
             Some(Some("revert is off")),
