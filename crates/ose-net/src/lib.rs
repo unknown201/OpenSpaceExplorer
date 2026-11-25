@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 /// A camera's forward and up, unit vectors (x, y, z).
 pub type CameraAxes = ((f32, f32, f32), (f32, f32, f32));
-pub const PROTOCOL_VERSION: u16 = 85;
+pub const PROTOCOL_VERSION: u16 = 86;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -1048,7 +1048,7 @@ pub struct FlightReadout {
     pub surface_deployments: Vec<(u16, f32)>,
     /// The burning stage is jets (their thrust follows speed and air; `thrust_kn` shows it).
     pub jet: bool,
-    /// The g-force the crew feels (protocol 85, KSP2's `geeForce`, the HUD's GFORCE gauge): the change of
+    /// The g-force the crew feels (protocol 86, KSP2's `geeForce`, the HUD's GFORCE gauge): the change of
     /// velocity over the last steps less gravity, in g. About 1 standing on the ground, 0 coasting.
     #[serde(default)]
     pub g_force: f64,
