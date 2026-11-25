@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 /// A camera's forward and up, unit vectors (x, y, z).
 pub type CameraAxes = ((f32, f32, f32), (f32, f32, f32));
-pub const PROTOCOL_VERSION: u16 = 83;
+pub const PROTOCOL_VERSION: u16 = 84;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -530,6 +530,12 @@ pub enum ClientMessage {
     EvaCamera {
         vessel: u64,
         camera: Option<CameraAxes>,
+    },
+    /// Destroy one of the player's own vessels from the Tracking Station (the original's Destroy Object,
+    /// `MapUISelectableEntry`), wherever it is, with no recovery. Answers `FlightAck` (protocol 84).
+    /// Last, so the variants before it keep their postcard discriminants.
+    DestroyVessel {
+        vessel: u64,
     },
 }
 
