@@ -1209,6 +1209,24 @@ impl Universe {
             && p.r.length() > self.rails_clear_radius(body)
     }
 
+    /// Seconds until the orbit a burning vessel is on now (its osculating orbit, as KSP2's `GetEndBurnOrbit`
+    /// patch) escapes its body's sphere of influence or meets another's, if it does.
+    fn burn_transition_in(&self, e: Entity) -> Option<f64> {
+        let p = self.world.get::<flight::Powered>(e)?;
+        let body = self.body_of(e)?;
+        let mu = self.world.get::<bodies::Body>(body)?.mu;
+        let ut = self.ut();
+        let orbit = ose_math::Orbit::from_state_vectors(mu, p.r, p.v, ut);
+        let index = self.world.get_resource::<bodies::BodyIndex>()?;
+        let patches = trajectory::predict(&self.world, index, body, orbit, ut, &self.params);
+        let first = patches.first()?;
+        matches!(
+            first.end,
+            trajectory::Transition::Encounter | trajectory::Transition::Escape
+        )
+        .then(|| first.end_ut - ut)
+    }
+
     /// Choose the vessels whose height limits time warp (`WarpFocus`): the server passes the ones players fly.
     pub fn set_warp_focus(&mut self, vessels: Vec<Entity>) {
         self.world.insert_resource(WarpFocus(vessels));
@@ -1313,11 +1331,20 @@ impl Universe {
                     }
                 })
                 .fold(f64::INFINITY, f64::min);
+            // and when the burn's orbit leaves the sphere of influence (an escape) or enters another (an
+            // encounter) within that time plus 50 s (`GetOrbitalEventLookaheadTimeSeconds`)
+            let transition_in = flying
+                .iter()
+                .filter_map(|&e| self.burn_transition_in(e))
+                .fold(f64::INFINITY, f64::min);
             Some(
                 [100, 50, 10, 4, 2]
                     .into_iter()
                     .find(|&r| {
-                        r <= flight::MAX_THRUST_WARP && dry_in > (1.0 + r as f64) / 2.0 + 10.0
+                        let slowdown = (1.0 + r as f64) / 2.0;
+                        r <= flight::MAX_THRUST_WARP
+                            && dry_in > slowdown + 10.0
+                            && transition_in > slowdown + 50.0
                     })
                     .unwrap_or(1),
             )
@@ -3271,6 +3298,68 @@ mod tests {
         u.set_powered(v, q);
         u.set_warp(100);
         assert_eq!(u.warp(), 1);
+    }
+
+    #[test]
+    fn a_warped_burn_drops_to_1x_before_it_leaves_the_sphere_of_influence() {
+        // `ClampRateToOrbitTransitions`: an escape (or encounter) on the burn's orbit within
+        // (1 + rate) / 2 + 50 s holds the burn at 1x, as running dry within (1 + rate) / 2 + 10 s does
+        // Kerbin inside Kerbol's sphere, so its own sphere has an edge to leave by
+        let all: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let system: Vec<_> = all
+            .into_iter()
+            .filter(|b| b.id == "Kerbol" || b.id == "Kerbin")
+            .collect();
+        let mut u = Universe::with_bodies(&system);
+        let body = u.body_entity("Kerbin").unwrap();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts
+            .iter()
+            .find(|c| c.name == "Lesson Animation rocket")
+            .unwrap();
+        let report = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Start", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(c, &defs, &res));
+        let mut p = u.powered(v).unwrap().clone();
+        p.r = DVec3::new(10_000_000.0, 0.0, 0.0);
+        p.landed = false;
+        u.set_powered(v, p);
+        u.stage(v);
+        let soi = u
+            .world
+            .get::<bodies::Body>(body)
+            .unwrap()
+            .soi_radius_m
+            .expect("Kerbin's sphere of influence");
+        let out = DVec3::new(1.0, 0.0, 0.0);
+        let leaving = |u: &mut Universe, seconds: f64| {
+            // flying out at 2 km/s (and 300 m/s across), `seconds` from the edge
+            let mut p = u.powered(v).unwrap().clone();
+            p.r = out * (soi - 2_000.0 * seconds);
+            p.v = out * 2_000.0 + DVec3::new(0.0, 300.0, 0.0);
+            p.facing = out;
+            u.set_powered(v, p);
+            assert!(u.set_controls(v, 1.0, flight::Attitude::Fixed(out)));
+            u.set_warp(1);
+            u.step();
+            u.set_warp(100);
+            println!("{seconds} s out: escape in {:?}", u.burn_transition_in(v));
+            u.warp()
+        };
+        // 150 s out: (1 + 100) / 2 + 50 = 100.5 s, 100x allowed
+        assert_eq!(leaving(&mut u, 150.0), 100);
+        // 80 s out: 100x too close, 50x (75.5 s) fits; 70 s out: 50x too close, 10x (55.5 s) fits
+        assert_eq!(leaving(&mut u, 80.0), 50);
+        assert_eq!(leaving(&mut u, 70.0), 10);
+        // 30 s out: nothing above 1x
+        assert_eq!(leaving(&mut u, 30.0), 1);
     }
 
     #[test]

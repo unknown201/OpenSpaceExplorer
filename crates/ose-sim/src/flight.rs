@@ -2100,8 +2100,11 @@ pub fn integrate_with_propulsion(
                 let flat = heading_dir(p.r, p.drive.heading_rad);
                 let pitch = ground_pitch(p, body, flat, up, dt);
                 (flat * pitch.cos() + up * pitch.sin()).normalized()
-            } else {
+            } else if p.walker {
                 p.r.normalized()
+            } else {
+                // standing on its base, flush with the ground under it (KSP2's colliders on a slope)
+                settle_toward(p.facing, ground_normal(body, terrain, p.r, ut), dt)
             };
         }
         p.angvel = DVec3::ZERO;
@@ -2598,6 +2601,20 @@ pub fn integrate_with_propulsion(
         p.coasting_since = None;
     }
     out
+}
+
+/// How fast a craft standing on the ground settles flush with it, rad/s (our own figure: a 15 degree slope in
+/// about a quarter of a second, about as quick as KSP2's rigid bodies drop onto their downhill rim).
+pub const SLOPE_SETTLE_RAD_S: f64 = 1.0;
+
+/// `facing` turned toward `normal` by at most `SLOPE_SETTLE_RAD_S * dt`.
+fn settle_toward(facing: DVec3, normal: DVec3, dt: f64) -> DVec3 {
+    let lean = facing.dot(normal).clamp(-1.0, 1.0).acos();
+    let axis = facing.cross(normal);
+    if lean <= SLOPE_SETTLE_RAD_S * dt || axis.length() < 1e-9 {
+        return normal;
+    }
+    rotate(facing, axis.normalized() * SLOPE_SETTLE_RAD_S, dt)
 }
 
 /// How high a landed craft's centre of mass stands: on its lowest point, or on its side (its footprint)

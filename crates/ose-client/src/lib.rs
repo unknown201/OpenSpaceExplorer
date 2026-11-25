@@ -6317,6 +6317,15 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
+    if let Some(btn) = doc.get_element_by_id("fh-burn-delete") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+            ev.stop_propagation();
+            a.borrow_mut().delete_all_maneuvers();
+        });
+        btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     if let Some(btn) = doc.get_element_by_id("clear-node") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut()>::new(move || a.borrow_mut().delete_node());
@@ -13932,7 +13941,7 @@ impl App {
                             .node_burn(&n)
                             .is_some_and(|e| e.short_mps >= hud::SHORT_MPS);
                     el.class_list().toggle_with_force("short", short).ok();
-                    el.set_text_content(Some(&text));
+                    set_text(&self.doc, "fh-burn-text", &text);
                     el.class_list().add_1("on").ok();
                     el.class_list()
                         .toggle_with_force("burning", f.burn_left_mps.is_some())
@@ -15656,6 +15665,24 @@ impl App {
         self.node = Some(next);
         self.show_node_inputs();
         self.send_node();
+    }
+
+    /// The burn timer's Delete All Maneuvers (`ManeuverProvider.DeleteActiveNode`): the active node, the next
+    /// one the timer counts down to, goes with every node after it. Nodes before it are already flown, so the
+    /// whole plan goes, and a burn under way stops.
+    fn delete_all_maneuvers(&mut self) {
+        let Some(vessel) = self
+            .node
+            .map(|n| n.vessel)
+            .or_else(|| self.nodes.first().map(|n| n.vessel))
+        else {
+            return;
+        };
+        if self.node.is_none() {
+            self.node = Some(self.nodes.remove(0));
+        }
+        self.nodes.retain(|n| n.vessel == vessel);
+        self.clear_node();
     }
 
     /// Edit another planned node (a click on its marker): the one edited joins the others.
