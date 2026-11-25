@@ -24,37 +24,6 @@ fn corners(h: DVec3) -> [DVec3; 8] {
     })
 }
 
-/// How close to the ground a model point counts as resting on it, m (our own figure).
-const RESTING_GAP_M: f64 = 0.03;
-
-/// Whether the centre of mass (the origin) lies over the points a craft rests on, seen along `up`: inside their
-/// outline, so gravity presses it onto them instead of turning it over an edge.
-fn over_support(points: &[DVec3], up: DVec3) -> bool {
-    let e1 = if up.x.abs() < 0.9 {
-        DVec3::new(1.0, 0.0, 0.0)
-    } else {
-        DVec3::new(0.0, 1.0, 0.0)
-    };
-    let e1 = (e1 - up * e1.dot(up)).normalized();
-    let e2 = up.cross(e1);
-    let mut angles: Vec<f64> = Vec::new();
-    for q in points {
-        let (x, y) = (q.dot(e1), q.dot(e2));
-        if x.hypot(y) < 0.01 {
-            return true;
-        }
-        angles.push(y.atan2(x));
-    }
-    if angles.len() < 3 {
-        return false;
-    }
-    angles.sort_by(f64::total_cmp);
-    let wrap = angles[0] + std::f64::consts::TAU - angles[angles.len() - 1];
-    let widest = angles.windows(2).map(|w| w[1] - w[0]).fold(wrap, f64::max);
-    // every direction has a resting point within a half turn of it
-    widest < std::f64::consts::PI - 0.02
-}
-
 /// How fast a craft too tall for the slope it stands on starts to fall over, rad/s (our own figure).
 const SLOPE_TOPPLE_RAD_S: f64 = 0.3;
 
@@ -500,11 +469,13 @@ impl Structure {
                 let f = flight::vessel_basis(p);
                 let lowest = (0..self.rigid.len())
                     .filter(|&i| self.rigid.present[i])
-                    .flat_map(|i| {
-                        let sag = self.rest_sag_m(i);
-                        self.ground_points(i)
-                            .into_iter()
-                            .map(move |q| world(f, q - centre).dot(up) + sag)
+                    .map(|i| {
+                        let (c, h) = self.part_box(i);
+                        world(f, c - centre).dot(up)
+                            - h.x * f.0.dot(up).abs()
+                            - h.y * f.1.dot(up).abs()
+                            - h.z * f.2.dot(up).abs()
+                            + self.rest_sag_m(i)
                     })
                     .fold(f64::INFINITY, f64::min);
                 let radius = support(p.r, ut + dt) - lowest;
@@ -522,10 +493,9 @@ impl Structure {
                 (0..self.rigid.len())
                     .filter(|&i| self.rigid.present[i])
                     .flat_map(|i| {
+                        let (c, h) = self.part_box(i);
                         let sag = self.rest_sag_m(i);
-                        self.ground_points(i)
-                            .into_iter()
-                            .map(move |q| (q - centre, sag))
+                        corners(h).map(move |q| (c + q - centre, sag))
                     })
                     .map(|(q, sag)| {
                         let at = p.r + world(f, q);
@@ -566,14 +536,6 @@ impl Structure {
         );
         for i in (0..self.rigid.len()).filter(|&i| self.rigid.present[i]) {
             let (centre, half) = self.part_box(i);
-            // a part whose whole box stays clear of the ground through the step cannot touch it
-            let reach_m = half.length() + 0.05;
-            let from_c = before.r + world(old_frame, centre - mass.centre_m);
-            let to_c = p.r + world(frame, centre - mass.centre_m);
-            let step_m = (to_c - from_c).length();
-            if from_c.length().min(to_c.length()) > ceiling + step_m + reach_m {
-                continue;
-            }
             let travel = if self.gear_out[i] {
                 self.gear_defs[i]
                     .as_ref()
@@ -582,8 +544,8 @@ impl Structure {
             } else {
                 0.0
             };
-            for point in self.ground_points(i) {
-                let offset = point - mass.centre_m;
+            for corner in corners(half) {
+                let offset = centre + corner - mass.centre_m;
                 let from = before.r + world(old_frame, offset);
                 let to = p.r + world(frame, offset);
                 let distance = (to - from).length();
@@ -758,6 +720,7 @@ impl Structure {
         let penetration = (0..self.rigid.len())
             .filter(|&i| self.rigid.present[i] && !out.contact_damage.contains(&i))
             .flat_map(|i| {
+                let (c, h) = self.part_box(i);
                 let travel = if self.gear_out[i] {
                     self.gear_defs[i]
                         .as_ref()
@@ -766,9 +729,7 @@ impl Structure {
                 } else {
                     0.0
                 };
-                self.ground_points(i)
-                    .into_iter()
-                    .map(move |q| (q - mass.centre_m, travel))
+                corners(h).map(|q| (c + q - mass.centre_m, travel))
             })
             .map(|(r, travel)| {
                 let at = p.r + world(end_frame, r);
@@ -788,28 +749,7 @@ impl Structure {
             p.facing.dot(up).clamp(-1.0, 1.0).acos()
         };
         p.tipped = lean.tan().abs() > p.footprint_m / p.ground_clearance_m.max(0.1);
-        // A craft lying on its side comes to rest only where it can: with its centre of mass over the ground it
-        // touches and the slope within its grip. A tank across a hillside rolls on down it, as on KSP2's
-        // colliders, instead of stopping dead where it first lay still for a tick.
-        let at_rest = !p.tipped || p.level || p.walker || {
-            let ground: Vec<DVec3> = (0..self.rigid.len())
-                .filter(|&i| self.rigid.present[i] && !out.contact_damage.contains(&i))
-                .flat_map(|i| {
-                    let sag = self.rest_sag_m(i);
-                    self.ground_points(i)
-                        .into_iter()
-                        .map(move |q| (q - mass.centre_m, sag))
-                })
-                .map(|(q, sag)| (p.r + world(end_frame, q), sag))
-                .filter(|&(at, sag)| at.length() - support(at, ut + dt) + sag < RESTING_GAP_M)
-                .map(|(at, _)| at - p.r)
-                .collect();
-            let normal = flight::ground_normal(body, terrain, p.r, ut + dt);
-            let slope = normal.dot(up).clamp(-1.0, 1.0).acos();
-            slope.tan() <= crate::contact::STATIC_FRICTION && over_support(&ground, up)
-        };
         p.landed = out.contact_damage.is_empty()
-            && at_rest
             && (aligned || p.tipped)
             && omega.length() < 0.1
             && velocity.dot(local(frame, up)).abs() < 0.1;
@@ -879,8 +819,6 @@ mod tests {
             craft.parts.push(child);
         }
         let mut st = Structure::build(&craft, &defs, &res);
-        // these are 2 m boxes, not the capsule's model
-        st.drop_model_hulls();
         let radius = 1_000_000.0;
         let body = Body {
             id: "Test".into(),

@@ -2715,34 +2715,6 @@ impl Structure {
         self.model_hulls.get(i)?.as_ref()
     }
 
-    /// Every part as its box (tests built on boxes of their own size).
-    #[cfg(test)]
-    pub(crate) fn drop_model_hulls(&mut self) {
-        self.model_hulls.iter_mut().for_each(|h| *h = None);
-    }
-
-    /// Where part `i` meets the ground, in the vessel frame: the points of its model hull (KSP2's parts meet
-    /// the terrain on their colliders, so a rolled fuselage touches down on its round side and a bell on its rim,
-    /// not on the corners of their boxes), or its box's corners for a part without one and for landing gear,
-    /// whose wheel or foot and suspension stand on the box (`gear_defs`).
-    pub fn ground_points(&self, i: usize) -> Vec<DVec3> {
-        if self.gear_defs[i].is_none() {
-            if let Some(h) = self.model_hull(i) {
-                return h.points_at(self.rigid.rest_position(i));
-            }
-        }
-        let (c, h) = self.part_box(i);
-        (0..8)
-            .map(|k| {
-                c + DVec3::new(
-                    if k & 1 == 0 { -h.x } else { h.x },
-                    if k & 2 == 0 { -h.y } else { h.y },
-                    if k & 4 == 0 { -h.z } else { h.z },
-                )
-            })
-            .collect()
-    }
-
     /// A stack part's hull between its stack nodes (`None`: the part is its box).
     pub fn hull_taper(&self, i: usize) -> Option<Taper> {
         self.hull_taper[i]
