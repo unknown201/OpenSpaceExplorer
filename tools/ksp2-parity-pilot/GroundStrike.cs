@@ -21,8 +21,10 @@ namespace OpenSpaceExplorer.Validation
     //   land    Stock04_Jet (craft-jet.json) takes off from Runway_1, climbs to 25 m over the ground, throttle
     //           cut, and is flown down onto the runway (pitch held to sink at 1.5 m/s), gear down; 15 s rolling.
     //   belly   the same with the gear raised before the descent: it lands on its belly.
-    //   tail    Stock04_Jet rolls to 50 m/s and pulls full pitch up; the moment it leaves the runway the throttle
-//           is cut with the stick still back, so it stalls nose high and settles back onto its tail.
+    //   tail    takes off and climbs to 25 m like `land`, throttle cut, then the nose is held 18 degrees up (past
+    //           the angle its tail meets the runway at with the gear down) while it sinks, so it settles tail
+    //           first; held 3 s after it is down, then let go. (Run 2 pulled full stick at 50 m/s and cut the
+    //           throttle as it lifted: it stalled, nosed over to -23 degrees and struck nose first.)
     //   stack   the drop stack (craft-drop-stack.json: pod, tanks, Swivel) set down upright on Runway_1 at 4 m/s.
     // Only inputs and action groups are used; physics is never modified.
     public static class GroundStrike
@@ -249,57 +251,60 @@ namespace OpenSpaceExplorer.Validation
                 input.OverrideInputMaxThrottle(true);
                 vessel.ActivateNextStage();
                 Phase("roll");
-                double rotateAt = mode == "tail" ? 50 : 60;
+                double rotateAt = 60;
                 t0 = 0;
                 while (t0 < 90 && (G.ViewController.GetActiveSimVessel()?.SrfSpeedMagnitude ?? 0) < rotateAt) { t0 += Time.deltaTime; yield return null; }
                 Phase("rotate");
                 InputHolder.Pitch = 1f;
+                t0 = 0;
+                while (t0 < 10 && (G.ViewController.GetActiveSimVessel()?.Pitch_HorizonRelative ?? 0) < 10) { t0 += Time.deltaTime; yield return null; }
+                InputHolder.Pitch = null;
+                Phase("climb");
+                t0 = 0;
+                while (t0 < 30)
+                {
+                    var v = G.ViewController.GetActiveSimVessel();
+                    Transform root = null;
+                    if (v != null) foreach (var (_, _, frame) in Parts(v)) { root = frame; break; }
+                    if (root != null && OverGround(root.position, Up(v, root.position)) > 25) break;
+                    t0 += Time.deltaTime; yield return null;
+                }
+                if (mode == "belly")
+                {
+                    // the group's state may not match the deployed gear at launch: raise it through a set
+                    SetGroup(KSPActionGroup.Gear, true);
+                    yield return new WaitForSeconds(0.2f);
+                    SetGroup(KSPActionGroup.Gear, false);
+                    Phase("gear up (group " + G.ViewController.GetActiveSimVessel()?.GetActionGroupState(KSPActionGroup.Gear) + ")");
+                    yield return new WaitForSeconds(3f);
+                }
+                input.OverrideInputThrottleCutoff(true);
                 if (mode == "tail")
                 {
-                    // full pitch up until it leaves the runway, then the throttle cut with the stick still back:
-                    // it stalls nose high and settles back tail first
+                    // nose held 18 degrees up while it sinks, the stick damped on the pitch rate
+                    Phase("flare");
                     t0 = 0;
-                    while (t0 < 15 && (G.ViewController.GetActiveSimVessel()?.Situation ?? VesselSituations.Landed) != VesselSituations.Flying) { t0 += Time.deltaTime; yield return null; }
-                    input.OverrideInputThrottleCutoff(true);
-                    Phase("stall");
-                    t0 = 0;
-                    bool flew = true;
-                    while (t0 < 20)
+                    float downFor = -1;
+                    double lastPitch = double.NaN;
+                    while (t0 < 60)
                     {
-                        var sit = G.ViewController.GetActiveSimVessel()?.Situation ?? VesselSituations.Landed;
-                        if (flew && sit != VesselSituations.Flying && t0 > 0.5f) { Phase("struck"); flew = false; }
+                        var v = G.ViewController.GetActiveSimVessel();
+                        if (v == null) break;
+                        double pitch = v.Pitch_HorizonRelative;
+                        double rate = double.IsNaN(lastPitch) || Time.deltaTime <= 0 ? 0 : (pitch - lastPitch) / Time.deltaTime;
+                        lastPitch = pitch;
+                        InputHolder.Pitch = Mathf.Clamp((float)(0.12 * (18 - pitch) - 0.05 * rate), -1f, 1f);
+                        if (downFor < 0 && v.Situation != VesselSituations.Flying) { Phase("struck"); downFor = 0; }
+                        if (downFor >= 0) { downFor += Time.deltaTime; if (downFor > 3) break; }
                         t0 += Time.deltaTime; yield return null;
-                        if (!flew && t0 > 3) break;
                     }
                     InputHolder.Pitch = null;
                     Phase("after");
+                    SetGroup(KSPActionGroup.Brakes, true);
                     yield return new WaitForSeconds(8f);
                 }
                 else
                 {
-                    t0 = 0;
-                    while (t0 < 10 && (G.ViewController.GetActiveSimVessel()?.Pitch_HorizonRelative ?? 0) < 10) { t0 += Time.deltaTime; yield return null; }
-                    InputHolder.Pitch = null;
-                    Phase("climb");
-                    t0 = 0;
-                    while (t0 < 30)
-                    {
-                        var v = G.ViewController.GetActiveSimVessel();
-                        Transform root = null;
-                        if (v != null) foreach (var (_, _, frame) in Parts(v)) { root = frame; break; }
-                        if (root != null && OverGround(root.position, Up(v, root.position)) > 25) break;
-                        t0 += Time.deltaTime; yield return null;
-                    }
-                    if (mode == "belly")
-                    {
-                        // the group's state may not match the deployed gear at launch: raise it through a set
-                        SetGroup(KSPActionGroup.Gear, true);
-                        yield return new WaitForSeconds(0.2f);
-                        SetGroup(KSPActionGroup.Gear, false);
-                        Phase("gear up (group " + G.ViewController.GetActiveSimVessel()?.GetActionGroupState(KSPActionGroup.Gear) + ")");
-                        yield return new WaitForSeconds(3f);
-                    }
-                    input.OverrideInputThrottleCutoff(true);
                     Phase("descend");
                     // pitch held to sink at 1.5 m/s, nose kept between -5 and 12 degrees
                     t0 = 0;

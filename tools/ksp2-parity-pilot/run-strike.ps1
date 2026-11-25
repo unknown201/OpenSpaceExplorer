@@ -18,7 +18,7 @@
        reference\ksp2-strike-<mode>:
          strike land   Stock04_Jet takes off from Runway_1 and is flown back down onto it, gear down
          strike belly  the same with the gear raised: a belly landing
-         strike tail   Stock04_Jet pulls up at 50 m/s, throttle cut as it lifts off: it settles back onto its tail
+         strike tail   Stock04_Jet climbs to 25 m, throttle cut, nose held 18 deg up as it sinks: it lands tail first
          strike stack  pod, tanks and Swivel set down upright on Runway_1 at 4 m/s
        Each lists every part's colliders (colliders.csv, collider-points.csv) and logs every contact a part
        makes with the ground (strike-contacts.csv), the craft (strike-trace.csv) and lost parts (strike-parts.csv).
