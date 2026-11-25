@@ -182,11 +182,6 @@ pub enum ClientMessage {
     RecoverVessel {
         vessel: u64,
     },
-    /// Destroy one of the player's own vessels from the Tracking Station (the original's Destroy Object,
-    /// `MapUISelectableEntry`), wherever it is, with no recovery. Answers `FlightAck` (protocol 84).
-    DestroyVessel {
-        vessel: u64,
-    },
     /// Clear a launch site of the player's own vessels before rolling out another (the original's VAB
     /// "Selected launchpad is occupied. Do you want to clear the launchpad?", `ClearVesselsAtSelectedLaunchSite`).
     /// Refused while another player's vessel stands there. Answers `LaunchSiteCleared`.
@@ -535,6 +530,12 @@ pub enum ClientMessage {
     EvaCamera {
         vessel: u64,
         camera: Option<CameraAxes>,
+    },
+    /// Destroy one of the player's own vessels from the Tracking Station (the original's Destroy Object,
+    /// `MapUISelectableEntry`), wherever it is, with no recovery. Answers `FlightAck` (protocol 84).
+    /// Last, so the variants before it keep their postcard discriminants.
+    DestroyVessel {
+        vessel: u64,
     },
 }
 
