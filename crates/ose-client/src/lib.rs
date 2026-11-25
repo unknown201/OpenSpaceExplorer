@@ -75,6 +75,7 @@ pub use ose_guidance::plan as rendezvous_plan;
 pub mod colonies_ui;
 mod rendezvous_ui;
 pub mod rnd;
+pub mod routes_ui;
 pub mod scene;
 pub mod settings;
 #[cfg(target_arch = "wasm32")]
@@ -101,9 +102,9 @@ use web_sys::{
 };
 
 use ose_net::{
-    Agency, CampaignMember, ClientMessage, DifficultyDefinition, DifficultyOption,
-    DifficultyPreset, DifficultyValue, PatchEnd, ServerMessage, SessionInfo, SessionMode,
-    PROTOCOL_VERSION, WS_PATH,
+    Agency, CampaignMember, ClientMessage, DepotInfo, DifficultyDefinition, DifficultyOption,
+    DifficultyPreset, DifficultyValue, PatchEnd, RecordingInfo, RouteEnd, RouteInfo, ServerMessage,
+    SessionInfo, SessionMode, StayedRun, PROTOCOL_VERSION, WS_PATH,
 };
 
 /// The hint shown while a Kerbal holds a ladder; taken down when it lets go or boards.
@@ -385,6 +386,15 @@ struct App {
     ts_colonies: bool,
     ts_colony: Option<u64>,
     colonies_asked_ms: f64,
+    /// Delivery routes (protocol 71+): the Routes tab, what is picked there, and the campaign's routes, proving
+    /// flights and depots as the server last sent them.
+    ts_routes: bool,
+    ts_route_pick: Option<routes_ui::Pick>,
+    routes_asked_ms: f64,
+    routes_known: bool,
+    routes: Vec<RouteInfo>,
+    route_recordings: Vec<RecordingInfo>,
+    depots: Vec<DepotInfo>,
     ts_rendered_ms: f64,
     /// Whether the KSC camera is on the launch pad (glides there while the pad dialog is open).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -1105,6 +1115,13 @@ pub fn start() -> Result<(), JsValue> {
         ts_colonies: false,
         ts_colony: None,
         colonies_asked_ms: 0.0,
+        ts_routes: false,
+        ts_route_pick: None,
+        routes_asked_ms: 0.0,
+        routes_known: false,
+        routes: Vec::new(),
+        route_recordings: Vec::new(),
+        depots: Vec::new(),
         ts_rendered_ms: 0.0,
         ksc_on_pad: false,
         throttle: 0.0,
@@ -2893,6 +2910,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 let mut app = a.borrow_mut();
                 app.ts_mine_only = mine;
                 app.ts_colonies = false;
+                app.ts_routes = false;
                 app.render_tracking();
             }),
         )?;
@@ -2902,7 +2920,19 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         Box::new(|a| {
             let mut app = a.borrow_mut();
             app.ts_colonies = true;
+            app.ts_routes = false;
             app.ask_colonies(now_ms());
+            app.render_tracking();
+        }),
+    )?;
+    wire(
+        "ts-tab-routes",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.ts_routes = true;
+            app.ts_colonies = false;
+            app.routes_asked_ms = 0.0;
+            app.ask_routes(now_ms());
             app.render_tracking();
         }),
     )?;
@@ -2957,6 +2987,9 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                     }
                     app.ts_colony = None;
                 }
+                return;
+            }
+            if app.route_click(&el) {
                 return;
             }
             if let Some(id) = num("data-ose-colony") {
@@ -7060,6 +7093,38 @@ impl App {
                     self.render_tracking();
                 }
             }
+            ServerMessage::Routes {
+                depots,
+                recordings,
+                routes,
+                reason,
+            } => {
+                if let Some(why) = reason {
+                    hud::push(&self.doc, &format!("Routes: {why}"), "warning");
+                }
+                if self.routes_known {
+                    // a run of a route came home, delivered, or was lost since the last answer
+                    for r in &routes {
+                        let before = self
+                            .routes
+                            .iter()
+                            .find(|o| o.id == r.id)
+                            .map_or(0, |o| o.runs.len());
+                        if r.runs.len() > before {
+                            if let Some((text, tier)) = routes_ui::run_toast(r) {
+                                hud::push(&self.doc, &text, tier);
+                            }
+                        }
+                    }
+                }
+                self.routes_known = true;
+                self.routes = routes;
+                self.route_recordings = recordings;
+                self.depots = depots;
+                if self.tracking_open {
+                    self.render_tracking();
+                }
+            }
             ServerMessage::AgencyNews { by, event } => {
                 let tech = |id: &str| {
                     let key = self
@@ -10997,6 +11062,161 @@ impl App {
         }
     }
 
+    /// Ask the server for the routes, proving flights and depots, at most every 3 s.
+    fn ask_routes(&mut self, now: f64) {
+        if now - self.routes_asked_ms < 3000.0 {
+            return;
+        }
+        self.routes_asked_ms = now;
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::RoutesInfo);
+        }
+    }
+
+    /// The Routes tab: routes, proving flights and depots, and the picked route's or recording's card.
+    fn render_routes_tab(&mut self) {
+        let gone = match self.ts_route_pick {
+            Some(routes_ui::Pick::Route(id)) => !self.routes.iter().any(|r| r.id == id),
+            Some(routes_ui::Pick::Recording(id)) => {
+                !self.route_recordings.iter().any(|p| p.id == id)
+            }
+            None => false,
+        };
+        if gone {
+            self.ts_route_pick = None;
+        }
+        let list = routes_ui::render_list(
+            &self.routes,
+            &self.route_recordings,
+            &self.depots,
+            self.ts_route_pick,
+        );
+        let info = match self.ts_route_pick {
+            Some(routes_ui::Pick::Route(id)) => self
+                .routes
+                .iter()
+                .find(|r| r.id == id)
+                .map(|r| routes_ui::render_route(r, &self.depots, self.time.ut_at(now_ms()))),
+            Some(routes_ui::Pick::Recording(id)) => {
+                self.route_recordings.iter().find(|p| p.id == id).map(|p| {
+                    let made = self.routes.iter().any(|r| r.recording == id);
+                    routes_ui::render_recording(p, self.player_id, made)
+                })
+            }
+            None => None,
+        }
+        .unwrap_or_else(|| {
+            "<div class=\"ts-hint\">Select a route or a proving flight</div>".into()
+        });
+        for (id, html) in [
+            ("ts-list", list),
+            ("ts-info", info),
+            ("ts-filters", String::new()),
+        ] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                let key = format!("{}:{}", html.len(), hud::fnv(&html));
+                if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+                    el.set_inner_html(&html);
+                    el.set_attribute("data-ose-key", &key).ok();
+                }
+            }
+        }
+        for (id, on) in [
+            ("ts-tab-all", false),
+            ("ts-tab-mine", false),
+            ("ts-tab-colonies", false),
+            ("ts-tab-routes", true),
+        ] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                el.class_list().toggle_with_force("on", on).ok();
+            }
+        }
+    }
+
+    /// A click on one of the routes controls in the tracking station; false when it was not one.
+    fn route_click(&mut self, el: &Element) -> bool {
+        let attr = |name: &str| {
+            el.closest(&format!("[{name}]"))
+                .ok()
+                .flatten()
+                .and_then(|e| e.get_attribute(name))
+        };
+        let num = |name: &str| attr(name).and_then(|s| s.parse::<u64>().ok());
+        let msg = if let Some(id) = num("data-ose-route-pause") {
+            let paused = attr("data-ose-paused").as_deref() == Some("true");
+            Some(ClientMessage::PauseRoute {
+                id,
+                paused: !paused,
+            })
+        } else if let Some(id) = num("data-ose-route-delete") {
+            let name = self
+                .routes
+                .iter()
+                .find(|r| r.id == id)
+                .map(|r| r.name.clone())
+                .unwrap_or_default();
+            let sure = web_sys::window()
+                .and_then(|w| {
+                    w.confirm_with_message(&format!(
+                        "Delete the route {name}? A run on its way is left where it is."
+                    ))
+                    .ok()
+                })
+                .unwrap_or(false);
+            sure.then_some(ClientMessage::DeleteRoute { id })
+        } else if let Some(id) = num("data-ose-route-end") {
+            let when = match attr("data-ose-end").as_deref() {
+                Some("Stay") => RouteEnd::Stay,
+                Some("Return") => RouteEnd::Return,
+                Some("LetGo") => RouteEnd::LetGo,
+                _ => RouteEnd::Rotate,
+            };
+            Some(ClientMessage::SetRouteEnd { id, when })
+        } else if let Some(id) = num("data-ose-route-stayed") {
+            let what = match attr("data-ose-what").as_deref() {
+                Some("SendHome") => StayedRun::SendHome,
+                Some("LetGo") => StayedRun::LetGo,
+                _ => StayedRun::Keep,
+            };
+            Some(ClientMessage::RouteStayed { id, what })
+        } else if let Some(id) = num("data-ose-rec-route") {
+            let name = self
+                .doc
+                .get_element_by_id("rt-name")
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                .map(|i| i.value().trim().to_string())
+                .unwrap_or_default();
+            Some(ClientMessage::CreateRoute {
+                recording: id,
+                name,
+            })
+        } else if let Some(id) = num("data-ose-rec-forget") {
+            Some(ClientMessage::ForgetRecording { id })
+        } else if num("data-ose-rec-stop").is_some() {
+            Some(ClientMessage::StopRecording)
+        } else if let Some(vessel) = num("data-ose-rec-start") {
+            Some(ClientMessage::RecordRoute { vessel })
+        } else if let Some(vessel) = num("data-ose-depot") {
+            let depot = attr("data-ose-depot-on").as_deref() == Some("true");
+            Some(ClientMessage::SetDepot { vessel, depot })
+        } else if let Some(id) = num("data-ose-route") {
+            self.ts_route_pick = Some(routes_ui::Pick::Route(id));
+            self.render_tracking();
+            return true;
+        } else if let Some(id) = num("data-ose-recording") {
+            self.ts_route_pick = Some(routes_ui::Pick::Recording(id));
+            self.render_tracking();
+            return true;
+        } else {
+            // typing a route name is not a click on the list behind it
+            return el.closest("#rt-name").ok().flatten().is_some();
+        };
+        if let (Some(msg), Some(ws)) = (msg, &self.ws) {
+            send(ws, &msg);
+        }
+        true
+    }
+
     /// The Colonies tab: the list and the picked colony's card.
     fn render_colonies_tab(&mut self) {
         if self
@@ -11039,6 +11259,13 @@ impl App {
 
     fn render_tracking(&mut self) {
         self.ts_rendered_ms = now_ms();
+        if self.ts_routes {
+            self.render_routes_tab();
+            return;
+        }
+        if let Some(el) = self.doc.get_element_by_id("ts-tab-routes") {
+            el.class_list().toggle_with_force("on", false).ok();
+        }
         if self.ts_colonies {
             self.render_colonies_tab();
             return;
@@ -11078,7 +11305,16 @@ impl App {
                     .and_then(|id| rows.iter().find(|r| r.id == id)),
                 self.ts_body.and_then(|i| self.body_card(i)),
             ) {
-                (Some(r), _) => tracking::render_info(r),
+                (Some(r), _) => {
+                    let mut html = tracking::render_info(r);
+                    let recording = self
+                        .route_recordings
+                        .iter()
+                        .any(|p| Some(p.player) == self.player_id && p.state == "Recording");
+                    let depot = self.depots.iter().any(|d| d.vessel == Some(r.id));
+                    html.push_str(&routes_ui::vessel_actions(r.id, depot, r.mine, recording));
+                    html
+                }
                 (None, Some(card)) => tracking::render_body_info(&card, self.ts_body.unwrap_or(0)),
                 _ => "<div class=\"ts-hint\">Select a vessel or a celestial body</div>".to_string(),
             };
@@ -11112,6 +11348,8 @@ impl App {
             if self.ts_colonies {
                 self.ask_colonies(now);
             }
+            // the routes (for the vessel card's depot button too), every 3 s while the station is open
+            self.ask_routes(now);
             self.render_tracking();
         }
     }
