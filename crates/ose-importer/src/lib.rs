@@ -982,6 +982,11 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
             retractable: deployable.is_some_and(|d| d.0) && extended.is_some(),
             starts_extended: deployable.is_none_or(|d| d.1) || extended.is_none(),
             extended: if deployable.is_some() { extended } else { None },
+            extended_cube: drag_cubes
+                .iter()
+                .find(|d| d.name == "EXTENDED")
+                .filter(|_| deployable.is_some())
+                .cloned(),
             radius_m: wheel_radius,
             motor: motor.clone(),
             brake_torque_knm: brake_torque,

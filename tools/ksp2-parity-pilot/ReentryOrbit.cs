@@ -21,8 +21,10 @@ namespace OpenSpaceExplorer.Validation
         static GameInstance G => GameManager.Instance.Game;
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
-        // the craft file: "reentry" (pod over heat shield), "pod" (the bare pod), "stack" (pod, six tanks, Swivel)
-        public static string Craft(string name) => name == "reentry" ? "craft-reentry.json" : name == "stack" ? "craft-stack.json" : "craft-drop-" + name + ".json";
+        // the craft file: "reentry" (pod over heat shield), "pod" (the bare pod), "stack" (pod, six tanks, Swivel),
+        // "k1" and "k2" (the stock Kerbal K1 and K2, 38 and 48 parts: radial boosters, nose cones, fins, solar panels),
+        // "jet" (the stock jet), "fairing" (the pod under a closed AE-FF125 fairing nose)
+        public static string Craft(string name) => name == "reentry" ? "craft-reentry.json" : name == "stack" ? "craft-stack.json" : name == "k1" ? "craft-k1.json" : name == "k2" ? "craft-k2.json" : name == "jet" ? "craft-jet.json" : name == "fairing" ? "craft-fairing-nose.json" : "craft-drop-" + name + ".json";
 
         // the thermal constants KSP2 runs with (PhysicsSettings, after its settings file)
         public static string ThermalSettings()

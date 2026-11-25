@@ -51,6 +51,7 @@ fn main() {
         pressure_kpa: a.pressure_curve.clone(),
         temperature_k: a.temperature_curve.clone(),
         molar_mass: a.molar_mass_kg_per_mol,
+        adiabatic_index: a.adiabatic_index,
     };
     let terrain = ose_data::terrain::TerrainMap {
         width: 2,

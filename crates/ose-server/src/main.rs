@@ -1391,7 +1391,14 @@ fn flight_readout(
             .map(|st| st.lifting_fx_local(ose_sim::structure::Airflow::at(p, body, atmo)))
             .unwrap_or_default(),
         mach_number: atmo
-            .map(|a| v_surf.length() / a.speed_of_sound(alt).max(1.0))
+            .map(|a| {
+                let c = a.speed_of_sound(alt);
+                if c > 0.0 {
+                    v_surf.length() / c
+                } else {
+                    0.0
+                }
+            })
             .unwrap_or(0.0),
         firing_engines: if thrust > 0.0 {
             engine_demands

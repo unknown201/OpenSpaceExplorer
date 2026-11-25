@@ -72,6 +72,11 @@ pub fn spawn_bodies(world: &mut World, defs: &[BodyDef]) -> BodyIndex {
                     pressure_kpa: a.pressure_curve.clone(),
                     temperature_k: a.temperature_curve.clone(),
                     molar_mass: a.molar_mass_kg_per_mol,
+                    adiabatic_index: if a.adiabatic_index > 0.0 {
+                        a.adiabatic_index
+                    } else {
+                        1.4
+                    },
                 }));
         }
         index.by_id.insert(d.id.clone(), e);

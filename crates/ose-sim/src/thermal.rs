@@ -129,45 +129,82 @@ pub fn step_temperature(
     next.max(0.0)
 }
 
-/// How much of each part the airflow reaches (`OcclusionAlgorithmJob`), for parts as boxes (centre and half
-/// size, vessel frame) and the direction of travel through the air: parts are taken front to back, and each
-/// is shadowed by the outline (across the flow) of every part ahead of it that is itself reached. Below
-/// Mach 1 nothing is reached (`UpdateOcclusionConvection`): there is no re-entry heating.
-pub fn exposed_proportions(boxes: &[(DVec3, DVec3)], travel: DVec3, mach: f64) -> Vec<f64> {
-    let n = boxes.len();
-    if mach < 1.0 || !mach.is_finite() || n == 0 {
-        return vec![0.0; n];
+/// The eight corners of a box (centre and half size).
+pub fn box_corners(centre: DVec3, half: DVec3) -> [DVec3; 8] {
+    std::array::from_fn(|k| {
+        centre
+            + DVec3::new(
+                if k & 1 == 0 { half.x } else { -half.x },
+                if k & 2 == 0 { half.y } else { -half.y },
+                if k & 4 == 0 { half.z } else { -half.z },
+            )
+    })
+}
+
+/// A part's outline across the flow (min and max along two axes square to `d`) and how far forward it
+/// reaches (`OcclusionUpdateParallelJob`: the eight corners of its drag cube's bounds, turned with the part).
+fn outline(corners: &[DVec3; 8], d: DVec3, e1: DVec3, e2: DVec3) -> ([f64; 2], [f64; 2], f64) {
+    let (mut lo, mut hi, mut front) = ([f64::MAX; 2], [f64::MIN; 2], f64::MIN);
+    for corner in corners {
+        let uv = [corner.dot(e1), corner.dot(e2)];
+        for a in 0..2 {
+            lo[a] = lo[a].min(uv[a]);
+            hi[a] = hi[a].max(uv[a]);
+        }
+        front = front.max(corner.dot(d));
     }
-    let d = travel.normalized();
+    (lo, hi, front)
+}
+
+/// Two axes square to the unit direction `d`.
+fn across(d: DVec3) -> (DVec3, DVec3) {
     let reference = if d.x.abs() < 0.9 {
         DVec3::new(1.0, 0.0, 0.0)
     } else {
         DVec3::new(0.0, 1.0, 0.0)
     };
     let e1 = d.cross(reference).normalized();
-    let e2 = d.cross(e1);
-    // projected outline (min, max across the flow) and how far forward each part reaches
-    let shapes: Vec<([f64; 2], [f64; 2], f64)> = boxes
-        .iter()
-        .map(|(c, h)| {
-            let (mut lo, mut hi, mut front) = ([f64::MAX; 2], [f64::MIN; 2], f64::MIN);
-            for k in 0..8 {
-                let corner = *c
-                    + DVec3::new(
-                        if k & 1 == 0 { h.x } else { -h.x },
-                        if k & 2 == 0 { h.y } else { -h.y },
-                        if k & 4 == 0 { h.z } else { -h.z },
-                    );
-                let uv = [corner.dot(e1), corner.dot(e2)];
-                for a in 0..2 {
-                    lo[a] = lo[a].min(uv[a]);
-                    hi[a] = hi[a].max(uv[a]);
-                }
-                front = front.max(corner.dot(d));
-            }
-            (lo, hi, front)
-        })
-        .collect();
+    (e1, d.cross(e1))
+}
+
+/// How much of one outline another (upstream) covers (`ThermalOcclusionData.RectRectIntersection`).
+fn covered(lo: [f64; 2], hi: [f64; 2], clo: [f64; 2], chi: [f64; 2]) -> f64 {
+    let area = (hi[0] - lo[0]) * (hi[1] - lo[1]);
+    if area <= 0.0 {
+        return 0.0;
+    }
+    let w = (hi[0].min(chi[0]) - lo[0].max(clo[0])).max(0.0);
+    let h = (hi[1].min(chi[1]) - lo[1].max(clo[1])).max(0.0);
+    (w * h / area).min(1.0)
+}
+
+/// How much of each part the airflow reaches (`OcclusionAlgorithmJob`), for parts as the corners of their
+/// bounds (vessel frame) and the direction of travel through the air: parts are taken front to back, and each
+/// is shadowed by the outline (across the flow) of every part ahead of it that is itself reached. Below
+/// Mach 1 nothing is reached (`UpdateOcclusionConvection`): there is no re-entry heating.
+pub fn exposed_proportions(parts: &[[DVec3; 8]], travel: DVec3, mach: f64) -> Vec<f64> {
+    exposed_proportions_across(parts, travel, mach, None)
+}
+
+/// `exposed_proportions` with the outlines measured along the two given axes (vessel frame) of the plane square
+/// to the flow, KSP2's way: its occlusion job takes the x and y components of the corners projected onto that
+/// plane in world space, so each outline is a box along the world's axes (for a craft in an equatorial orbit,
+/// north and across), not along the craft's own.
+pub fn exposed_proportions_across(
+    parts: &[[DVec3; 8]],
+    travel: DVec3,
+    mach: f64,
+    axes: Option<(DVec3, DVec3)>,
+) -> Vec<f64> {
+    let n = parts.len();
+    if mach < 1.0 || !mach.is_finite() || n == 0 {
+        return vec![0.0; n];
+    }
+    let d = travel.normalized();
+    let (e1, e2) = axes
+        .map(|(a, b)| (a - d * a.dot(d), b - d * b.dot(d)))
+        .unwrap_or_else(|| across(d));
+    let shapes: Vec<_> = parts.iter().map(|c| outline(c, d, e1, e2)).collect();
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by(|&a, &b| shapes[b].2.total_cmp(&shapes[a].2));
     let mut exposed = vec![0.0; n];
@@ -177,15 +214,7 @@ pub fn exposed_proportions(boxes: &[(DVec3, DVec3)], travel: DVec3, mach: f64) -
         let mut e: f64 = 1.0;
         for &j in &cones {
             let (clo, chi, _) = shapes[j];
-            let area = (hi[0] - lo[0]) * (hi[1] - lo[1]);
-            let overlap = if area > 0.0 {
-                let w = (hi[0].min(chi[0]) - lo[0].max(clo[0])).max(0.0);
-                let h = (hi[1].min(chi[1]) - lo[1].max(clo[1])).max(0.0);
-                w * h / area
-            } else {
-                0.0
-            };
-            e = e.min(exposed_behind(overlap.min(1.0)));
+            e = e.min(exposed_behind(covered(lo, hi, clo, chi)));
             if e >= 0.999 {
                 e = 1.0;
             }
@@ -198,55 +227,30 @@ pub fn exposed_proportions(boxes: &[(DVec3, DVec3)], travel: DVec3, mach: f64) -
     exposed
 }
 
-/// Conservative box-outline occlusion for one point's local flow, O(parts).
+/// Conservative outline occlusion for one point's local flow, O(parts).
 /// Unlike the uniform-flow sweep, each rotating part may see a different upstream direction.
-pub fn exposed_proportion_at(
-    boxes: &[(DVec3, DVec3)],
-    target: usize,
-    travel: DVec3,
-    mach: f64,
-) -> f64 {
+pub fn exposed_proportion_at(parts: &[[DVec3; 8]], target: usize, travel: DVec3, mach: f64) -> f64 {
     if mach < 1.0 || !mach.is_finite() || travel.length_squared() == 0.0 {
         return 0.0;
     }
     let d = travel.normalized();
-    let reference = if d.x.abs() < 0.9 {
-        DVec3::new(1.0, 0.0, 0.0)
-    } else {
-        DVec3::new(0.0, 1.0, 0.0)
-    };
-    let e1 = d.cross(reference).normalized();
-    let e2 = d.cross(e1);
-    let extent = |axis: DVec3, half: DVec3| {
-        axis.x.abs() * half.x + axis.y.abs() * half.y + axis.z.abs() * half.z
-    };
-    let shape = |(c, h): (DVec3, DVec3)| {
-        let u = c.dot(e1);
-        let v = c.dot(e2);
-        let a = extent(e1, h);
-        let b = extent(e2, h);
-        ([u - a, v - b], [u + a, v + b], c.dot(d) + extent(d, h))
-    };
-    let (lo, hi, front) = shape(boxes[target]);
-    let area = (hi[0] - lo[0]) * (hi[1] - lo[1]);
-    if area <= 0.0 {
+    let (e1, e2) = across(d);
+    let (lo, hi, front) = outline(&parts[target], d, e1, e2);
+    if (hi[0] - lo[0]) * (hi[1] - lo[1]) <= 0.0 {
         return 1.0;
     }
-    boxes
+    parts
         .iter()
         .enumerate()
         .filter(|(i, _)| *i != target)
-        .fold(1.0_f64, |exposed, (i, &b)| {
-            let (blo, bhi, bfront) = shape(b);
+        .fold(1.0_f64, |exposed, (i, b)| {
+            let (blo, bhi, bfront) = outline(b, d, e1, e2);
             if bfront < front || (bfront == front && i > target) {
                 return exposed;
             }
-            let width = (hi[0].min(bhi[0]) - lo[0].max(blo[0])).max(0.0);
-            let height = (hi[1].min(bhi[1]) - lo[1].max(blo[1])).max(0.0);
-            exposed.min(exposed_behind((width * height / area).min(1.0)))
+            exposed.min(exposed_behind(covered(lo, hi, blo, bhi)))
         })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,16 +259,25 @@ mod tests {
     fn a_part_behind_another_of_the_same_size_is_shadowed() {
         let up = DVec3::new(0.0, 1.0, 0.0);
         let unit = DVec3::new(0.5, 0.5, 0.5);
-        let stack = [(DVec3::ZERO, unit), (DVec3::new(0.0, 1.0, 0.0), unit)];
+        let stack = [
+            box_corners(DVec3::ZERO, unit),
+            box_corners(DVec3::new(0.0, 1.0, 0.0), unit),
+        ];
         // falling bottom first: the lower box takes the flow, the upper one is in its shadow
         let e = exposed_proportions(&stack, -up, 5.0);
         assert_eq!(e, vec![1.0, 0.0]);
         // half to the side: half shadowed
-        let side = [(DVec3::ZERO, unit), (DVec3::new(0.5, 1.0, 0.0), unit)];
+        let side = [
+            box_corners(DVec3::ZERO, unit),
+            box_corners(DVec3::new(0.5, 1.0, 0.0), unit),
+        ];
         let e = exposed_proportions(&side, -up, 5.0);
         assert!((e[1] - 0.5).abs() < 1e-9, "{e:?}");
         // 99% behind counts as wholly behind (a craft a hair off its flow)
-        let tilted = [(DVec3::ZERO, unit), (DVec3::new(0.005, 1.0, 0.0), unit)];
+        let tilted = [
+            box_corners(DVec3::ZERO, unit),
+            box_corners(DVec3::new(0.005, 1.0, 0.0), unit),
+        ];
         assert_eq!(exposed_proportions(&tilted, -up, 5.0), vec![1.0, 0.0]);
         assert_eq!(exposed_proportion_at(&tilted, 1, -up, 5.0), 0.0);
         // the thermal job's air temperature: the nearest of 256 points along the curve
