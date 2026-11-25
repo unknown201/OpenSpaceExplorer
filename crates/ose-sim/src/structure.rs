@@ -120,6 +120,10 @@ impl FaceCover {
     }
 }
 
+/// A part's drag cube with its shroud or wall on, its corners turned with it (vessel frame, from its
+/// position), and the part holding the wall up.
+type WallCube = (ose_data::DragCube, [DVec3; 8], Option<usize>);
+
 #[derive(Component)]
 pub struct Structure {
     pub eva_hatches: Vec<Option<crate::crew::HatchFrame>>,
@@ -340,6 +344,10 @@ pub struct Structure {
     pub fairing_panel_t: Vec<f64>,
     /// A shaped fairing's procedural drag cube (`Module_Fairing.GenerateDragCubes`).
     fairing_cube: Vec<Option<ose_data::DragCube>>,
+    /// An engine's shroud, or a tube's or engine mount's wall, while a part sits on its node
+    /// (`ose_data::engine_shroud`): the part's drag cube with the wall, its corners turned with the part
+    /// (vessel frame, from its position), and the part holding it up.
+    wall_cube: Vec<Option<WallCube>>,
     pub cargo_bay: Vec<bool>,
     /// Parts whose crossfeed the pilot can switch (`PartDef::crossfeed_toggle`).
     pub crossfeed_toggle: Vec<bool>,
@@ -1424,6 +1432,20 @@ impl Structure {
                 .map(|p| {
                     let f = p.fairing.as_ref().filter(|f| f.valid_for(&p.part_id))?;
                     Some(f.drag_cube(ose_data::fairing::def(&p.part_id)?))
+                })
+                .collect(),
+            wall_cube: (0..n)
+                .map(|i| {
+                    let w = ose_data::engine_shroud::wall_for(craft, i)?;
+                    let cube = w.drag_cube(def_of(i).and_then(|d| d.drag_cubes.first()));
+                    let corners = vessel_corners(
+                        craft.parts[i].local_rotation,
+                        ose_data::PartBounds {
+                            size_m: cube.size,
+                            center_m: cube.center,
+                        },
+                    );
+                    Some((cube, corners, ose_data::engine_shroud::node_part(craft, i)))
                 })
                 .collect(),
             fairing_panel_t: craft
@@ -2741,6 +2763,11 @@ impl Structure {
     /// Part `i`'s outline for the airflow: the corners of its bounds turned with it (`part_box` is the box
     /// square to the vessel around them, a padded outline for a part mounted at an angle).
     pub fn part_corners(&self, i: usize) -> [DVec3; 8] {
+        // a shroud or wall on: KSP2 outlines the weighted cube, the part and its wall together
+        if let Some((_, corners)) = self.wall_on(i) {
+            let at = self.rigid.rest_position(i);
+            return corners.map(|k| at + k);
+        }
         let corners = match (&self.extended_corners[i], self.gear_out[i]) {
             (Some(c), true) => Some(c),
             _ => self.stowed_corners[i].as_ref(),
@@ -5100,14 +5127,44 @@ impl Structure {
         self.chute_faces(i)
             .or_else(|| self.fairing_faces(i))
             .or_else(|| self.gear_faces(i))
+            .or_else(|| self.wall_faces(i))
             .or(self.faces[i])
+    }
+
+    /// Part `i`'s cube and corners with its shroud or wall on, while the part holding it up is still there.
+    fn wall_on(&self, i: usize) -> Option<(&ose_data::DragCube, &[DVec3; 8])> {
+        let (cube, corners, holder) = self.wall_cube.get(i)?.as_ref()?;
+        holder
+            .is_none_or(|h| self.rigid.present.get(h).copied().unwrap_or(false))
+            .then_some((cube, corners))
+    }
+
+    /// An engine's shroud (or a tube's wall) on: the part drags as its model and the wall together, covered by
+    /// its attach nodes as its own cube.
+    fn wall_faces(&self, i: usize) -> Option<Faces> {
+        self.faces[i]?;
+        let mut faces = Faces::from_cube(self.wall_on(i)?.0);
+        for cover in &self.face_covers[i] {
+            if cover.attached(&self.rigid.present) {
+                faces.cover(cover.direction, cover.area);
+            }
+        }
+        Some(faces)
+    }
+
+    /// The airflow forces on each part at the last `aero` call (vessel frame, kN), where resolved.
+    pub fn aero_forces(&self) -> &[PartForce] {
+        self.resolved_aero_forces
+            .as_deref()
+            .or(self.airflow_last_tick.as_deref())
+            .unwrap_or(&[])
     }
 
     /// Part `i`'s area open to the air, m^2 (`WettedArea`), what it cools into the air through.
     pub fn wetted_m2(&self, i: usize) -> f64 {
         // a shaped fairing's shell drags, but its wetted area stays its base's (`Module_Drag.SetExposedArea` is
         // not run again once the shell's cube is weighted in: KSP2's 1.25 m fairing cools through 2.0 m^2)
-        let faces = if self.fairing_faces(i).is_some() {
+        let faces = if self.fairing_faces(i).is_some() || self.wall_on(i).is_some() {
             self.faces[i]
         } else {
             self.drag_faces(i)
@@ -7910,6 +7967,32 @@ mod tests {
         assert!(get(&stage, "Methane").is_some() && get(&stage, "Oxidizer").is_some());
         assert!(get(&stage, "ElectricCharge").is_none(), "{stage:?}");
         assert!(get(&stage, "Methane").unwrap().2 <= methane.2);
+    }
+
+    #[test]
+    fn an_engine_shroud_drags_as_its_shroud_until_the_part_under_it_goes() {
+        let (crafts, defs, res) = assets();
+        for (craft, engine) in [
+            ("Kerbal K1", "engine_1v_methalox_terrier"),
+            ("Kerbal K2", "engine_2v_methalox_poodle"),
+        ] {
+            let c = crafts.iter().find(|c| c.name == craft).unwrap();
+            let mut s = Structure::build(c, &defs, &res);
+            let i = c.parts.iter().position(|p| p.part_id == engine).unwrap();
+            let wall = ose_data::engine_shroud::wall_for(c, i).expect("its shroud");
+            let (cube, _) = s.wall_on(i).expect("on while the decoupler is there");
+            // the cube reaches down the wall to the part under the engine
+            assert!(
+                cube.center.y - 0.5 * cube.size.y <= wall.rings[0].0 + 1e-2,
+                "{craft}: {cube:?}"
+            );
+            assert!(s.wall_faces(i).is_some(), "{craft}: drags as its shroud");
+            assert!(!s.shielded[i], "{craft}: a shroud covers nothing");
+            // the decoupler under it gone (staged away): the shroud goes with it
+            let holder = ose_data::engine_shroud::node_part(c, i).unwrap();
+            s.rigid.present[holder] = false;
+            assert!(s.wall_on(i).is_none(), "{craft}");
+        }
     }
 
     #[test]
