@@ -52,6 +52,51 @@ namespace OpenSpaceExplorer.Validation
             }
         }
 
+        // Where the craft stands on its wheels (taxi-geometry.csv), in the root part's frame: every part's
+        // rigidbody mass and centre of mass, the craft's centre of mass, and each wheel's ground contact point,
+        // collider centre and how far its suspension is out.
+        static void Geometry(VesselComponent v, string dir)
+        {
+            if (v == null) return;
+            Transform root = null;
+            foreach (var (_, _, frame) in Parts(v)) { root = frame; break; }
+            if (root == null) return;
+            using (var w = new StreamWriter(Path.Combine(dir, "out", "taxi-geometry.csv"), false))
+            {
+                w.WriteLine("kind,index,name,mass_t,x,y,z");
+                double total = 0;
+                Vector3 sum = Vector3.zero;
+                var seen = new HashSet<Rigidbody>();
+                foreach (var (i, part, frame) in Parts(v))
+                {
+                    if (frame == null) continue;
+                    var rb = frame.GetComponentInChildren<Rigidbody>() ?? frame.GetComponentInParent<Rigidbody>();
+                    if (rb == null || !seen.Add(rb)) continue;
+                    var c = root.InverseTransformPoint(rb.worldCenterOfMass);
+                    w.WriteLine(string.Join(",", new[] { "part", i.ToString(Inv), part.Name, F(rb.mass), F(c.x), F(c.y), F(c.z) }));
+                    total += rb.mass; sum += rb.mass * rb.worldCenterOfMass;
+                }
+                if (total > 0)
+                {
+                    var com = root.InverseTransformPoint(sum / (float)total);
+                    w.WriteLine(string.Join(",", new[] { "com", "", "", F(total), F(com.x), F(com.y), F(com.z) }));
+                }
+                foreach (var (i, wc) in Wheels(v))
+                {
+                    var centre = root.InverseTransformPoint(wc.transform.TransformPoint(wc.center));
+                    w.WriteLine(string.Join(",", new[] { "wheel_centre", i.ToString(Inv), wc.name, "", F(centre.x), F(centre.y), F(centre.z) }));
+                    wc.GetWorldPose(out var pos, out _);
+                    var at = root.InverseTransformPoint(pos);
+                    w.WriteLine(string.Join(",", new[] { "wheel_pose", i.ToString(Inv), wc.name, "", F(at.x), F(at.y), F(at.z) }));
+                    if (wc.GetGroundHit(out var hit))
+                    {
+                        var p = root.InverseTransformPoint(hit.point);
+                        w.WriteLine(string.Join(",", new[] { "wheel_contact", i.ToString(Inv), wc.name, F(hit.force), F(p.x), F(p.y), F(p.z) }));
+                    }
+                }
+            }
+        }
+
         public static string Craft(string mode) => mode == "stack" ? "craft-drop-stack.json" : "craft-jet.json";
 
         // Contacts of one part with anything that has no rigidbody (terrain, runway, buildings).
@@ -296,6 +341,7 @@ namespace OpenSpaceExplorer.Validation
                 vessel.ActivateNextStage();
                 Phase("settle");
                 yield return new WaitForSeconds(5f);
+                Geometry(G.ViewController.GetActiveSimVessel(), dir);
                 SetGroup(KSPActionGroup.Brakes, false);
                 input.OverrideInputMaxThrottle(true);
                 Phase("accel");

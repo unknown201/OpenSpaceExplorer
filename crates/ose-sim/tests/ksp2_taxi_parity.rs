@@ -162,3 +162,22 @@ fn the_jet_speeds_up_coasts_brakes_and_turns_on_the_runway_as_in_ksp2() {
         }
     }
 }
+
+#[test]
+fn the_jet_stands_nose_down_on_its_gear_and_rotates_until_its_engine_meets_the_runway_as_in_ksp2() {
+    // KSP2 (strike taxi, settled with the brakes on): 2.7° nose down, its nose leg compressed 0.018 m of
+    // 0.09 and its mains 0.065 of 0.12; strike tail run 6: the Wheesley scraped at 18.0° nose up
+    let (mut u, v, _) = on_runway();
+    u.set_drive(v, 0.0, 0.0, true);
+    for _ in 0..(5 * TICKS_PER_SECOND) {
+        u.step();
+    }
+    let p = u.powered(v).unwrap();
+    let up = p.r.normalized();
+    let pitch = p.facing.dot(up).asin().to_degrees();
+    let top = p.drive.max_pitch_rad.to_degrees();
+    println!("rests at {pitch:.2} deg (KSP2 -2.7), rotates to {top:.1} deg (KSP2 18.0)");
+    assert!((pitch + 2.7).abs() < 0.6, "rests at {pitch:.2} deg");
+    assert!((top - 18.0).abs() < 1.0, "rotates to {top:.1} deg");
+    assert!(p.landed && !p.crashed);
+}

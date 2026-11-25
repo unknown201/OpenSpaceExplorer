@@ -680,6 +680,13 @@ pub struct Drive {
     pub pitch_rate_rad_s: f64,
     #[serde(default)]
     pub pitch_inertia_tm2: f64,
+    /// Where a level craft's pitch rests on its gear, rad (KSP2's Stock04_Jet stands 2.7° nose down on its
+    /// short nose leg), and how far it can rotate its nose up on its main gear before its tail meets the
+    /// runway (18.0° for the jet, its engine scraping): from its parts' shapes (`Structure::sync_drive`).
+    #[serde(default)]
+    pub rest_pitch_rad: f64,
+    #[serde(default = "max_rotate_rad")]
+    pub max_pitch_rad: f64,
     /// Share of the motors' charge that was delivered (0..1).
     pub powered: f64,
 }
@@ -703,6 +710,8 @@ impl Default for Drive {
             pitch_rad: 0.0,
             pitch_rate_rad_s: 0.0,
             pitch_inertia_tm2: 0.0,
+            rest_pitch_rad: 0.0,
+            max_pitch_rad: MAX_ROTATE_RAD,
             powered: 1.0,
         }
     }
@@ -734,6 +743,9 @@ pub struct DriveWheel {
 
 /// A plane on its main gear rotates its nose up at most this far, rad (its tail meets the runway).
 pub const MAX_ROTATE_RAD: f64 = 0.21;
+fn max_rotate_rad() -> f64 {
+    MAX_ROTATE_RAD
+}
 /// KSP2 run 21: a full stick turns the jet's nose up at this rate, rad/s², at `GROUND_ROTATE_REF_MPS`,
 /// scaling with dynamic pressure; below `GROUND_ROTATE_MIN_MPS` the elevators cannot lift the nose.
 pub const GROUND_ROTATE_ACCEL: f64 = 0.51;
@@ -744,8 +756,9 @@ pub const GROUND_ROTATE_MIN_MPS: f64 = 20.0;
 /// runway (run 21: full pitch-up at 60 m/s turns the nose up at 0.51 rad/s², about 13° in 0.95 s, and it
 /// flies): the pitch accelerates with the stick in proportion to the dynamic pressure against 60 m/s
 /// (the elevators' bite), from `GROUND_ROTATE_MIN_MPS`. With the stick released an attitude hold (SAS)
-/// stops the pitching; without one the nose settles back onto its wheel. The nose wheel holds it from
-/// going lower than level, the tail from going past `MAX_ROTATE_RAD`. Returns the pitch, rad.
+/// stops the pitching; without one, or too slow for the elevators, the nose settles back onto its wheel.
+/// The nose wheel holds it from going lower than where it rests (`Drive::rest_pitch_rad`), the tail from
+/// going past `Drive::max_pitch_rad`. Returns the pitch, rad.
 fn ground_pitch(p: &mut Powered, body: &Body, _flat: DVec3, up: DVec3, dt: f64) -> f64 {
     let speed = p.drive.speed_mps.abs();
     let stick = if p.controlled {
@@ -761,9 +774,13 @@ fn ground_pitch(p: &mut Powered, body: &Body, _flat: DVec3, up: DVec3, dt: f64) 
     let mut rate = p.drive.pitch_rate_rad_s;
     let reach = GROUND_ROTATE_ACCEL * bite;
     let steered = !matches!(p.attitude, Attitude::Free | Attitude::Fixed(_));
+    let (rest, top) = (
+        p.drive.rest_pitch_rad,
+        p.drive.max_pitch_rad.max(p.drive.rest_pitch_rad),
+    );
     let accel = if stick != 0.0 && bite > 0.0 {
         GROUND_ROTATE_ACCEL * stick * bite
-    } else if steered && p.controlled {
+    } else if steered && p.controlled && bite > 0.0 {
         // an autopilot direction (pitch and heading, prograde ...) steers the nose toward its pitch with
         // the same elevator bite, a critically damped turn
         let omega = if body.rotation_period_s > 0.0 {
@@ -775,22 +792,23 @@ fn ground_pitch(p: &mut Powered, body: &Body, _flat: DVec3, up: DVec3, dt: f64) 
             .dot(up)
             .clamp(-1.0, 1.0)
             .asin()
-            .clamp(0.0, MAX_ROTATE_RAD);
+            .clamp(rest, top);
         let k = 4.0;
         ((want - p.drive.pitch_rad) * k * k - 2.0 * k * rate).clamp(-reach.max(1e-3), reach)
-    } else if p.attitude != Attitude::Free && p.controlled {
+    } else if p.attitude != Attitude::Free && p.controlled && bite > 0.0 {
         -rate / GROUND_YAW_HOLD_S
     } else {
-        // weight brings the nose back down onto its wheel
-        -rate / GROUND_YAW_HOLD_S - p.drive.pitch_rad * 4.0
+        // weight brings the nose back down onto its wheel (too slow for the elevators to bite, nothing
+        // holds it up)
+        -rate / GROUND_YAW_HOLD_S - (p.drive.pitch_rad - rest) * 4.0
     };
     rate += accel * dt;
     let mut pitch = p.drive.pitch_rad + rate * dt;
-    if pitch <= 0.0 {
-        pitch = 0.0;
+    if pitch <= rest {
+        pitch = rest;
         rate = rate.max(0.0);
-    } else if pitch >= MAX_ROTATE_RAD {
-        pitch = MAX_ROTATE_RAD;
+    } else if pitch >= top {
+        pitch = top;
         rate = rate.min(0.0);
     }
     p.drive.pitch_rad = pitch;
