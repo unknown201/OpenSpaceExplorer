@@ -958,6 +958,19 @@ impl Universe {
         Ok(())
     }
 
+    /// Whether the vessel still has the part with this guid (not staged away or broken off).
+    pub fn has_part(&self, e: Entity, guid: &str) -> bool {
+        let Some(doc) = self.world.get::<CraftDoc>(e) else {
+            return false;
+        };
+        let Some(i) = doc.0.parts.iter().position(|p| p.guid == guid) else {
+            return false;
+        };
+        self.world
+            .get::<structure::Structure>(e)
+            .is_none_or(|st| st.rigid.present.get(i).copied().unwrap_or(false))
+    }
+
     /// The vessel's craft as it is now: parts it has lost left out, tanks holding what they hold.
     pub fn current_craft(&self, e: Entity) -> Option<Craft> {
         let doc = &self.world.get::<CraftDoc>(e)?.0;

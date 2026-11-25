@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 /// A camera's forward and up, unit vectors (x, y, z).
 pub type CameraAxes = ((f32, f32, f32), (f32, f32, f32));
-pub const PROTOCOL_VERSION: u16 = 82;
+pub const PROTOCOL_VERSION: u16 = 83;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -1522,6 +1522,10 @@ pub struct ColonyInfo {
     pub arrivals: u32,
     #[serde(default)]
     pub next_arrival_in_s: Option<f64>,
+    /// Protocol 83: an orbital colony, wherever its anchor vessel (the first of `vessels`) is; its site
+    /// (`lat_deg`, `lon_deg`) means nothing, and its pad is a dock in space behind the anchor.
+    #[serde(default)]
+    pub orbital: bool,
 }
 
 /// A delivery route (`ServerMessage::Routes`, protocol 73).
