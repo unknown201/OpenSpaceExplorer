@@ -40,8 +40,16 @@ async fn spawn_server_with(extra: &[&str], port: Option<u16>) -> (Server, String
     let child = Command::new(env!("CARGO_BIN_EXE_ose-server"))
         .args(["--listen", &addr, "--allow-guest-accounts"])
         .args(extra)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(if std::env::var("OSE_TEST_LOG").is_ok() {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
+        .stderr(if std::env::var("OSE_TEST_LOG").is_ok() {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
         .spawn()
         .expect("spawn ose-server");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
@@ -845,10 +853,11 @@ async fn hello_catalog_and_snapshots() {
     let mut landed_seen = false;
     for _ in response_window() {
         if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws).await {
-            let v = vessels
-                .iter()
-                .find(|v| v.id == pad_vessel)
-                .expect("pad vessel streamed");
+            // a publication assembled before the launch registered the vessel can still be on its way after
+            // `CraftLaunched`: wait for the first one that has it
+            let Some(v) = vessels.iter().find(|v| v.id == pad_vessel) else {
+                continue;
+            };
             let f = v.flight.as_ref().expect("flight readout");
             assert_eq!(f.situation, ose_net::FlightSituation::Landed);
             // KSP2's launch pad 1 deck stands 110.0 m above sea level (its LocalSimObjectsData site's 115.2 m less
@@ -870,7 +879,7 @@ async fn hello_catalog_and_snapshots() {
             break;
         }
     }
-    assert!(landed_seen);
+    assert!(landed_seen, "pad vessel streamed");
     ws.send(Message::Binary(
         ose_net::encode(&ClientMessage::SetControls {
             vessel: pad_vessel,
@@ -2753,7 +2762,12 @@ async fn stale_guests_are_swept_but_members_stay() {
     let (_server, addr) = spawn_server_with(&args, None).await;
     let mut g = connect_ws(&addr).await;
     let (guest_id, guest_token) = raw_hello(&mut g, None, "e2e pilot").await;
+    // leave properly and wait for the server to let go: it marks the guest seen when the session ends, and a
+    // late end would restart the guest's time to live after the sweep below is due
+    let _ = g.close(None).await;
+    while let Some(Ok(_)) = g.next().await {}
     drop(g);
+    let t0 = std::time::Instant::now();
     let mut m = connect_ws(&addr).await;
     let (member_id, _) = hello(&mut m, None, "josh").await;
     m.send(Message::Binary(
@@ -2786,10 +2800,12 @@ async fn stale_guests_are_swept_but_members_stay() {
         },
     )
     .await;
-    assert!(matches!(
-        recv(&mut expired).await,
-        ServerMessage::Rejected { .. }
-    ));
+    let got = recv(&mut expired).await;
+    assert!(
+        matches!(got, ServerMessage::Rejected { .. }),
+        "{got:?} after {:?}",
+        t0.elapsed()
+    );
 }
 
 #[tokio::test]
@@ -4749,4 +4765,44 @@ async fn a_route_is_recorded_from_the_pad_and_survives_revert_to_launch() {
     )
     .await;
     until(&mut ws, |r| r.0.is_empty()).await;
+}
+
+#[tokio::test]
+async fn a_kerbal_on_a_landed_crafts_ladder_reads_landed() {
+    // KSP2 reports the craft's situation for a Kerbal holding its ladder; on the pad that read Flying here.
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "ladder pilot").await;
+    send_msg(&mut ws, &ClientMessage::JoinCampaign).await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchOnPad {
+            craft: starter_craft(),
+        },
+    )
+    .await;
+    let vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, .. } => vessel,
+        _ => None,
+    })
+    .await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::GoEva {
+            vessel,
+            kerbal: None,
+        },
+    )
+    .await;
+    let eva = wait_for(&mut ws, |m| match m {
+        ServerMessage::CrewAck { new_vessel, .. } => new_vessel,
+        _ => None,
+    })
+    .await;
+    let f = service_flight(&mut ws, eva, |f| f.on_ladder.is_some()).await;
+    assert_eq!(f.situation, ose_net::FlightSituation::Landed);
 }

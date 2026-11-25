@@ -18,7 +18,7 @@ namespace OpenSpaceExplorer.Validation
         static GameInstance G => GameManager.Instance.Game;
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
-        static IEnumerator ToOrbit(VesselComponent vessel, string body, double sma, double ecc, Action<string> mark)
+        internal static IEnumerator ToOrbit(VesselComponent vessel, string body, double sma, double ecc, Action<string> mark)
         {
             var state = new KeplerOrbitState
             {

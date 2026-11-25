@@ -76,8 +76,12 @@ Code: `crates/ose-colonies` (rules, tested on the Mun in `tests/found_and_launch
 
 1. ~~**Colony panel**~~ (built): the tracking station's **Colonies** tab lists the campaign's colonies; the
    card of the one picked shows its body and site, residents, vessels, launches and stock (Metal first, in
-   units and tonnes), and its founder can abandon it there. Still to come: a colony icon on the map and in
-   the flight view.
+   units and tonnes), and its founder can abandon it there. The map (in flight and in the tracking station)
+   marks each colony on its body's surface with the KSC map icon in its founder's colour, turning with the
+   body and hidden behind it or while the body is drawn smaller than 12 px; hovering shows its name, whose
+   it is, and how many Kerbals and vessels it has. The flight view marks the colonies on the flown vessel's
+   body the same way, 10 m over the ground at the site, with the name and the distance from the vessel, and
+   hides those beyond the horizon.
 2. ~~**Delivery routes to colonies**~~ (built, protocol 78): see section 6.
 3. ~~**Colony CommNet**~~ (built, protocol 79): every vessel standing in a colony with an antenna is a CommNet
    source of its own (KSP2's `IsCommNetSource`, `ose_sim::commnet::CommSources`): connected without a link
@@ -86,8 +90,8 @@ Code: `crates/ose-colonies` (rules, tested on the Mun in `tests/found_and_launch
    before. So a relay antenna landed in a Mun colony covers the Mun's far side, and probes there can be
    flown with **CommNet required** on.
 4. ~~Building costs parts too~~: done in step 1 (Metal).
-5. **In-situ resources**: an abundance map per body (KSP2's `AbundanceRequest`), drills and converters
-   (Methane, Uranium). KSP2 ships no drill parts, so this needs our own parts.
+5. ~~**In-situ resources**~~ (built, mining): see section 7. Still to come: Uranium, and Metal made from Ore
+   (Metal is shipped from Kerbin for now, decision 2).
 6. ~~**Population**~~ (built, protocol 79): KSP2's vacancy fill, with the colony's empty seats as its room. A colony with
    someone living there and an empty seat takes in a newcomer every two Kerbin days (`VACANCY_DELAY_S`, from
    its founding or the last arrival): the next Kerbal the campaign has not hired is hired and sits in the
@@ -132,3 +136,32 @@ before it load as depot routes).
 Tested on the Mun: `crates/ose-pilot/tests/landing.rs` (landings within 30 m of two sites from a 25 km
 orbit, and from low Kerbin orbit to a Mun site, 12 m off) and `crates/ose-routes/tests/colony_route.rs`
 (record, create, restart, land, abandon).
+
+## 7. Mining (built)
+
+KSP2 planned resource abundance by body, latitude, longitude and biome (`AbundanceRequest`,
+`PlanetaryResource`) and shipped drill-less resource scanners and a methalox factory with no working modules.
+OSE makes its own, in `ose_data::abundance` and `ose_data::colony` (applied by the importer and kept in step
+with `assets/own/` by a test):
+
+- **Ore** (0.01 t a unit, flows across the whole vessel) lies in the ground of every rocky world: a smooth
+  field over each body's surface, eight waves seeded by the body's name, the same for every player. Rich
+  patches cover about a fifth to a half of a world; Kerbol and Jool have none, and Kerbin only a quarter of
+  what the field gives.
+- **Ore Drill** (KSP2's deep resource scanner, 1.25 t, mounts on a side, holds 100 Ore): switched on, it
+  digs 0.5 Ore a second on the richest ground, times the ground's share where its vessel stands, for 15 EC/s.
+  Off the ground it digs nothing. It keeps digging through time warp and while its vessel is out of
+  physics range, so a colony's drill stocks the colony. Above physics warp a landed vessel's electric
+  services (panels, fuel cells, reactors, drills) now run too, in pieces of up to a second (at most 100 a
+  step), so a reactor's output reaches the drill through a small battery.
+- **Ore Refinery** (KSP2's methalox factory, 4.25 t, holds 1500 Ore): 2 Ore a second into 18 kg of
+  methalox, a fifth methane and four fifths oxidizer, for 30 EC/s. Ore in a colony's vessels is part of its
+  stock, and so is the fuel made from it, which pays for launches from its pad.
+- Both are unlocked by **Colony Mining** (4500 science, after Colony Foundations), switched in their part
+  windows (Start/Stop converter) or by the converter action group.
+- The colony card shows the ore in the ground at the site and what a drill there would dig.
+
+Tested in `crates/ose-sim/tests/mining.rs` (a reactor-powered drill on the Mun's richest ground digs at
+the expected rate, also at x1000 warp until its hold is full; one on barren ground and one without charge
+dig nothing; the refinery's rates and mass yield) and
+`ose_data::abundance` (patchy, smooth, the same for everyone, poor at home).

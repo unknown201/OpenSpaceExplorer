@@ -106,6 +106,8 @@ use ose_net::{
     PROTOCOL_VERSION, WS_PATH,
 };
 
+/// The hint shown while a Kerbal holds a ladder; taken down when it lets go or boards.
+const LADDER_HINT: &str = "On the ladder: W/S climb, Space or F lets go";
 const BODY_LABEL_CLASS: &str = "body";
 
 /// The menu's screens (`screen-<name>` in index.html).
@@ -157,6 +159,8 @@ struct App {
     label_els: Vec<HtmlElement>,
     /// One label per vessel, keyed by vessel id, rebuilt when the vessel list changes.
     vessel_els: Vec<(u64, HtmlElement)>,
+    /// One map marker per colony, keyed by colony id, rebuilt when the colonies change.
+    colony_els: Vec<(u64, HtmlElement)>,
     /// Vessel the camera follows instead of the focus body, if any.
     follow: Option<u64>,
     /// The planned burn on the player's vessel, if any (ADR-0005).
@@ -913,6 +917,7 @@ pub fn start() -> Result<(), JsValue> {
         labels: get("labels")?,
         label_els: Vec::new(),
         vessel_els: Vec::new(),
+        colony_els: Vec::new(),
         follow: None,
         node: None,
         node_el: None,
@@ -7042,6 +7047,7 @@ impl App {
                 }
                 self.colonies_known = true;
                 self.colonies = colonies;
+                self.build_colony_labels();
                 if self.tracking_open && self.ts_colonies {
                     self.render_tracking();
                 }
@@ -7594,6 +7600,8 @@ impl App {
             self.labels.append_child(&el).ok();
             self.label_els.push(el);
         }
+        // the markers went with the labels
+        self.build_colony_labels();
     }
 
     fn build_vessel_labels(&mut self, vessels: &[ose_net::VesselState]) {
@@ -7682,6 +7690,44 @@ impl App {
             .ok();
             self.labels.append_child(&el).ok();
             self.vessel_els.push((v.id, el));
+        }
+    }
+
+    /// The colonies' map markers (`ICO-Map-KSC` in the colony's owner's colour): the name shows on hover with
+    /// whose it is and how many live there, as a vessel's does.
+    fn build_colony_labels(&mut self) {
+        for (_, el) in self.colony_els.drain(..) {
+            el.remove();
+        }
+        for c in &self.colonies {
+            let Some(el) = self
+                .doc
+                .create_element("div")
+                .ok()
+                .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+            else {
+                continue;
+            };
+            let mine = Some(c.owner) == self.player_id;
+            el.set_class_name(if mine { "colony mine" } else { "colony" });
+            let owner = self
+                .campaign
+                .as_ref()
+                .and_then(|(_, m)| m.iter().find(|m| m.player_id == c.owner));
+            if let (Some(m), false) = (owner, mine) {
+                let [r, g, b] = hud::player_rgb(m);
+                el.style()
+                    .set_property("--owner", &format!("#{r:02x}{g:02x}{b:02x}"))
+                    .ok();
+                el.class_list().add_1("other").ok();
+            }
+            el.set_attribute("data-ose", "colony").ok();
+            el.set_attribute("data-ose-colony", &c.id.to_string()).ok();
+            el.set_text_content(Some(&c.name));
+            el.set_attribute("title", &colonies_ui::map_tooltip(c, mine))
+                .ok();
+            self.labels.append_child(&el).ok();
+            self.colony_els.push((c.id, el));
         }
     }
 
@@ -11047,6 +11093,13 @@ impl App {
         if let Some(el) = self.doc.get_element_by_id("tracking") {
             el.class_list().toggle_with_force("open", visible).ok();
         }
+        // the colony markers on the map and in flight: the server tells everyone of a founding or an abandonment, and this
+        // catches a colony founded before the client joined
+        let map_shown = visible || self.flying.is_some();
+        if map_shown && !self.ts_colonies && now - self.colonies_asked_ms > COLONIES_MAP_REFRESH_MS
+        {
+            self.ask_colonies(now);
+        }
         if visible && now - self.ts_rendered_ms > 500.0 {
             if self.ts_colonies {
                 self.ask_colonies(now);
@@ -11549,6 +11602,7 @@ impl App {
                     return;
                 };
                 self.board_target.set(Some(target));
+                hud::dismiss(&self.doc, LADDER_HINT);
                 ClientMessage::Board { vessel, target }
             }
             "fh-flag" => {
@@ -12395,11 +12449,9 @@ impl App {
         if on_ladder != self.eva_on_ladder {
             self.eva_on_ladder = on_ladder;
             if on_ladder {
-                hud::push(
-                    &self.doc,
-                    "On the ladder: W/S climb, Space or F lets go",
-                    "passive",
-                );
+                hud::push(&self.doc, LADDER_HINT, "passive");
+            } else {
+                hud::dismiss(&self.doc, LADDER_HINT);
             }
         }
         // Run and jump: run held while Shift is down on the ground, a jump on each new Space press there.
@@ -15928,7 +15980,15 @@ impl App {
             .get(&id)
             .and_then(|k| k.1.as_ref())
             .map(|c| c.parts.iter().map(|p| p.guid.clone()).collect());
+        // the colonies on this body, for their markers in the view
+        let site_colonies: Vec<&ose_net::ColonyInfo> =
+            self.colonies.iter().filter(|c| c.body == body.id).collect();
+        let sites: Vec<(f64, f64)> = site_colonies
+            .iter()
+            .map(|c| (c.lat_deg, c.lon_deg))
+            .collect();
         let inp = flight3d::FlightInput {
+            sites: &sites,
             vessel: v,
             attitude: scene.vessel_attitude(id, now_ms()),
             nearby_vessels: &nearby_vessels,
@@ -15990,6 +16050,31 @@ impl App {
         // The part whose window is open stays lit while the window is.
         self.flight3d.selected = self.flight_pam;
         let drawn = self.flight3d.frame(gpu, &inp);
+        // colony markers over the view: the KSC map icon, the name and how far
+        let markers: String = if self.map_mode {
+            String::new()
+        } else {
+            site_colonies
+                .iter()
+                .zip(&self.flight3d.site_screens)
+                .filter_map(|(c, at)| {
+                    let (x, y, d) = (*at)?;
+                    let mine = Some(c.owner) == self.player_id;
+                    Some(colonies_ui::flight_marker(
+                        c,
+                        mine,
+                        x / self.dpr,
+                        y / self.dpr,
+                        d,
+                    ))
+                })
+                .collect()
+        };
+        if let Some(el) = self.doc.get_element_by_id("fh-colonies") {
+            if el.inner_html() != markers {
+                el.set_inner_html(&markers);
+            }
+        }
         for cue in self.flight3d.audio_events.drain(..) {
             self.audio.play(&cue);
         }
@@ -16323,6 +16408,36 @@ impl App {
                     None => {
                         style.set_property("visibility", "hidden").ok();
                     }
+                }
+            }
+        }
+        // colonies stand on their bodies' surfaces: hidden behind them, and while the body is too small to
+        // pick them out from its label
+        for (id, el) in &self.colony_els {
+            let style = el.style();
+            let place = self
+                .colonies
+                .iter()
+                .find(|c| c.id == *id)
+                .filter(|c| {
+                    scene
+                        .bodies
+                        .iter()
+                        .find(|b| b.id == c.body)
+                        .is_some_and(|b| {
+                            b.radius_m / 1000.0 / self.orbit_dist_km * h >= COLONY_MARKER_MIN_PX
+                        })
+                })
+                .and_then(|c| colony_position(scene, &self.body_spins, c, ut))
+                .map(to_km);
+            match place.filter(|p| !hidden_by_body(*p)).and_then(project) {
+                Some((x, y)) => {
+                    style.set_property("left", &format!("{x:.1}px")).ok();
+                    style.set_property("top", &format!("{y:.1}px")).ok();
+                    style.set_property("visibility", "visible").ok();
+                }
+                None => {
+                    style.set_property("visibility", "hidden").ok();
                 }
             }
         }
@@ -16806,6 +16921,42 @@ impl App {
         }
     }
 }
+
+/// Where a colony's site is at `ut`, in star space (m), turning with its body; `None` for a body the
+/// scene does not have.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn colony_position(
+    scene: &Scene,
+    spins: &[ose_net::BodySpin],
+    c: &ose_net::ColonyInfo,
+    ut: f64,
+) -> Option<ose_math::DVec3> {
+    let i = scene.bodies.iter().position(|b| b.id == c.body)?;
+    let b = &scene.bodies[i];
+    // the same frame as the flight HUD's latitude and longitude: z up, longitude from x, turned by the
+    // body's spin
+    let spin = spins
+        .get(i)
+        .map(|s| {
+            let w = if s.rotation_period_s > 0.0 {
+                std::f64::consts::TAU / s.rotation_period_s
+            } else {
+                0.0
+            };
+            s.initial_rotation_deg.to_radians() + w * ut
+        })
+        .unwrap_or(0.0);
+    let (lat, lon) = (c.lat_deg.to_radians(), c.lon_deg.to_radians() + spin);
+    let up = ose_math::DVec3::new(lat.cos() * lon.cos(), lat.cos() * lon.sin(), lat.sin());
+    Some(scene.position(i, ut) + up * b.radius_m)
+}
+
+/// How often the map asks for the colonies while it is open (ms).
+const COLONIES_MAP_REFRESH_MS: f64 = 30_000.0;
+
+/// The smallest a body is drawn (radius, px) for its colonies' markers to show apart from its own.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+const COLONY_MARKER_MIN_PX: f64 = 12.0;
 
 /// For tests that click the orbit away from the vessel's own marker and label and from the HUD: every tenth
 /// pick point (canvas pixels, `x y;x y;...`) as `data-ose-orbit-points`, the number of patches they cover as

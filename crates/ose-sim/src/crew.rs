@@ -87,14 +87,15 @@ pub struct Boarding {
 }
 
 /// How fast a Kerbal climbs a ladder (`ClimbMoveSpeed`), m/s; how near one they must be to grab it, m (our
-/// own figure); how far off its axis they hang, m; how long climbing in takes, s (our own figure).
+/// own figure); how far off its axis they hang, m; how long climbing in takes, s: one tick, as KSP2's airlock
+/// (`EVAUtils.TryStopEVA`) seats the Kerbal and removes it on the next physics tick (pilot run `evaboard`).
 pub const CLIMB_SPEED_MPS: f64 = 0.8;
 pub const GRAB_RANGE_M: f64 = 1.5;
 pub const LADDER_STANDOFF_M: f64 = 0.4;
 /// How far up a crewed part's ladder a Kerbal steps out of its hatch (share of the ladder): KSP2 trace run 14
 /// hangs the Kerbal 0.43 m above the Mk1 pod's origin, three quarters of the way up its hull.
 pub const HATCH_ALONG: f64 = 0.75;
-pub const BOARDING_S: f64 = 1.0;
+pub const BOARDING_S: f64 = 1.0 / crate::TICKS_PER_SECOND as f64;
 
 /// A resource transfer running on a vessel (the Resource Manager): the tanks it was started with, and how
 /// many units each still has to give (positive) or take (negative).
@@ -531,7 +532,9 @@ impl Universe {
                 start_mass_t: KERBAL_MASS_T + JETPACK_PROPELLANT_T,
                 ..Default::default()
             }],
-            drag_area_m2: 0.6,
+            // fitted to KSP2 pilot run `evaflight` (2026-11-22): a Kerbal let go of the pod 2.2 km up falls at
+            // 66.8 m/s 5.5 s later and levels off at 72.4 m/s by 1.35 km (0.6 m^2 fell at 90 m/s)
+            drag_area_m2: 1.0,
             drag_cd: flight::DEFAULT_CD,
         };
         let kerbal = if landed {
@@ -567,12 +570,13 @@ impl Universe {
             // a jetpack fires on the throttle without staging; on the ground the Kerbal walks
             p.ignited = true;
             p.walker = true;
-            // In space the pack starts off; R enables body-relative translation after release.
             p.rcs.thrust_kn = jetpack.move_force_kn;
             p.rcs.isp_vac_s = isp_vac;
             p.rcs.isp_asl_s = isp_asl;
             p.jetpack = Some(jetpack);
-            p.groups.rcs = landed;
+            // the pack is off until R, on the ground too: KSP2 pilot run `evapad` (2026-11-22) has the Kerbal
+            // out on the pad with RCS off, and walking off the pod's edge it falls 3.5 m without the pack firing
+            p.groups.rcs = false;
             // a Kerbal has no SAS: it keeps the attitude it stepped out in rather than turning to a mode
             p.attitude = flight::Attitude::Free;
             p.angvel = DVec3::ZERO;
@@ -932,6 +936,19 @@ impl Universe {
             if let Some(mut h) = self.world.get_mut::<OnLadder>(k) {
                 h.along_m = l.along_m;
             }
+            // The vessel's orbit is what snapshots report it by: set it from where the ladder holds the Kerbal,
+            // or it would carry the free fall the Kerbal's own step gave it (the Kerbal fell away from a landed
+            // craft's ladder into the ground on screen while it held on).
+            let body = self.world.get::<bodies::ReferenceBody>(k).map(|b| b.0);
+            if let Some(mu) = body
+                .and_then(|b| self.world.get::<bodies::Body>(b))
+                .map(|b| b.mu)
+            {
+                let orbit = Orbit::from_state_vectors(mu, r + offset, velocity, ut);
+                if let Some(mut rails) = self.world.get_mut::<bodies::OnRails>(k) {
+                    rails.0 = orbit;
+                }
+            }
         }
     }
 
@@ -1259,6 +1276,109 @@ mod tests {
         assert_eq!(u.powered(jeb).unwrap().v, velocity, "no release impulse");
         assert_eq!(u.grab_ladder(jeb), Ok(true));
         assert!(u.crew(pod).is_empty(), "grabbing does not board");
+    }
+
+    #[test]
+    fn a_kerbal_on_a_landed_crafts_ladder_is_reported_where_it_holds_on() {
+        // Snapshots place a vessel by its orbit (`seen_state`). The ladder moved the Kerbal but left the orbit
+        // from its own step, a free fall: on screen it dropped away from the pod into the ground at g while
+        // the simulation had it holding on.
+        let (mut u, v) = k1_on_pad();
+        let jeb = u.go_eva(v, None).unwrap();
+        for _ in 0..(2 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        assert!(u.on_ladder(jeb).is_some());
+        let (_, _, orbit) = u.vessel(jeb).unwrap();
+        let (r, vel) = u.seen_state(jeb, &orbit);
+        let p = u.powered(jeb).unwrap();
+        assert!(
+            (r - p.r).length() < 0.01,
+            "reported {:.2} m off",
+            (r - p.r).length()
+        );
+        assert!(
+            (vel - p.v).length() < 0.01,
+            "reported {:.2} m/s off",
+            (vel - p.v).length()
+        );
+    }
+
+    #[test]
+    fn letting_go_in_orbit_floats_beside_the_pod_as_in_ksp2() {
+        // KSP2 pilot run `evaorbit` (2026-11-22, reference/ksp2-eva-orbit): a Kerbal letting go of the Mk1 pod's
+        // ladder in a 100 km orbit eases about 0.2 m off the hatch and floats there, never on the ground, at
+        // under 0.01 m/s from the pod. Here it used to land on the pod's top as if it had weight, Landed at
+        // 100 km, and was torn away at orbital speed once the craft went back on rails.
+        let (mut u, pod) = k1_on_pad();
+        let body = u.body_entity("Kerbin").unwrap();
+        let mu = u.world.get::<bodies::Body>(body).unwrap().mu;
+        let mut p = u.powered(pod).unwrap().clone();
+        p.r = DVec3::new(700_000.0, 0.0, 0.0);
+        p.v = DVec3::new(0.0, (mu / 700_000.0).sqrt(), 0.0);
+        p.landed = false;
+        p.attitude = flight::Attitude::Free;
+        p.facing = DVec3::new(1.0, 0.0, 0.0);
+        p.angvel = DVec3::ZERO;
+        p.roll_rate = 0.0;
+        u.set_powered(pod, p);
+        let jeb = u.go_eva(pod, None).unwrap();
+        assert!(u.set_eva(jeb, false, true));
+        assert!(u.on_ladder(jeb).is_none());
+        u.set_eva(jeb, false, false);
+        for _ in 0..(15 * crate::TICKS_PER_SECOND) {
+            u.step();
+            // both may go back on rails once they have coasted 10 s
+            if let Some(k) = u.powered(jeb) {
+                assert!(
+                    !k.landed && k.deck.is_none(),
+                    "floats, not standing on the pod"
+                );
+            }
+        }
+        let state = |u: &Universe, e: Entity| match u.powered(e) {
+            Some(p) => (p.r, p.v),
+            None => u.vessel(e).unwrap().2.state_at(u.ut()),
+        };
+        let ((r, v), (kr, kv)) = (state(&u, pod), state(&u, jeb));
+        assert!(
+            (kv - v).length() < 0.05,
+            "drifts at {:.3} m/s",
+            (kv - v).length()
+        );
+        assert!((kr - r).length() < 15.0, "still beside the pod");
+    }
+
+    #[test]
+    fn a_kerbal_falling_through_the_air_levels_off_at_ksp2s_speed() {
+        // KSP2 pilot run `evaflight`: let go of the pod's ladder 2.2 km up, the Kerbal levels off at about
+        // 72 m/s by 1.35 km while the craft goes on faster
+        let (mut u, pod) = k1_on_pad();
+        let body = u.body_entity("Kerbin").unwrap();
+        let b = u.world.get::<bodies::Body>(body).unwrap().clone();
+        let omega = DVec3::new(0.0, 0.0, std::f64::consts::TAU / b.rotation_period_s);
+        let mut p = u.powered(pod).unwrap().clone();
+        p.r = p.r.normalized() * (b.radius_m + 2300.0);
+        p.v = omega.cross(p.r);
+        p.landed = false;
+        p.attitude = flight::Attitude::Free;
+        u.set_powered(pod, p);
+        let jeb = u.go_eva(pod, None).unwrap();
+        assert!(u.set_eva(jeb, false, true));
+        let down = |u: &Universe, e: Entity| {
+            let p = u.powered(e).unwrap();
+            -(p.v - omega.cross(p.r)).dot(p.r.normalized())
+        };
+        for _ in 0..(14 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        let k = down(&u, jeb);
+        assert!((70.0..75.0).contains(&k), "falls at {k:.1} m/s");
+        let c = down(&u, pod);
+        assert!(
+            c > k + 10.0,
+            "the craft falls away below it: {c:.1} vs {k:.1} m/s"
+        );
     }
 
     #[test]
@@ -1618,9 +1738,8 @@ mod tests {
         u.board(jeb, v).unwrap();
         assert_eq!(u.crew(v).len(), 1);
         assert_eq!(u.boarding(jeb), Some(v));
-        for _ in 0..(2 * crate::TICKS_PER_SECOND) {
-            u.step();
-        }
+        // gone on the next tick (KSP2 pilot run `evaboard`: aboard 0.02 s after the airlock call)
+        u.step();
         assert!(u.vessel(jeb).is_none());
     }
 
@@ -1656,6 +1775,11 @@ mod tests {
         let jeb = u.go_eva(v, None).unwrap();
         let_go_and_land(&mut u, jeb);
         let fuel = u.powered(jeb).unwrap().propellant_t;
+        // walking on off the pod's edge, it falls to the pad with the pack off (KSP2 pilot run `evapad`)
+        assert_eq!(
+            fuel, JETPACK_PROPELLANT_T,
+            "no pack fired walking off the pod"
+        );
         let body = u.body_entity("Kerbin").unwrap();
         let b = u.world.get::<bodies::Body>(body).unwrap().clone();
         let here = |u: &Universe| flight::lat_lon(&b, u.position_of(jeb).unwrap(), u.ut());
@@ -1712,7 +1836,9 @@ mod tests {
         let p = u.powered(jeb).unwrap();
         assert!(p.landed && !p.crashed);
         assert_eq!(p.propellant_t, fuel, "walking and jumping burn nothing");
-        // the jetpack lifts it straight up (Translate along the Kerbal's axis)
+        // the jetpack (off until R, as in KSP2) lifts it straight up (Translate along the Kerbal's axis)
+        assert!(!u.powered(jeb).unwrap().groups.rcs, "the pack starts off");
+        u.action_group(jeb, crate::ActionGroup::Rcs, Some(true));
         u.set_controls(jeb, 0.0, flight::Attitude::Up);
         assert!(u.set_translate(jeb, DVec3::new(0.0, 1.0, 0.0)));
         for _ in 0..crate::TICKS_PER_SECOND {

@@ -65,6 +65,7 @@ pub fn info(s: &Shared, reason: Option<String>) -> ServerMessage {
                     .events()
                     .filter(|e| matches!(e, ose_routes::recording::Event::BurnStart))
                     .count() as u32,
+                origin: r.origin.clone(),
             }
         })
         .collect();
@@ -93,36 +94,55 @@ pub fn info(s: &Shared, reason: Option<String>) -> ServerMessage {
             },
             stayed: r.stayed,
             manual: r.active.as_ref().and_then(|a| a.manual),
-            runs: r
-                .runs
-                .iter()
-                .map(|x| {
-                    let (outcome, reason) = match &x.outcome {
-                        Outcome::Delivered => ("Delivered", None),
-                        Outcome::Short => ("Short", None),
-                        Outcome::Missed(why) => ("Missed", Some(why.clone())),
-                        Outcome::Lost(why) => ("Lost", Some(why.clone())),
-                    };
-                    RouteRunInfo {
-                        n: x.n,
-                        vessel_name: x.vessel_name.clone(),
-                        launched_ut: x.launched_ut,
-                        ended_ut: x.ended_ut,
-                        outcome: outcome.into(),
-                        reason,
-                        delivered: x.delivered.clone().into_iter().collect(),
-                        after: x.after.clone(),
-                        flown_by: x.flown_by.clone(),
-                    }
-                })
-                .collect(),
+            origin: None,
+            shuttle_leg: None,
+            runs: r.runs.iter().map(run_info).collect(),
         })
+        .chain(c.routes.shuttles.iter().map(|s| RouteInfo {
+            id: s.id,
+            name: s.name.clone(),
+            owner: s.owner,
+            recording: s.proving,
+            depot: s.dest,
+            colony: None,
+            status: s.status.clone(),
+            paused: s.paused.clone(),
+            next_launch_ut: None,
+            run_vessel: pilots.vessel(s.id).and_then(id_of),
+            cargo: s.cargo.clone().into_iter().collect(),
+            when_delivered: RouteEnd::Return,
+            stayed: None,
+            manual: s.manual,
+            origin: Some(s.origin),
+            shuttle_leg: Some(format!("{:?}", s.leg)),
+            runs: s.trips.iter().map(run_info).collect(),
+        }))
         .collect();
     ServerMessage::Routes {
         depots,
         recordings,
         routes,
         reason,
+    }
+}
+
+fn run_info(x: &ose_routes::route::RunLog) -> RouteRunInfo {
+    let (outcome, reason) = match &x.outcome {
+        Outcome::Delivered => ("Delivered", None),
+        Outcome::Short => ("Short", None),
+        Outcome::Missed(why) => ("Missed", Some(why.clone())),
+        Outcome::Lost(why) => ("Lost", Some(why.clone())),
+    };
+    RouteRunInfo {
+        n: x.n,
+        vessel_name: x.vessel_name.clone(),
+        launched_ut: x.launched_ut,
+        ended_ut: x.ended_ut,
+        outcome: outcome.into(),
+        reason,
+        delivered: x.delivered.clone().into_iter().collect(),
+        after: x.after.clone(),
+        flown_by: x.flown_by.clone(),
     }
 }
 
@@ -207,7 +227,9 @@ pub fn handle(s: &Shared, player: u64, msg: &ClientMessage) -> ServerMessage {
         }
         ClientMessage::ForgetRecording { id } => {
             let mut c = s.campaign.lock().expect("campaign lock");
-            if c.routes.routes.iter().any(|r| r.proving == id) {
+            if c.routes.routes.iter().any(|r| r.proving == id)
+                || c.routes.shuttles.iter().any(|s| s.proving == id)
+            {
                 Err("a route is made from this recording".into())
             } else {
                 c.routes.forget(player, id)

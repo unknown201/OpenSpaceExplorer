@@ -566,12 +566,24 @@ impl Universe {
                 continue;
             };
             let at = bodies::star_space_state(&self.world, body, ut).0 + r;
+            // a drill on the ground keeps drilling through time warp
+            let harvesting = st.harvests();
+            let ground = match (self.dormant(e), self.world.get::<bodies::Body>(body)) {
+                (Some(d), Some(b)) if harvesting && d.landed => {
+                    let (lat, lon) = flight::lat_lon(b, d.r, ut);
+                    ose_data::abundance::ore(&b.id, lat, lon)
+                }
+                _ => 0.0,
+            };
             if let Some(mut d) = self.world.get_mut::<flight::Dormant>(e) {
                 // Rails retain an inertial craft pose, but the star direction changes along the orbit.
                 // Reusing the final physics tick's direction freezes tracking and incidence during warp.
                 st.sun_local =
                     (at.length() > 0.0).then(|| st.to_craft_axis(d.0.facing, -at.normalized()));
-                st.electric(&mut d.0, sun, 0.0, dt);
+                if harvesting {
+                    st.ground_abundance = ground;
+                }
+                st.electric_over(&mut d.0, sun, dt);
             }
             self.world.entity_mut(e).insert(st);
         }
@@ -2164,6 +2176,23 @@ impl Universe {
                 if p.own_top.length_squared() > 0.0 {
                     p.own_top = turn(p.own_top);
                 }
+                // its panels, fuel cells and drills keep working, as on rails
+                if let Some(mut st) = self.world.entity_mut(e).take::<structure::Structure>() {
+                    let at = bodies::star_space_state(&self.world, body_e, ut).0 + p.r;
+                    st.sun_local =
+                        (at.length() > 0.0).then(|| st.to_craft_axis(p.facing, -at.normalized()));
+                    if st.harvests() {
+                        st.ground_abundance = if p.landed && !p.crashed {
+                            let (lat, lon) = flight::lat_lon(&body, p.r, ut);
+                            ose_data::abundance::ore(&body.id, lat, lon)
+                        } else {
+                            0.0
+                        };
+                    }
+                    let sun = self.sunlight(body_e, p.r, ut);
+                    st.electric_over(&mut p, sun, ticks.max(1) as f64 * dt);
+                    self.world.entity_mut(e).insert(st);
+                }
                 let orbit = Orbit::from_state_vectors(body.mu, p.r, p.v, ut);
                 self.world
                     .entity_mut(e)
@@ -2390,6 +2419,14 @@ impl Universe {
                     if comm_blocked {
                         p.controlled = false;
                         p.throttle = 0.0;
+                    }
+                    if st.harvests() {
+                        st.ground_abundance = if was_landed {
+                            let (lat, lon) = flight::lat_lon(&body, p.r, step_ut);
+                            ose_data::abundance::ore(&body.id, lat, lon)
+                        } else {
+                            0.0
+                        };
                     }
                     let mut propulsion = st.powered_services(&mut p, sun, env, step_dt);
                     propulsion.water_reference = water_reference;
@@ -3684,7 +3721,8 @@ mod tests {
         }
         let p = u.powered(jeb).unwrap().clone();
         let slow = surface_speed(&p).length();
-        assert!((0.6..1.0).contains(&slow), "swims at {slow} m/s");
+        // KSP2 pilot run `evasplash`: 4.0 m/s, the stroke over the Kerbal's mass at the water's flat 2/s
+        assert!((3.8..4.3).contains(&slow), "swims at {slow} m/s");
         let up = p.r.normalized();
         let moved = p.r - start;
         let east = DVec3::new(0.0, 0.0, 1.0).cross(up).normalized();
@@ -3701,6 +3739,18 @@ mod tests {
         let p = u.powered(jeb).unwrap().clone();
         let fast = surface_speed(&p).length();
         assert!(fast > slow * 1.1, "faster stroke {fast} vs {slow} m/s");
+        // let go of W: it drifts to a stop at the same 2/s (KSP2: 4.0 -> 1.1 m/s in 0.66 s)
+        assert!(u.set_eva(jeb, false, false));
+        u.set_controls(jeb, 0.0, flight::Attitude::Free);
+        let before = surface_speed(u.powered(jeb).unwrap()).length();
+        for _ in 0..(TICKS_PER_SECOND / 2) {
+            u.step();
+        }
+        let after = surface_speed(u.powered(jeb).unwrap()).length();
+        assert!(
+            (0.3..0.42).contains(&(after / before)),
+            "slowed {before} -> {after} m/s in 0.5 s"
+        );
         // no jumping out of the water, and no flag planted in it
         assert!(u.set_eva(jeb, false, true));
         u.step();

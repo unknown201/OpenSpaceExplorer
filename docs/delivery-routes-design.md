@@ -270,8 +270,22 @@ Colonies, cargo inventory, a funds economy, crew rotation, landed depots (decisi
    then picks the run up from wherever it is, as after a restart: it ascends or plans again, pumps if the
    player docked it, or the run ends as Missed if the vessel is gone. `RouteStayed` sends home, lets go
    or keeps the run a route left docked at the depot. The test flies run 1 by hand for a minute in
-   orbit before handing it back, and lets the last run go at the end. Still to do: warp rules,
-   depot-to-depot shuttles (sharing the route endpoint with colony routes), and the client panel.*
+   orbit before handing it back, and lets the last run go at the end.*
+   *Step 2e (protocol 81): depot-to-depot shuttles (3.12, `crates/ose-routes/src/shuttle.rs`). A shuttle's
+   proving flight starts in orbit within 2 km of the depot it leaves (`RecordRoute` off the ground; the
+   recorder starts in its transfer phase and ignores that depot) and ends docked at another depot, like a
+   one-way flight. `CreateRoute` on it makes a shuttle route, listed with the others in `Routes` (with
+   `origin` and `shuttle_leg`). The same vessel goes round: back to the origin (docking at the port it
+   used before, or a free one that fits), filling up there with what it carries and what the proving flight
+   burned, out of the origin's tanks (it waits, "short of MonoPropellant", while the origin cannot fill
+   it), then to the destination's recorded port, pumping the cargo across, and back. Each leg is an
+   `ose_pilot::mission` rendezvous that undocks first, in one SOI or across (the mission plans the hop).
+   Its leg is saved, its pilot is not: after a restart, a reload or a hand-back the pilot is made again
+   from where the shuttle is (flying, found by its name, or docked at either depot), and a pilot that
+   resumes mid-manoeuvre first lets go of the controls it had set. A lost or stuck shuttle pauses the route
+   until a player resumes it. Pause stops it at the origin. The test records a shuttle between two
+   stations in the same orbit, restarts while it undocks, and checks the second delivery. Still to do:
+   warp rules and the client panel.*
 3. **Client**: launch checkbox, routes panel, depot toggle, map tags, toasts.
 4. **Browser e2e** against a local server, never prod: record a run with the bot, create the route,
    and watch two runs. Plus a collision test: two routes into one port at the same window.

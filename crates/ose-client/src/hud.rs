@@ -1663,6 +1663,20 @@ pub fn push(doc: &Document, text: &str, tier: &str) {
     }
 }
 
+/// Take down a toast still showing `text` (a hint that no longer applies).
+pub fn dismiss(doc: &Document, text: &str) {
+    let Some(stack) = doc.get_element_by_id("toasts") else {
+        return;
+    };
+    let mut el = stack.first_element_child();
+    while let Some(e) = el {
+        el = e.next_element_sibling();
+        if e.text_content().as_deref() == Some(text) {
+            e.remove();
+        }
+    }
+}
+
 /// The crew portraits (`KerbalPortraits`, bottom right in flight): each Kerbal aboard with a name plate and
 /// an EVA button that sends that Kerbal out.
 /// `face` draws a Kerbal's portrait by name (from the roster); without one the generic Kerbal icon shows.
