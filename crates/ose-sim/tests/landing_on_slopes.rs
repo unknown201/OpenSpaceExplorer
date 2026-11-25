@@ -26,8 +26,6 @@ struct Landing {
     tipped: bool,
     /// how far it went along the ground from where it came down, m
     moved_m: f64,
-    /// how far its top is turned about its axis from the local vertical at the end, degrees
-    roll_deg: f64,
 }
 
 /// `json` (a parity-pilot drop craft) set down `drop_m` above ground sloping `slope_deg` to the east (a 1000 m
@@ -140,15 +138,6 @@ fn land(json: &str, slope_deg: f64, drop_m: f64, lying: Option<f64>) -> Landing 
             .to_degrees(),
         landed: p.landed,
         tipped: p.tipped,
-        roll_deg: {
-            let up = p.r.normalized();
-            let top = flight::vessel_top(p);
-            let flat = up - p.facing * up.dot(p.facing);
-            top.dot(flat.normalized())
-                .clamp(-1.0, 1.0)
-                .acos()
-                .to_degrees()
-        },
         moved_m: {
             // where the ground under its start point turned to
             let a = std::f64::consts::TAU / b.rotation_period_s * (u.ut() - t0);
