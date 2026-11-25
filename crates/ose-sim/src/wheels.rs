@@ -383,8 +383,8 @@ impl Drive {
     /// The mass each wheel carries, t: the craft's weight over its wheels with no net moment about the
     /// centre of mass, the least-squares split for three or more wheels, shifted toward the outside of a
     /// turn and the back under acceleration by `cg_height_m` (Σ N·x = -m·a_x·h, Σ N·y = -m·a_y·h). A wheel
-    /// that would lift carries nothing.
-    fn load_shares(&self, mass_t: f64, g: f64) -> Vec<f64> {
+    /// that would lift carries nothing. Pitched nose up or down, the centre of mass leans over the wheels.
+    pub fn load_shares(&self, mass_t: f64, g: f64) -> Vec<f64> {
         let n = self.wheels.len();
         let even = vec![mass_t / n.max(1) as f64; n];
         if n < 2 || g <= 0.0 {
@@ -398,10 +398,13 @@ impl Drive {
         ];
         // rows: 1, x, y; minimum-norm solution m = Aᵀ (A Aᵀ)⁻¹ b, with a little regularisation for wheels
         // in a line (no lateral or longitudinal moment arm)
+        // a craft standing nose down has its centre of mass, high over the wheels, that much further forward
+        // over them (KSP2's jet at 2.7°: 14.5% of its weight on the nose wheel, where level it would be 12.5%)
+        let lean = self.cg_height_m * self.pitch_rad.sin();
         let rows: Vec<[f64; 3]> = self
             .wheels
             .iter()
-            .map(|w| [1.0, w.at_m[0], w.at_m[1]])
+            .map(|w| [1.0, w.at_m[0] + lean, w.at_m[1]])
             .collect();
         let mut m = [[0.0; 3]; 3];
         for row in &rows {

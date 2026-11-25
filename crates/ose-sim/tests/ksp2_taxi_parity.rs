@@ -138,13 +138,9 @@ fn the_jet_speeds_up_coasts_brakes_and_turns_on_the_runway_as_in_ksp2() {
         if phase != "coast" && phase != "steer" && phase != "stop" {
             assert!(near(ours_s, secs, 0.12), "{phase}: {ours_s:.2} s vs {secs}");
         }
-        // the brakes stop it about 10% shorter than KSP2's: KSP2's nose leg bottoms out as the jet pitches
-        // down, and the load it then carries through the leg grips nothing; ours has no suspension travel
-        let within = if phase == "brake" || phase == "stop" {
-            0.16
-        } else {
-            0.12
-        };
+        // the brakes stop it within 3% of KSP2's distance now that its wheels carry KSP2's loads (the main
+        // wheels sit at their model's wheel colliders, 0.52 m forward of the gear's attach point)
+        let within = 0.12;
         assert!(
             near(ours_dist, dist, within),
             "{phase}: {ours_dist:.1} m vs {dist}"
@@ -180,4 +176,28 @@ fn the_jet_stands_nose_down_on_its_gear_and_rotates_until_its_engine_meets_the_r
     assert!((pitch + 2.7).abs() < 0.6, "rests at {pitch:.2} deg");
     assert!((top - 18.0).abs() < 1.0, "rotates to {top:.1} deg");
     assert!(p.landed && !p.crashed);
+}
+
+#[test]
+fn the_jets_weight_rests_on_its_wheels_as_in_ksp2() {
+    // KSP2 (strike taxi -geo, settled with the brakes on): the nose wheel carries 11.27 kN, the mains 32.73 and
+    // 33.53. Its main gear holds each wheel 0.52 m forward of where the part is attached, and standing 2.7° nose
+    // down leans its centre of mass forward over them (level, the nose would carry 12.5%)
+    let (u, v, _) = on_runway();
+    let p = u.powered(v).unwrap();
+    let shares = p.drive.load_shares(1.0, 9.81);
+    let mut nose = 0.0;
+    let mut mains = Vec::new();
+    for (w, s) in p.drive.wheels.iter().zip(&shares) {
+        if w.steers {
+            nose += s;
+        } else {
+            mains.push(*s);
+        }
+    }
+    let ksp2_nose = 11.274 / (11.274 + 32.732 + 33.525);
+    println!("nose carries {nose:.3} of the weight (KSP2 {ksp2_nose:.3}), mains {mains:.3?}");
+    assert_eq!(mains.len(), 2);
+    assert!((nose - ksp2_nose).abs() < 0.01, "nose {nose:.3}");
+    assert!((mains[0] - mains[1]).abs() < 0.01);
 }

@@ -1,0 +1,57 @@
+{
+ "landinggear_0v_steerable": [
+  -0.0,
+  -0.432,
+  0.0
+ ],
+ "landinggear_1v": [
+  -0.0,
+  -1.114,
+  -0.521
+ ],
+ "landinggear_1v_fixed": [
+  -0.8,
+  -0.7,
+  0.0
+ ],
+ "landinggear_2v": [
+  -0.0,
+  -1.707,
+  -0.524
+ ],
+ "landinggear_3v": [
+  -0.0,
+  -2.415,
+  -0.731
+ ],
+ "landinggear_4v": [
+  -0.0,
+  -3.148,
+  -0.752
+ ],
+ "wheel_0v_rover": [
+  0.159,
+  -0.559,
+  0.006
+ ],
+ "wheel_1v_rover": [
+  0.652,
+  -0.274,
+  0.0
+ ],
+ "wheel_2v_rover_ruggedized": [
+  0.411,
+  -0.213,
+  0.0
+ ],
+ "wheel_2v_truck": [
+  0.978,
+  -0.83,
+  0.003
+ ],
+ "wheel_3v_rover": [
+  2.334,
+  -2.062,
+  0.0
+ ]
+}

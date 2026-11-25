@@ -3010,7 +3010,7 @@ impl Structure {
                     steers: g.steerable && cfg.wheel_steering,
                     steer_invert: cfg.wheel_steer_invert,
                     steer_manual: cfg.wheel_steer_manual,
-                    at_m: place(self.rigid.rest_position(i) - mass.centre_m),
+                    at_m: place(self.wheel_position(i) - mass.centre_m),
                     dynamics: g.dynamics.clone(),
                     state: if carry {
                         previous[k].state.clone()
@@ -3033,7 +3033,7 @@ impl Structure {
         let heights: Vec<f64> = wheels
             .iter()
             .map(|&i| {
-                let r = self.rigid.rest_position(i) - mass.centre_m;
+                let r = self.wheel_position(i) - mass.centre_m;
                 let below = if level { r.z } else { r.y };
                 below.abs() + self.gear_defs[i].as_ref().map_or(0.0, |g| g.radius_m)
             })
@@ -3061,6 +3061,27 @@ impl Structure {
         } else {
             1.0
         };
+    }
+
+    /// Where part `i`'s wheel rolls, vessel frame: its model's `wheelCol` (`assets/own/wheel-colliders.json`,
+    /// `tools/export_wheel_colliders.py`), the transform KSP2's WheelCollider sits on, or the part's origin for a
+    /// part without one. The Mk1 main gear holds its wheel 0.52 m forward of where it is attached, which puts
+    /// KSP2's jet on its mains with 11.3 kN on the nose wheel (strike taxi -geo).
+    pub fn wheel_position(&self, i: usize) -> DVec3 {
+        static WHEELS: std::sync::OnceLock<std::collections::HashMap<String, [f64; 3]>> =
+            std::sync::OnceLock::new();
+        let wheels = WHEELS.get_or_init(|| {
+            serde_json::from_str(include_str!("../../../assets/own/wheel-colliders.json"))
+                .expect("wheel colliders")
+        });
+        let origin = self.rigid.rest_position(i);
+        match wheels.get(&self.part_ids[i]) {
+            Some(&[x, y, z]) => {
+                origin
+                    + crate::rigid::to_vessel(aero::rotate(self.part_rot[i], DVec3::new(x, y, z)))
+            }
+            None => origin,
+        }
     }
 
     /// A level craft's (nose +Y, belly +Z) pitch where it rests on its gear and the most it can rotate nose up
