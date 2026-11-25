@@ -213,7 +213,7 @@ namespace OpenSpaceExplorer.Validation
                 yield return Shot("v1-ksc-night-before-vab");
             }
             bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking" || scenario == "thrustwarp" || scenario == "warp" || scenario == "burn" || scenario == "jetpack" || scenario == "evaorbit" || scenario.StartsWith("reentryorbit ");
-            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario.StartsWith("reentryorbit ") ? ReentryOrbit.Craft(scenario.Split(' ')[1]) : scenario == "rcs" ? "craft-rcs.json" : (scenario == "jet" || scenario == "jetfly") ? "craft-jet.json" : scenario == "rover" ? "craft-rover.json" : (scenario == "legs" || scenario == "legsrunway") ? "craft-legs.json" : scenario == "fuelline" ? "craft-fuelline.json" : scenario == "crossfeed" ? "craft-crossfeed.json" : scenario == "asparagus" ? "craft-asparagus.json" : scenario == "struts" ? "craft-struts.json" : scenario == "transfer" ? "craft-crossfeed.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "fairings" ? "craft-fairing.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : scenario.StartsWith("sepland ") ? "craft-sepland.json" : (orbital || (scenario.StartsWith("eva") && scenario != "eva")) ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
+            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario.StartsWith("reentryorbit ") ? ReentryOrbit.Craft(scenario.Split(' ')[1]) : scenario == "rcs" ? "craft-rcs.json" : (scenario == "jet" || scenario == "jetfly") ? "craft-jet.json" : scenario == "rover" ? "craft-rover.json" : (scenario == "legs" || scenario == "legsrunway") ? "craft-legs.json" : scenario == "fuelline" ? "craft-fuelline.json" : scenario == "crossfeed" ? "craft-crossfeed.json" : scenario == "asparagus" ? "craft-asparagus.json" : (scenario == "struts" || scenario == "strutslong") ? "craft-struts.json" : scenario == "transfer" ? "craft-crossfeed.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "fairings" ? "craft-fairing.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : scenario.StartsWith("sepland ") ? "craft-sepland.json" : (orbital || (scenario.StartsWith("eva") && scenario != "eva")) ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
                 : new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
@@ -274,6 +274,8 @@ namespace OpenSpaceExplorer.Validation
             if (scenario == "partdump") { yield return PartDump(vessel); yield break; }
             if (scenario == "legs" || scenario == "legsrunway") { yield return Legs(vessel); yield break; }
             if (scenario == "stack" || scenario == "struts") { yield return Stack(vessel); yield break; }
+            // T13: the struts roll held on to 16 s, with every part's airflow forces, spin and inertia logged per tick
+            if (scenario == "strutslong") { yield return Stack(vessel, 16f, true); yield break; }
             if (scenario == "fuelline" || scenario == "crossfeed" || scenario == "asparagus") { yield return FuelLine(vessel); yield break; }
             if (scenario == "transfer") { yield return Transfer(vessel); yield break; }
             if (scenario == "reentry") { yield return Reentry(vessel); yield break; }
@@ -756,7 +758,7 @@ namespace OpenSpaceExplorer.Validation
             yield return Finish("thrustwarp");
         }
 
-        IEnumerator Stack(VesselComponent vessel)
+        IEnumerator Stack(VesselComponent vessel, float seconds = 11.5f, bool forces = false)
         {
             vessel.SetAutopilotEnableDisable(true);
             G.ViewController.flightInputHandler.OverrideInputMaxThrottle(true);
@@ -765,11 +767,20 @@ namespace OpenSpaceExplorer.Validation
             var inv = CultureInfo.InvariantCulture;
             using (var w = new StreamWriter(Path.Combine(dir, "out", "stack-parts.csv"), false))
             {
-                w.WriteLine("t,phase,parts,index,name,x,y,z");
+                w.WriteLine("t,phase,parts,index,name,x,y,z" + (forces ? ",qx,qy,qz,qw" : ""));
+                if (forces)
+                {
+                    // the craft's centre of mass in the pod's frame every tick (FixedUpdate's LogCom)
+                    comLog = new StreamWriter(Path.Combine(dir, "out", "com-trace.csv"), false) { AutoFlush = true };
+                    comLog.WriteLine("t,mass_t,parts,com_x,com_y,com_z,resource_t");
+                }
                 vessel.ActivateNextStage();
                 Mark("staged");
                 float t = 0; string phase = "thrust";
-                while (t < 11.5f)
+                var fw = forces ? new StreamWriter(Path.Combine(dir, "out", "stack-forces.csv"), false) : null;
+                ReentryOrbit.forcesHeader = false;
+                double lastForces = double.NegativeInfinity;
+                while (t < seconds)
                 {
                     yield return new WaitForFixedUpdate();
                     t = (float)(G.UniverseModel.UniverseTime - start); // game time since Begin: WaitForFixedUpdate resumes once a frame, not once a tick
@@ -781,12 +792,20 @@ namespace OpenSpaceExplorer.Validation
                     foreach (var part in v.SimulationObject.PartOwner.Parts)
                         if (G.SpaceSimulation.TryGetViewObject(part.SimulationObject, out var view)) { views.Add((part.Name, view.transform)); if (root == null) root = view.transform; }
                     if (root == null) continue;
+                    if (fw != null && G.UniverseModel.UniverseTime > lastForces) { lastForces = G.UniverseModel.UniverseTime; ReentryOrbit.LogForces(v, fw, t); }
                     for (int i = 0; i < views.Count; i++)
                     {
                         var rel = Quaternion.Inverse(root.rotation) * (views[i].Item2.position - root.position);
-                        w.WriteLine(t.ToString("F2", inv) + "," + phase + "," + views.Count + "," + i + "," + views[i].Item1 + "," + rel.x.ToString("R", inv) + "," + rel.y.ToString("R", inv) + "," + rel.z.ToString("R", inv));
+                        var line = t.ToString("F2", inv) + "," + phase + "," + views.Count + "," + i + "," + views[i].Item1 + "," + rel.x.ToString("R", inv) + "," + rel.y.ToString("R", inv) + "," + rel.z.ToString("R", inv);
+                        if (fw != null)
+                        {
+                            var rq = Quaternion.Inverse(root.rotation) * views[i].Item2.rotation;
+                            line += "," + rq.x.ToString("R", inv) + "," + rq.y.ToString("R", inv) + "," + rq.z.ToString("R", inv) + "," + rq.w.ToString("R", inv);
+                        }
+                        w.WriteLine(line);
                     }
                 }
+                fw?.Dispose();
             }
             InputHolder.Roll = 0f;
             yield return Shot("17-stack");
