@@ -136,21 +136,22 @@ fn a_squat_craft_set_down_on_a_slope_rests_flush_with_it_and_nothing_sinks() {
 
 #[test]
 fn a_rocket_stands_on_a_gentle_slope_and_falls_over_on_a_steeper_one() {
-    // the Swivel stack's centre of mass is 7.2 m over its 0.62 m footprint: it stands to about 5 degrees
-    let gentle = land(STACK, 3.0, 0.05);
-    assert!(gentle.landed && !gentle.tipped, "3 degrees: stands");
+    // the Swivel stack's centre of mass is 7.2 m over its bell's 0.38 m rim: KSP2's stood on 2.74 degrees and
+    // fell over on 3.38 (reference\ksp2-slope on AI-House, `slope stack 1 <degrees>`)
+    let gentle = land(STACK, 2.74, 0.05);
+    assert!(gentle.landed && !gentle.tipped, "2.74 degrees: stands");
     assert!(
         gentle.sunk_m < 0.02,
-        "3 degrees: bell sunk {:.3} m",
+        "2.74 degrees: bell sunk {:.3} m",
         gentle.sunk_m
     );
     assert!(
-        (gentle.tilt_deg - 3.0).abs() < 0.5,
+        (gentle.tilt_deg - 2.74).abs() < 0.5,
         "flush, tilt {:.1}",
         gentle.tilt_deg
     );
-    let steep = land(STACK, 10.0, 0.05);
-    assert!(steep.tipped, "10 degrees: falls over");
+    let steep = land(STACK, 3.38, 0.05);
+    assert!(steep.tipped, "3.38 degrees: falls over");
     assert!(
         steep.tilt_deg > 60.0,
         "lying down, tilt {:.1}",
