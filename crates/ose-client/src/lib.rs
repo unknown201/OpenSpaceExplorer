@@ -6983,6 +6983,11 @@ impl App {
                     if let Some(craft_id) = self.pending_launch.take() {
                         self.start_flight(id, Some(craft_id));
                     }
+                    // KSP2 starts every flight at 1x (a warp raised at the KSC would otherwise leave the craft
+                    // on rails on the pad, its throttle and staging locked).
+                    if self.time.warp > 1 || self.requested_warp > 1 {
+                        self.stop_warp();
+                    }
                     // Mission elapsed time counts from the launch (kept per vessel in this browser).
                     let ut = self.time.ut_at(now_ms());
                     store(&format!("ose.launchUt.{id}"), &format!("{ut:.1}"));
