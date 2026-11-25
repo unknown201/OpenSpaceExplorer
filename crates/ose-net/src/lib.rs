@@ -14,7 +14,9 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 81;
+/// A camera's forward and up, unit vectors (x, y, z).
+pub type CameraAxes = ((f32, f32, f32), (f32, f32, f32));
+pub const PROTOCOL_VERSION: u16 = 82;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -304,6 +306,14 @@ pub enum ClientMessage {
         x: f32,
         y: f32,
         z: f32,
+    },
+    /// The player's camera while flying a Kerbal on EVA (protocol 82): its forward and up, unit vectors in
+    /// the reference body's inertial frame (the same frame as `FlightReadout::facing`), `None` when it is
+    /// not to be used. The jetpack pushes along the camera's axes and the Kerbal turns to face along it, as
+    /// KSP2's `JetpackKerbalCharacterStateHandler.UpdateInputCameraFeatures`. No reply.
+    EvaCamera {
+        vessel: u64,
+        camera: Option<CameraAxes>,
     },
     /// Rotation input, each -1..1 and held until changed: pitch turns
     /// the nose toward craft +Z (the navball's top), yaw toward craft +X, roll clockwise about the nose. The
