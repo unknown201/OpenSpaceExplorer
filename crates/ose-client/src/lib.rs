@@ -363,6 +363,8 @@ struct App {
     running_since_ms: f64,
     /// The live campaign's id (CampaignState), so stored per-vessel data stays with its campaign.
     campaign_id: String,
+    /// Missions the player untracked in Mission Control, kept per campaign in the browser.
+    untracked_missions: std::collections::HashSet<String>,
     /// What the flight sounds last saw, to play each transition once.
     flight_sound_state: Option<FlightSoundState>,
     /// The library craft the flown vessel was launched from, to fill `flight_craft` when its document arrives.
@@ -1115,6 +1117,7 @@ pub fn start() -> Result<(), JsValue> {
         running_since_ms: 0.0,
         lp_selected: None,
         campaign_id: String::new(),
+        untracked_missions: Default::default(),
         flight_sound_state: None,
         flight_craft_id: None,
         board_target: std::cell::Cell::new(None),
@@ -3033,6 +3036,24 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 app.tracking_open = false;
                 let craft = stored(&app.craft_link_key(id)).and_then(|s| s.parse::<u64>().ok());
                 app.start_flight(id, craft);
+            } else if let Some(id) = num("data-ose-ts-destroy") {
+                // KSP2's Destroy Object (`Menu/TrackingStation/ConfirmationDialog/ConfirmObjectDestroy`).
+                let name = app
+                    .scene
+                    .as_ref()
+                    .and_then(|s| s.vessel(id))
+                    .map(|v| v.name.clone())
+                    .unwrap_or_else(|| "this vessel".into());
+                let sure = web_sys::window()
+                    .and_then(|w| {
+                        w.confirm_with_message(&format!("Do you really wish to destroy {name}?"))
+                            .ok()
+                    })
+                    .unwrap_or(false);
+                if let (true, Some(ws)) = (sure, &app.ws) {
+                    send(ws, &ClientMessage::DestroyVessel { vessel: id });
+                    app.ts_selected = None;
+                }
             } else if let Some(id) = num("data-ose-ts-recover") {
                 // KSP2's `MapUISelectableEntry.PopRecoverConfirmationDialog`
                 // (`Menu/TrackingStation/ConfirmationDialog/ConfirmObjectRecover`).
@@ -3269,6 +3290,22 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             let Some(el) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
                 return;
             };
+            if let Some(id) = el.get_attribute("data-ose-mission-track") {
+                let mut app = a.borrow_mut();
+                if !app.untracked_missions.remove(&id) {
+                    app.untracked_missions.insert(id);
+                }
+                let mut list: Vec<&str> =
+                    app.untracked_missions.iter().map(|s| s.as_str()).collect();
+                list.sort_unstable();
+                store(
+                    &format!("ose.untracked.{}", app.campaign_id),
+                    &list.join("\n"),
+                );
+                app.render_missions();
+                app.update_mission_tracker();
+                return;
+            }
             let app = a.borrow();
             let Some(ws) = &app.ws else { return };
             if let Some(id) = el.get_attribute("data-ose-mission-accept") {
@@ -7049,6 +7086,14 @@ impl App {
                         scene.reset_attitudes();
                     }
                 }
+                self.untracked_missions = stored(&format!("ose.untracked.{campaign_id}"))
+                    .map(|s| {
+                        s.lines()
+                            .filter(|l| !l.is_empty())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 self.campaign_id = campaign_id;
                 self.update_warp_holder();
                 if created {
@@ -8299,7 +8344,12 @@ impl App {
             sel.and_then(|id| self.missions.iter().find(|m| m.id == id)),
         ) {
             let info = progress.and_then(|p| p.iter().find(|i| i.id == m.id));
-            el.set_inner_html(&missions::render_briefing(m, &self.loc, info));
+            el.set_inner_html(&missions::render_briefing(
+                m,
+                &self.loc,
+                info,
+                &self.untracked_missions,
+            ));
             set_text(&self.doc, "mc-note", &self.mc_note);
         }
     }
@@ -14602,7 +14652,7 @@ impl App {
             .science
             .as_ref()
             .filter(|s| s.tech_tree)
-            .map(|s| missions::tracked(&s.missions))
+            .map(|s| missions::tracked(&s.missions, &self.untracked_missions))
             .unwrap_or_default();
         let place = matches!(self.open_menu_screen(), None | Some("ksc" | "vab"));
         let show = self.in_session && self.flying.is_none() && place && !tracked.is_empty();

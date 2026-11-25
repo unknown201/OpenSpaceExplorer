@@ -2031,6 +2031,33 @@ fn site_vessels(
 
 /// `ClearLaunchSite`: remove the player's own vessels from a launch site, as the original's VAB does before
 /// rolling out onto an occupied pad (`OABProvider.ClearVesselsAtSelectedLaunchSite`).
+/// The Tracking Station's Destroy: the player's own vessel is removed wherever it is, nothing recovered.
+fn destroy_vessel(s: &Shared, player_id: u64, vessel: u64) -> ServerMessage {
+    let ack = |reason: Option<&str>| ServerMessage::FlightAck {
+        vessel,
+        accepted: reason.is_none(),
+        reason: reason.map(str::to_string),
+    };
+    // Only its owner, and only while nobody flies it: in a co-op campaign teammates may fly each other's
+    // vessels, but not throw them away.
+    let own = s
+        .vessels
+        .lock()
+        .expect("vessels lock")
+        .iter()
+        .any(|&(_, v, owner)| v == vessel && owner == Some(player_id));
+    let Some(e) = owned_vessel(s, vessel, player_id).filter(|_| own) else {
+        return ack(Some("not your vessel"));
+    };
+    s.universe.lock().expect("sim lock").despawn_vessel(e);
+    s.vessels
+        .lock()
+        .expect("vessels lock")
+        .retain(|&(v, _, _)| v != e);
+    tracing::info!(player = player_id, vessel, "vessel destroyed");
+    ack(None)
+}
+
 fn clear_launch_site(s: &Shared, player_id: u64, site: Option<&str>) -> ServerMessage {
     let mut sites = launch_sites("Kerbin");
     sites.extend(colonies::sites(s, &s.universe.lock().expect("sim lock")));
@@ -4217,6 +4244,9 @@ fn handle_message(
         Ok(ClientMessage::KerbalRoster) => {
             let reply = kerbal_roster(s);
             out.push((reply).clone());
+        }
+        Ok(ClientMessage::DestroyVessel { vessel }) => {
+            out.push(destroy_vessel(s, player_id, vessel));
         }
         Ok(ClientMessage::ClearLaunchSite { site }) => {
             let reply = clear_launch_site(s, player_id, site.as_deref());

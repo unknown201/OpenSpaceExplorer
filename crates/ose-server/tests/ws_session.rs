@@ -1814,6 +1814,51 @@ async fn in_a_coop_campaign_a_teammate_can_fly_the_pilots_craft() {
 }
 
 #[tokio::test]
+async fn the_tracking_station_destroys_only_your_own_vessel() {
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "pilot").await;
+    send_msg(&mut ws, &ClientMessage::JoinCampaign).await;
+    let vessel = launch_to_orbit(&mut ws, 120_000.0).await;
+    let mut mate = connect_ws(&addr).await;
+    hello(&mut mate, None, "teammate").await;
+    send_msg(&mut mate, &ClientMessage::JoinCampaign).await;
+    let ack = |m: ServerMessage| match m {
+        ServerMessage::FlightAck {
+            vessel: v,
+            accepted,
+            reason,
+        } if v == vessel => Some((accepted, reason)),
+        _ => None,
+    };
+    send_msg(&mut mate, &ClientMessage::DestroyVessel { vessel }).await;
+    let (accepted, _) = wait_for(&mut mate, ack).await;
+    assert!(!accepted, "a teammate destroyed it");
+    // (joining the co-op campaign handed the teammate the controls; leaving gives them back)
+    drop(mate);
+    let mut destroyed = false;
+    for _ in 0..20 {
+        send_msg(&mut ws, &ClientMessage::DestroyVessel { vessel }).await;
+        let (accepted, reason) = wait_for(&mut ws, ack).await;
+        if accepted {
+            destroyed = true;
+            break;
+        }
+        assert_eq!(reason.as_deref(), Some("teammate is piloting it"));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(destroyed);
+    // the vessel lists sent after the destroy leave it out
+    wait_for(&mut ws, |m| match m {
+        ServerMessage::Vessels { vessels, .. } if vessels.iter().all(|v| v.id != vessel) => {
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn far_vessels_come_in_brief_until_viewed() {
     let (_server, addr) = spawn_server().await;
     let mut ws = connect_ws(&addr).await;

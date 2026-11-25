@@ -143,6 +143,7 @@ pub fn render_briefing(
     m: &Mission,
     loc: &HashMap<String, String>,
     info: Option<&ose_net::MissionInfo>,
+    untracked: &std::collections::HashSet<String>,
 ) -> String {
     let mut objectives = String::new();
     for (k, s) in m
@@ -167,7 +168,7 @@ pub fn render_briefing(
          <div class=\"mc-sub\">{desc_head}</div><p>{desc}</p>\
          <div class=\"mc-sub\">{obj_head}</div><ol class=\"mc-objectives\">{objectives}</ol>\
          <div class=\"mc-reward\">{reward_head} <b>{reward:.0}</b> {science}</div>\
-         <div class=\"mc-state\">{state}</div>{action}<div id=\"mc-note\" data-ose=\"mc-note\"></div>",
+         <div class=\"mc-state\">{state}</div>{action}{track}<div id=\"mc-note\" data-ose=\"mc-note\"></div>",
         kind = esc(&text(
             loc,
             if m.primary {
@@ -210,6 +211,25 @@ pub fn render_briefing(
             ),
             _ => String::new(),
         },
+        // KSP2's Track / Untrack Mission (`MissionPopover`), hidden once the mission is complete.
+        track = match info {
+            Some(i) if i.accepted && !i.complete && !i.turned_in => {
+                let on = !untracked.contains(&m.id);
+                format!(
+                    "<button class=\"mc-track secondary\" data-ose=\"mc-track\" data-ose-mission-track=\"{}\">{}</button>",
+                    esc(&m.id),
+                    esc(&text(
+                        loc,
+                        if on {
+                            "Missions/MissionControl/Popover/Buttons/Untrack"
+                        } else {
+                            "Missions/MissionControl/Popover/Buttons/Track"
+                        }
+                    ))
+                )
+            }
+            _ => String::new(),
+        },
         state = match info {
             Some(i) if i.turned_in => "Complete: reward paid".to_string(),
             Some(i) if i.complete => "Complete: turn it in at Mission Control".to_string(),
@@ -225,11 +245,15 @@ pub fn render_briefing(
     )
 }
 
-/// Missions shown in the tracker: those taken on and not yet handed in.
-pub fn tracked(progress: &[ose_net::MissionInfo]) -> Vec<&ose_net::MissionInfo> {
+/// Missions shown in the tracker: those taken on and not yet handed in, less the ones the player untracked in
+/// Mission Control (KSP2 tracks any number; a newly accepted one starts tracked).
+pub fn tracked<'a>(
+    progress: &'a [ose_net::MissionInfo],
+    untracked: &std::collections::HashSet<String>,
+) -> Vec<&'a ose_net::MissionInfo> {
     let mut t: Vec<_> = progress
         .iter()
-        .filter(|m| m.accepted && !m.turned_in)
+        .filter(|m| m.accepted && !m.turned_in && !untracked.contains(&m.id))
         .collect();
     t.sort_by_key(|m| !m.primary);
     t
@@ -297,7 +321,7 @@ mod tests {
         let loc = HashMap::new();
         let list = render_list(&m, &loc, true, None, None, false);
         assert!(list.contains("data-ose=\"mc-mission\""));
-        let b = render_briefing(&m[0], &loc, None);
+        let b = render_briefing(&m[0], &loc, None, &Default::default());
         assert!(b.contains("<h3>"));
     }
 
@@ -337,9 +361,13 @@ mod tests {
             info("main", true, true, false, false),
             info("ready", false, true, false, true),
         ];
-        let t = tracked(&all);
+        let t = tracked(&all, &Default::default());
         let ids: Vec<_> = t.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, ["main", "side", "ready"]);
+        // untracked in Mission Control: off the tracker
+        let off = std::collections::HashSet::from(["side".to_string()]);
+        let ids: Vec<_> = tracked(&all, &off).iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["main", "ready"]);
         let loc = HashMap::from([
             ("Missions/main/Obj".to_string(), "Reach orbit".to_string()),
             (

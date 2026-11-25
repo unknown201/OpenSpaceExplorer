@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 /// A camera's forward and up, unit vectors (x, y, z).
 pub type CameraAxes = ((f32, f32, f32), (f32, f32, f32));
-pub const PROTOCOL_VERSION: u16 = 83;
+pub const PROTOCOL_VERSION: u16 = 84;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -180,6 +180,11 @@ pub enum ClientMessage {
     /// Recover a vessel standing on the home world: its reports are submitted and it is removed. Answers
     /// `ScienceSubmitted`.
     RecoverVessel {
+        vessel: u64,
+    },
+    /// Destroy one of the player's own vessels from the Tracking Station (the original's Destroy Object,
+    /// `MapUISelectableEntry`), wherever it is, with no recovery. Answers `FlightAck` (protocol 84).
+    DestroyVessel {
         vessel: u64,
     },
     /// Clear a launch site of the player's own vessels before rolling out another (the original's VAB
