@@ -211,6 +211,13 @@ struct PartInfo {
     compound: &'static str,
     docking: Option<ose_data::DockingPort>,
     rcs_thrust_kn: f64,
+    /// The part's modules without the `PartComponentModule_` prefix ("Command", "Heatshield"): the VAB's
+    /// engineer's report checks for them as KSP2's does.
+    modules: Vec<String>,
+    /// It draws electric charge (a probe core, reaction wheel, antenna or light) or makes it (an engine's
+    /// alternator, an RTG, a solar panel): KSP2's report flags a craft that draws with nothing to make it.
+    uses_charge: bool,
+    makes_charge: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -332,6 +339,21 @@ fn part_infos(parts: &[ose_data::PartDef]) -> Vec<PartInfo> {
                 },
                 docking: p.docking.clone(),
                 rcs_thrust_kn: p.rcs.as_ref().map(|r| r.thrust_kn).unwrap_or(0.0),
+                modules: p
+                    .module_names
+                    .iter()
+                    .map(|m| {
+                        m.strip_prefix("PartComponentModule_")
+                            .unwrap_or(m)
+                            .to_string()
+                    })
+                    .collect(),
+                uses_charge: p.electric.command_use > 0.0
+                    || (p.electric.wheel_use_per_knm > 0.0
+                        && p.electric.wheel_torque_vec_knm > 0.0)
+                    || p.electric.transmit_ec_per_s > 0.0
+                    || p.light.is_some(),
+                makes_charge: p.electric.generator_output > 0.0 || p.electric.solar_output > 0.0,
             }
         })
         .collect()
@@ -2014,6 +2036,33 @@ fn site_vessels(
 
 /// `ClearLaunchSite`: remove the player's own vessels from a launch site, as the original's VAB does before
 /// rolling out onto an occupied pad (`OABProvider.ClearVesselsAtSelectedLaunchSite`).
+/// The Tracking Station's Destroy: the player's own vessel is removed wherever it is, nothing recovered.
+fn destroy_vessel(s: &Shared, player_id: u64, vessel: u64) -> ServerMessage {
+    let ack = |reason: Option<&str>| ServerMessage::FlightAck {
+        vessel,
+        accepted: reason.is_none(),
+        reason: reason.map(str::to_string),
+    };
+    // Only its owner, and only while nobody flies it: in a co-op campaign teammates may fly each other's
+    // vessels, but not throw them away.
+    let own = s
+        .vessels
+        .lock()
+        .expect("vessels lock")
+        .iter()
+        .any(|&(_, v, owner)| v == vessel && owner == Some(player_id));
+    let Some(e) = owned_vessel(s, vessel, player_id).filter(|_| own) else {
+        return ack(Some("not your vessel"));
+    };
+    s.universe.lock().expect("sim lock").despawn_vessel(e);
+    s.vessels
+        .lock()
+        .expect("vessels lock")
+        .retain(|&(v, _, _)| v != e);
+    tracing::info!(player = player_id, vessel, "vessel destroyed");
+    ack(None)
+}
+
 fn clear_launch_site(s: &Shared, player_id: u64, site: Option<&str>) -> ServerMessage {
     let mut sites = launch_sites("Kerbin");
     sites.extend(colonies::sites(s, &s.universe.lock().expect("sim lock")));
@@ -2519,11 +2568,16 @@ fn crew_request(s: &Shared, player_id: u64, msg: ClientMessage) -> ServerMessage
             let Some(e) = owned_vessel(s, vessel, player_id) else {
                 return ack(vessel, Err("not your vessel".into()));
             };
-            let r = s
-                .universe
-                .lock()
-                .expect("sim lock")
-                .go_eva(e, kerbal.as_deref());
+            let mut u = s.universe.lock().expect("sim lock");
+            // KSP2's crew portraits disable EVA while time warps at any rate (`IVAPortraits`).
+            if u.warp() > 1 {
+                return ack(
+                    vessel,
+                    Err("EVA is disabled because time warp is not 1x.".into()),
+                );
+            }
+            let r = u.go_eva(e, kerbal.as_deref());
+            drop(u);
             ack(
                 vessel,
                 r.map(|k| Some(crew_docking::register(s, k, Some(player_id)))),
@@ -4195,6 +4249,9 @@ fn handle_message(
         Ok(ClientMessage::KerbalRoster) => {
             let reply = kerbal_roster(s);
             out.push((reply).clone());
+        }
+        Ok(ClientMessage::DestroyVessel { vessel }) => {
+            out.push(destroy_vessel(s, player_id, vessel));
         }
         Ok(ClientMessage::ClearLaunchSite { site }) => {
             let reply = clear_launch_site(s, player_id, site.as_deref());

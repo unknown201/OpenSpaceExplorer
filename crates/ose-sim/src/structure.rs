@@ -2978,6 +2978,9 @@ impl Structure {
     }
 
     /// `ground_profile` and the parts that touch the ground first.
+    /// How far above its lowest point a part's model still stands on the ground, m (our own figure).
+    const FOOT_BAND_M: f64 = 0.05;
+
     fn feet(&self) -> (f64, f64, f64, Vec<usize>) {
         self.feet_along(self.up_axis())
     }
@@ -3013,6 +3016,21 @@ impl Structure {
         let footprint = feet
             .iter()
             .map(|&i| {
+                // a part with a model stands on the rim of its model, not on its box (KSP2's colliders: the
+                // Swivel's bell is 0.76 m across where its box is 1.25 m, so a tall stack on it falls over
+                // on a gentler slope)
+                if let Some(h) = self.model_hull(i) {
+                    let pts = h.points_at(self.rigid.rest_position(i));
+                    let low = pts.iter().map(|q| q.dot(u)).fold(f64::INFINITY, f64::min);
+                    return pts
+                        .iter()
+                        .filter(|q| q.dot(u) < low + Self::FOOT_BAND_M)
+                        .map(|q| {
+                            let p = *q - c;
+                            (p - u * p.dot(u)).length()
+                        })
+                        .fold(0.0, f64::max);
+                }
                 let (centre, half) = self.part_box(i);
                 let p = centre - c;
                 let across = p - u * p.dot(u);

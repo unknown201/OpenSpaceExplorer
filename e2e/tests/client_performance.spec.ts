@@ -101,6 +101,9 @@ test('held flight controls still flush on press and release with the 30 FPS rend
     await page.locator('[data-ose="vab-search"]').fill(part);
     await page.locator('[data-ose="vab-part"]').first().click();
   }
+  // Single clicks can leave the craft without its pod: KSP2 then asks before launching a vehicle with no command
+  // module (`NoCommandModuleWarning`), and this test only needs a flight.
+  page.once('dialog', dialog => dialog.accept());
   await page.locator('[data-ose="vab-launch"]').click();
   await page.locator('[data-ose="flight"].open').waitFor();
   await page.waitForTimeout(1000);

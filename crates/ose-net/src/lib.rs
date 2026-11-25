@@ -531,6 +531,12 @@ pub enum ClientMessage {
         vessel: u64,
         camera: Option<CameraAxes>,
     },
+    /// Destroy one of the player's own vessels from the Tracking Station (the original's Destroy Object,
+    /// `MapUISelectableEntry`), wherever it is, with no recovery. Answers `FlightAck` (protocol 84).
+    /// Last, so the variants before it keep their postcard discriminants.
+    DestroyVessel {
+        vessel: u64,
+    },
 }
 
 /// What to do with the run a route left docked (`ClientMessage::RouteStayed`).

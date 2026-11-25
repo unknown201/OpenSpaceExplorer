@@ -58,6 +58,14 @@ pub struct PartSpec {
     pub docking: Option<ose_data::DockingPort>,
     #[serde(default)]
     pub rcs_thrust_kn: f64,
+    /// KSP2's modules on the part, without the `PartComponentModule_` prefix ("Command", "Parachute").
+    #[serde(default)]
+    pub modules: Vec<String>,
+    /// It draws electric charge / makes it (see the server's `PartInfo`).
+    #[serde(default)]
+    pub uses_charge: bool,
+    #[serde(default)]
+    pub makes_charge: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
@@ -126,6 +134,9 @@ impl PartSpec {
     /// A fuel line or strut: placed on one part, then its far end on another.
     pub fn is_compound(&self) -> bool {
         !self.compound.is_empty()
+    }
+    pub fn has_module(&self, name: &str) -> bool {
+        self.modules.iter().any(|m| m == name)
     }
     pub fn display_title(&self) -> &str {
         if self.title.is_empty() || self.title.starts_with('#') {
@@ -2108,16 +2119,31 @@ pub fn link_spans(craft: &Craft) -> Vec<(usize, DVec3, DVec3)> {
         .collect()
 }
 
-/// One finding of the engineer's report (`ObjectAssemblyEngineerReport`): severity 2 stops a launch going
-/// well, 1 is worth a look, 0 is fine.
+/// One finding of the engineer's report (`ObjectAssemblyEngineerReport`): severity 2 is KSP2's Critical, 1
+/// its Minimal, 0 the "no problems" line.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Flaw {
     pub severity: u8,
     pub text: String,
 }
 
-/// The original's flaw checkers that the editor can run with what it knows: a command part, engines and the
-/// propellant they need, thrust to lift off, a parachute for crew, an antenna for probes, charge storage.
+/// The command pods KSP2 wants a heat shield under (`EngineeringReportFlawListCheckData.json`).
+pub const PODS_NEEDING_HEAT_SHIELD: [&str; 9] = [
+    "pod_1v_conical_crew",
+    "pod_1v_lander_crew",
+    "pod_2v_conical_crew",
+    "pod_2v_cupola_crew",
+    "pod_2v_lander_crew",
+    "pod_3v_conical_crew",
+    "pod_3v_lander_crew",
+    "pod_4v_interstellar_crew",
+    "pod_5v_interstellar_crew",
+];
+
+/// KSP2's engineer's report (`OAB.prefab`'s `EngineeringReportFlawListSetup`, dumped from
+/// `oab_assets_all.bundle`): its checkers in their order, with their English titles and severities, most
+/// severe first. Left out: the VAB size and colony resource checks (OSE's VAB has no size limit and the KSC
+/// pays nothing), the radiator check (the catalog has no engine heat curves) and the Founder's Module check.
 /// `stage_twr` and `stage_dv` are the server's readout per `Craft::stages` index (empty before it arrives).
 pub fn engineer_report(
     craft: &Craft,
@@ -2134,80 +2160,112 @@ pub fn engineer_report(
         .iter()
         .filter_map(|p| catalog.get(&p.part_id))
         .collect();
-    let crewed = specs.iter().any(|s| s.crew_capacity > 0);
-    let command = specs.iter().any(|s| s.category == "Pods");
-    let probe = command && !crewed;
     let has = |f: &dyn Fn(&PartSpec) -> bool| specs.iter().any(|s| f(s));
-    let flaw = |severity: u8, text: &str| Flaw {
-        severity,
-        text: text.to_string(),
+    let mut flaw = |severity: u8, text: &str| {
+        out.push(Flaw {
+            severity,
+            text: text.to_string(),
+        })
     };
-    if !command {
-        out.push(flaw(
+    // AssemblyCheckerContainsPartCategory (Pods)
+    if !has(&|s| s.category == "Pods") {
+        flaw(
             2,
-            "No command part: add a pod or a probe core to control the vessel.",
-        ));
+            "Vessel has no command part and will not be controllable on launch.",
+        );
     }
-    if !has(&|s| s.has_engine) {
-        out.push(flaw(
+    // AssemblyCheckerCommandPodWithNoParachute: a crewed command module (not a probe's remote control)
+    if has(&|s| s.has_module("Command") && s.crew_capacity > 0)
+        && !has(&|s| s.has_module("Parachute"))
+    {
+        flaw(
             1,
-            "No engines: the vessel cannot move under its own power.",
-        ));
+            "Vessel has a command pod and no parachute. Command pod may not survive Kerbin landing.",
+        );
     }
-    // The first stage to fire is the highest index.
-    if let Some(first) = craft.stages.len().checked_sub(1) {
-        if let Some((_, twr)) = stage_twr.iter().find(|(i, _)| *i == first) {
-            if *twr > 0.0 && *twr < 1.0 {
-                out.push(Flaw {
-                    severity: 2,
-                    text: format!(
-                        "Not enough thrust to lift off: the first stage's TWR is {twr:.2} at Kerbin's sea level."
-                    ),
-                });
-            }
-        }
+    // AssemblyCheckerMissingHeatShield
+    if has(&|s| PODS_NEEDING_HEAT_SHIELD.contains(&s.id.as_str()))
+        && !has(&|s| s.has_module("Heatshield"))
+    {
+        flaw(
+            1,
+            "Command pod is missing a heat shield. Command pod may not survive Kerbin re-entry.",
+        );
     }
-    for (i, stage) in craft.stages.iter().enumerate() {
-        let engines = stage.iter().any(|&p| {
+    // AssemblyCheckMissingRCS: docking ports or landing gear/legs (part names containing "landinggear" or
+    // "landingleg") with no RCS thruster
+    let lands_or_docks = has(&|s| {
+        s.has_module("DockingNode") || s.id.contains("landinggear") || s.id.contains("landingleg")
+    });
+    if lands_or_docks && !has(&|s| s.has_module("RCS")) {
+        flaw(
+            1,
+            "Vessel is missing RCS. Precision maneuvering for docking will be difficult.",
+        );
+    }
+    // AssemblyCheckMissingDataTransmitter
+    if !has(&|s| s.has_module("DataTransmitter")) {
+        flaw(
+            1,
+            "Vessel has no communication antenna and may lose control flying beyond Duna.",
+        );
+    }
+    // AssemblyCheckNotEnoughThrust: the sea-level TWR of the first stage with an engine
+    // (`DeltaVExtensions.LastStageWithEngine`), once the craft has an engine at all.
+    let engine_in = |stage: &Vec<usize>| {
+        stage.iter().any(|&p| {
             craft
                 .parts
                 .get(p)
                 .and_then(|p| catalog.get(&p.part_id))
                 .is_some_and(|s| s.has_engine)
-        });
-        if engines && stage_dv.iter().any(|(k, dv)| *k == i && *dv <= 0.5) {
-            out.push(Flaw {
-                severity: 1,
-                text: format!(
-                    "Stage {}: its engines have no propellant they can reach.",
-                    craft.stages.len() - i
-                ),
-            });
+        })
+    };
+    if has(&|s| s.category == "Engine") {
+        let first = (0..craft.stages.len())
+            .rev()
+            .find(|&i| engine_in(&craft.stages[i]));
+        if let Some((_, twr)) = first.and_then(|i| stage_twr.iter().find(|(k, _)| *k == i)) {
+            if *twr < 1.0 {
+                flaw(
+                    2,
+                    "Thrust to Weight Ratio is less than 1.0. Vessel will not leave the launchpad.",
+                );
+            }
         }
     }
-    if crewed && !has(&|s| s.stage_type.contains("Parachute")) {
-        out.push(flaw(1, "Crewed, but no parachute to come home with."));
+    // AssemblyCheckEnginesNecessaryFuels: a staged engine whose stage can reach no propellant.
+    let dry =
+        craft.stages.iter().enumerate().any(|(i, stage)| {
+            engine_in(stage) && stage_dv.iter().any(|(k, dv)| *k == i && *dv <= 0.5)
+        });
+    if dry {
+        flaw(2, "Engine is missing necessary fuel to run.");
     }
-    if probe && !has(&|s| s.category == "Communication") && !has(&|s| s.id.contains("antenna")) {
-        out.push(flaw(
-            1,
-            "Probe without an antenna: out of the KSC's range it loses control and cannot transmit.",
-        ));
+    // AssemblyCheckMissingResource (ElectricCharge), as a producer and as a container
+    if has(&|s| s.uses_charge) {
+        if !has(&|s| s.makes_charge) {
+            flaw(
+                1,
+                "Parts on the vessel consume electricity but there is no way to generate it. Consider adding solar panels.",
+            );
+        }
+        let stores = |s: &PartSpec| {
+            s.resource_containers.iter().any(|c| {
+                c.resource.eq_ignore_ascii_case("ElectricCharge") && c.capacity_units > 0.0
+            })
+        };
+        if !has(&stores) {
+            flaw(1, "Electric-using part has no battery");
+        }
     }
-    if probe
-        && !has(&|s| {
-            s.resource_containers
-                .iter()
-                .any(|c| c.resource.eq_ignore_ascii_case("ElectricCharge"))
-        })
-    {
-        out.push(flaw(
-            2,
-            "Probe without electric charge storage: it cannot be controlled.",
-        ));
-    }
+    // `UpdateActiveConcerns` sorts the most severe first.
+    out.sort_by_key(|f| std::cmp::Reverse(f.severity));
     if out.is_empty() {
-        out.push(flaw(0, "No problems found."));
+        out.push(Flaw {
+            severity: 0,
+            text: "No problems found.".into(),
+        });
     }
     out
 }
@@ -3409,22 +3467,90 @@ mod tests {
 
     #[test]
     fn engineer_report_flags_what_a_craft_lacks() {
-        let cat = catalog();
+        let mut cat = catalog();
         let mut e = Editor::new("test");
         assert!(engineer_report(&e.craft, &cat, &[], &[]).is_empty());
-        e.add_part(&cat["pod"], &cat).unwrap();
+        // A tank alone: no command part (Critical) and no antenna (Minimal), the Critical first.
+        e.add_part(&cat["tank"], &cat).unwrap();
         let r = engineer_report(&e.craft, &cat, &[], &[]);
-        let text: Vec<&str> = r.iter().map(|f| f.text.as_str()).collect();
-        assert!(text.iter().any(|t| t.starts_with("No engines")), "{text:?}");
-        assert!(text.iter().any(|t| t.contains("antenna")));
+        assert_eq!(r[0].severity, 2);
+        assert!(r[0].text.starts_with("Vessel has no command part"));
+        assert!(r
+            .iter()
+            .any(|f| f.text.starts_with("Vessel has no communication antenna")));
+
+        // KSP2's Mk1 pod: crewed, with a reaction wheel and antenna that draw charge it stores but cannot
+        // make, and no parachute or heat shield.
+        let pod = PartSpec {
+            id: "pod_1v_conical_crew".into(),
+            category: "Pods".into(),
+            crew_capacity: 1,
+            modules: vec![
+                "Command".into(),
+                "DataTransmitter".into(),
+                "ReactionWheel".into(),
+            ],
+            uses_charge: true,
+            resource_containers: vec![ContainerSpec {
+                resource: "ElectricCharge".into(),
+                capacity_units: 50.0,
+            }],
+            attach_nodes: vec![node("top", 0.6, 1.0), node("bottom", -0.6, -1.0)],
+            ..Default::default()
+        };
+        cat.insert(pod.id.clone(), pod.clone());
+        let mut e = Editor::new("test");
+        e.add_part(&pod, &cat).unwrap();
+        let texts = |r: &[Flaw]| r.iter().map(|f| f.text.clone()).collect::<Vec<_>>();
+        let r = engineer_report(&e.craft, &cat, &[], &[]);
+        assert_eq!(
+            texts(&r),
+            [
+                "Vessel has a command pod and no parachute. Command pod may not survive Kerbin landing.",
+                "Command pod is missing a heat shield. Command pod may not survive Kerbin re-entry.",
+                "Parts on the vessel consume electricity but there is no way to generate it. Consider adding solar panels.",
+            ]
+        );
+
+        // An engine whose alternator makes charge, on a stage that lifts at TWR 0.6: Critical.
+        let mut engine = cat["engine"].clone();
+        engine.makes_charge = true;
+        cat.insert("engine".into(), engine);
         e.add_part(&cat["tank"], &cat).unwrap();
         let en = e.add_part(&cat["engine"], &cat).unwrap();
         let stage = e.craft.stages.iter().position(|s| s.contains(&en)).unwrap();
         let r = engineer_report(&e.craft, &cat, &[(stage, 0.6)], &[(stage, 900.0)]);
-        assert!(r
+        assert_eq!(
+            r[0].text,
+            "Thrust to Weight Ratio is less than 1.0. Vessel will not leave the launchpad."
+        );
+        assert!(!texts(&r)
             .iter()
-            .any(|f| f.severity == 2 && f.text.contains("TWR is 0.60")));
-        assert!(!r.iter().any(|f| f.text.starts_with("No engines")));
+            .any(|t| t.starts_with("Parts on the vessel consume")));
+        let r = engineer_report(&e.craft, &cat, &[(stage, 1.4)], &[(stage, 0.0)]);
+        assert_eq!(r[0].text, "Engine is missing necessary fuel to run.");
+        assert!(!texts(&r).iter().any(|t| t.starts_with("Thrust to Weight")));
+    }
+
+    #[test]
+    fn landing_legs_without_rcs_are_a_flaw() {
+        let mut cat = catalog();
+        cat.insert(
+            "landingleg_1v".into(),
+            PartSpec {
+                id: "landingleg_1v".into(),
+                category: "Ground".into(),
+                attach_nodes: vec![node("top", 0.2, 1.0), node("bottom", -0.2, -1.0)],
+                ..Default::default()
+            },
+        );
+        let mut e = Editor::new("test");
+        e.add_part(&cat["pod"], &cat).unwrap();
+        e.add_part(&cat["landingleg_1v"], &cat).unwrap();
+        let rcs = "Vessel is missing RCS. Precision maneuvering for docking will be difficult.";
+        assert!(engineer_report(&e.craft, &cat, &[], &[])
+            .iter()
+            .any(|f| f.text == rcs && f.severity == 1));
     }
 
     #[test]

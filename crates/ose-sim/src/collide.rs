@@ -40,6 +40,20 @@ fn model_hulls() -> &'static HashMap<String, Arc<ConvexPolyhedron>> {
     })
 }
 
+impl ModelHull {
+    /// The hull's points in the vessel frame, for a part whose origin sits at `origin`.
+    pub(crate) fn points_at(&self, origin: DVec3) -> Vec<DVec3> {
+        self.shape
+            .points()
+            .iter()
+            .map(|p| {
+                let q = self.turn * Vector::new(p[0], p[1], p[2]);
+                origin + DVec3::new(q[0], q[1], q[2])
+            })
+            .collect()
+    }
+}
+
 /// Part `id`'s model hull as it sits in a craft (`turn`: its authored local rotation).
 pub fn model_hull(id: &str, turn: ose_data::craft::Quat) -> Option<ModelHull> {
     model_hulls().get(id).map(|shape| ModelHull {

@@ -108,6 +108,11 @@ use ose_net::{
 };
 
 /// The hint shown while a Kerbal holds a ladder; taken down when it lets go or boards.
+/// KSP2's time-warp notifications (`Flight/NotificationEvent/ThrottleLockedDueToTimewarp`,
+/// `Notification/Alert/ActionBlockedByTimeWarpDesc`, `HUD/Tooltips/EVADisabledByTimeWarp`).
+const THROTTLE_LOCKED_BY_WARP: &str = "Throttle is locked while Time Warp is over 1x.";
+const WARP_BLOCKED: &str = "That action cannot be performed while you are time warping";
+const EVA_BLOCKED_BY_WARP: &str = "EVA is disabled because time warp is not 1x.";
 const LADDER_HINT: &str = "On the ladder: W/S climb, Space or F lets go";
 const BODY_LABEL_CLASS: &str = "body";
 
@@ -358,6 +363,8 @@ struct App {
     running_since_ms: f64,
     /// The live campaign's id (CampaignState), so stored per-vessel data stays with its campaign.
     campaign_id: String,
+    /// Missions the player untracked in Mission Control, kept per campaign in the browser.
+    untracked_missions: std::collections::HashSet<String>,
     /// What the flight sounds last saw, to play each transition once.
     flight_sound_state: Option<FlightSoundState>,
     /// The library craft the flown vessel was launched from, to fill `flight_craft` when its document arrives.
@@ -433,6 +440,11 @@ struct App {
     /// apoapsis and periapsis markers from the last map frame, for clicks on them.
     warp_to: Option<(f64, String)>,
     warp_to_sent_ms: f64,
+    /// When the last "blocked by time warp" toast showed, so a held key does not stack them.
+    warp_note_ms: std::cell::Cell<f64>,
+    /// When the player last raised the warp, until the server's rate answers it: if the rate stays below the
+    /// request for longer than a round trip, say why once.
+    warp_raise_ms: Option<f64>,
     apsis_ut: [f64; 2],
     toasts: hud::Toasts,
     /// The flown vessel as last seen, for event toasts (signal, charge, sphere of influence, orbit, landing).
@@ -1105,6 +1117,7 @@ pub fn start() -> Result<(), JsValue> {
         running_since_ms: 0.0,
         lp_selected: None,
         campaign_id: String::new(),
+        untracked_missions: Default::default(),
         flight_sound_state: None,
         flight_craft_id: None,
         board_target: std::cell::Cell::new(None),
@@ -1153,6 +1166,8 @@ pub fn start() -> Result<(), JsValue> {
         alt_terrain: false,
         warp_to: None,
         warp_to_sent_ms: 0.0,
+        warp_note_ms: std::cell::Cell::new(f64::NEG_INFINITY),
+        warp_raise_ms: None,
         apsis_ut: [f64::NAN; 2],
         toasts: hud::Toasts::default(),
         flight_watch: std::cell::RefCell::new(None),
@@ -2515,8 +2530,14 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         }),
     )?;
     wire("fh-stage-btn", Box::new(|a| a.borrow_mut().flight_stage()))?;
-    wire("fh-full", Box::new(|a| a.borrow_mut().set_throttle(1.0)))?;
-    wire("fh-cut", Box::new(|a| a.borrow_mut().set_throttle(0.0)))?;
+    wire(
+        "fh-full",
+        Box::new(|a| a.borrow_mut().throttle_preset_input(true)),
+    )?;
+    wire(
+        "fh-cut",
+        Box::new(|a| a.borrow_mut().throttle_preset_input(false)),
+    )?;
     wire("fh-map", Box::new(|a| a.borrow_mut().toggle_flight_map()))?;
     wire(
         "fh-ksc",
@@ -3015,8 +3036,40 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 app.tracking_open = false;
                 let craft = stored(&app.craft_link_key(id)).and_then(|s| s.parse::<u64>().ok());
                 app.start_flight(id, craft);
+            } else if let Some(id) = num("data-ose-ts-destroy") {
+                // KSP2's Destroy Object (`Menu/TrackingStation/ConfirmationDialog/ConfirmObjectDestroy`).
+                let name = app
+                    .scene
+                    .as_ref()
+                    .and_then(|s| s.vessel(id))
+                    .map(|v| v.name.clone())
+                    .unwrap_or_else(|| "this vessel".into());
+                let sure = web_sys::window()
+                    .and_then(|w| {
+                        w.confirm_with_message(&format!("Do you really wish to destroy {name}?"))
+                            .ok()
+                    })
+                    .unwrap_or(false);
+                if let (true, Some(ws)) = (sure, &app.ws) {
+                    send(ws, &ClientMessage::DestroyVessel { vessel: id });
+                    app.ts_selected = None;
+                }
             } else if let Some(id) = num("data-ose-ts-recover") {
-                if let Some(ws) = &app.ws {
+                // KSP2's `MapUISelectableEntry.PopRecoverConfirmationDialog`
+                // (`Menu/TrackingStation/ConfirmationDialog/ConfirmObjectRecover`).
+                let name = app
+                    .scene
+                    .as_ref()
+                    .and_then(|s| s.vessel(id))
+                    .map(|v| v.name.clone())
+                    .unwrap_or_else(|| "this vessel".into());
+                let sure = web_sys::window()
+                    .and_then(|w| {
+                        w.confirm_with_message(&format!("Do you really wish to recover {name}?"))
+                            .ok()
+                    })
+                    .unwrap_or(true);
+                if let (true, Some(ws)) = (sure, &app.ws) {
                     send(ws, &ClientMessage::RecoverVessel { vessel: id });
                 }
             } else if let Some(id) = el
@@ -3237,6 +3290,22 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             let Some(el) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
                 return;
             };
+            if let Some(id) = el.get_attribute("data-ose-mission-track") {
+                let mut app = a.borrow_mut();
+                if !app.untracked_missions.remove(&id) {
+                    app.untracked_missions.insert(id);
+                }
+                let mut list: Vec<&str> =
+                    app.untracked_missions.iter().map(|s| s.as_str()).collect();
+                list.sort_unstable();
+                store(
+                    &format!("ose.untracked.{}", app.campaign_id),
+                    &list.join("\n"),
+                );
+                app.render_missions();
+                app.update_mission_tracker();
+                return;
+            }
             let app = a.borrow();
             let Some(ws) = &app.ws else { return };
             if let Some(id) = el.get_attribute("data-ose-mission-accept") {
@@ -4319,6 +4388,30 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         "vab-launch",
         Box::new(|a| {
             a.borrow().lesson_event("VABLaunchButtonPressedMessage");
+            // KSP2's `IsClearedForLaunch`: a vehicle with no command part launches only once the player
+            // confirms `Menu/VAB/NoCommandModuleWarning`.
+            let commandless = {
+                let app = a.borrow();
+                !app.editor.craft.parts.is_empty()
+                    && !app.editor.craft.parts.iter().any(|p| {
+                        app.catalog
+                            .get(&p.part_id)
+                            .is_some_and(|s| s.category == "Pods")
+                    })
+            };
+            if commandless {
+                let sure = web_sys::window()
+                    .and_then(|w| {
+                        w.confirm_with_message(
+                            "Your vehicle will not be controllable without a command module. Do you want to launch anyway?",
+                        )
+                        .ok()
+                    })
+                    .unwrap_or(true);
+                if !sure {
+                    return;
+                }
+            }
             a.borrow_mut().vab_save(true)
         }),
     )?;
@@ -5905,11 +5998,15 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         true
                     }
                     "KeyZ" => {
-                        app.set_throttle(interaction::throttle_preset(true));
+                        app.throttle_preset_input(true);
                         true
                     }
                     // `OnThrottleCutoff`: X cuts the throttle, and with left Alt (the trim modifier) held also
                     // zeroes the trim
+                    "KeyX" if app.rails_warping() => {
+                        app.throttle_preset_input(false);
+                        true
+                    }
                     "KeyX" => {
                         app.keys.throttle_cutoff_pressed();
                         app.set_throttle(0.0);
@@ -6220,6 +6317,15 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
+    if let Some(btn) = doc.get_element_by_id("fh-burn-delete") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+            ev.stop_propagation();
+            a.borrow_mut().delete_all_maneuvers();
+        });
+        btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     if let Some(btn) = doc.get_element_by_id("clear-node") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut()>::new(move || a.borrow_mut().delete_node());
@@ -6481,6 +6587,7 @@ impl App {
     }
 
     fn request_warp(&mut self, factor: u32) {
+        self.warp_raise_ms = (factor > self.time.warp).then(now_ms);
         self.requested_warp = factor;
         if let Some(ws) = &self.ws {
             send(ws, &ClientMessage::RequestWarp { factor });
@@ -6885,6 +6992,11 @@ impl App {
                     if let Some(craft_id) = self.pending_launch.take() {
                         self.start_flight(id, Some(craft_id));
                     }
+                    // KSP2 starts every flight at 1x (a warp raised at the KSC would otherwise leave the craft
+                    // on rails on the pad, its throttle and staging locked).
+                    if self.time.warp > 1 || self.requested_warp > 1 {
+                        self.stop_warp();
+                    }
                     // Mission elapsed time counts from the launch (kept per vessel in this browser).
                     let ut = self.time.ut_at(now_ms());
                     store(&format!("ose.launchUt.{id}"), &format!("{ut:.1}"));
@@ -6988,6 +7100,14 @@ impl App {
                         scene.reset_attitudes();
                     }
                 }
+                self.untracked_missions = stored(&format!("ose.untracked.{campaign_id}"))
+                    .map(|s| {
+                        s.lines()
+                            .filter(|l| !l.is_empty())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 self.campaign_id = campaign_id;
                 self.update_warp_holder();
                 if created {
@@ -7395,7 +7515,9 @@ impl App {
             } => {
                 let now = now_ms();
                 let before = self.time.ut_at(now);
+                let warp_before = self.time.warp;
                 self.time.update(tick.seconds(), warp, now);
+                self.warp_limit_notes(warp_before, warp, warp_limited_by.is_some());
                 let step_ms = (self.time.ut_at(now) - before) * 1000.0 / warp.max(1) as f64;
                 self.net
                     .clock(now, tick.seconds(), warp, step_ms, self.time.pending_ms());
@@ -8236,7 +8358,12 @@ impl App {
             sel.and_then(|id| self.missions.iter().find(|m| m.id == id)),
         ) {
             let info = progress.and_then(|p| p.iter().find(|i| i.id == m.id));
-            el.set_inner_html(&missions::render_briefing(m, &self.loc, info));
+            el.set_inner_html(&missions::render_briefing(
+                m,
+                &self.loc,
+                info,
+                &self.untracked_missions,
+            ));
             set_text(&self.doc, "mc-note", &self.mc_note);
         }
     }
@@ -11895,6 +12022,11 @@ impl App {
     fn crew_eva(&self, kerbal: Option<String>) {
         let Some(vessel) = self.flying else { return };
         let Some(ws) = &self.ws else { return };
+        // KSP2's crew portraits disable EVA while time warps at any rate (`IVAPortraits`).
+        if self.time.warp > 1 {
+            self.warp_blocked_note(EVA_BLOCKED_BY_WARP);
+            return;
+        }
         self.ftue("FTUE_First_EVA");
         self.crew_pending.set(Some("fh-eva"));
         send(ws, &ClientMessage::GoEva { vessel, kerbal });
@@ -12428,6 +12560,11 @@ impl App {
 
     fn flight_stage(&mut self) {
         let Some(vessel) = self.flying else { return };
+        // KSP2's `OnStage`: staging waits for normal time (`ActionBlockedByTimeWarpMessage`).
+        if self.rails_warping() {
+            self.warp_blocked_note(WARP_BLOCKED);
+            return;
+        }
         // As the original's: with no stages left Space does nothing (the server would end the last stage's
         // burn and drop its propellant).
         if self.stages_left() == Some(0) {
@@ -13002,7 +13139,9 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         let additional = {
             let (axes, throttle) = analog::poll(&self.analog);
-            if let Some(throttle) = throttle.filter(|_| self.warp_to.is_none()) {
+            if let Some(throttle) =
+                throttle.filter(|_| self.warp_to.is_none() && !self.rails_warping())
+            {
                 if (throttle - self.throttle).abs() > 0.002 {
                     self.throttle = throttle;
                     self.controls_dirty = true;
@@ -13077,7 +13216,10 @@ impl App {
             k.wheel_steer() as f32 * scale as f32,
             k.brakes() || self.brakes_latched,
         );
-        if thr_in != 0.0 {
+        if thr_in != 0.0 && self.rails_warping() {
+            // KSP2's `OnThrottleDelta` on rails: the throttle holds and says why.
+            self.warp_blocked_note(THROTTLE_LOCKED_BY_WARP);
+        } else if thr_in != 0.0 {
             if self.warp_to.is_some() {
                 self.stop_warp();
             }
@@ -13256,6 +13398,85 @@ impl App {
     fn stop_warp(&mut self) {
         self.warp_to = None;
         self.request_warp(1);
+    }
+
+    /// KSP2's time-warp limit notifications in flight, when the height or physics cap (not another player)
+    /// holds the rate below the request: `TimewarpCantIncreaseDueToAltitudeMessage` once for a raise it
+    /// refuses, `ForceDecreaseTimewarpMessage` when it pulls a running warp down.
+    fn warp_limit_notes(&mut self, before: u32, now: u32, held_by_player: bool) {
+        if self.requested_warp <= now || held_by_player {
+            self.warp_raise_ms = None;
+        }
+        // Long enough for the request to have reached the server and its rate to have come back.
+        let raised = self.warp_raise_ms.is_some_and(|t| now_ms() - t > 800.0);
+        if raised {
+            self.warp_raise_ms = None;
+        }
+        if self.flying.is_none() || held_by_player || self.requested_warp <= now {
+            return;
+        }
+        if now < before {
+            let body = self
+                .flying
+                .and_then(|id| {
+                    let scene = self.scene.as_ref()?;
+                    let v = scene.vessel(id)?;
+                    scene.bodies.get(v.reference_body as usize)
+                })
+                .map(|b| b.id.clone())
+                .unwrap_or_else(|| "Celestial Body".into());
+            hud::push(
+                &self.doc,
+                &format!("Approaching {body}, lowering time warp to {now}x for safety!"),
+                "alert",
+            );
+        } else if raised {
+            hud::push(
+                &self.doc,
+                "Time warp limited due to proximity to celestial body",
+                "passive",
+            );
+        }
+    }
+
+    /// Whether the vessel flown warps on rails now (`interaction::rails_warp`): KSP2 locks its throttle,
+    /// staging and X then.
+    fn rails_warping(&self) -> bool {
+        let Some(f) = self
+            .flying
+            .and_then(|id| self.scene.as_ref()?.vessel(id))
+            .and_then(|v| v.flight.as_ref())
+        else {
+            return false;
+        };
+        interaction::rails_warp(self.time.warp, f.situation, f.surface_speed_mps)
+    }
+
+    /// Full throttle (Z, the HUD's up arrow) or cut (X, down arrow) as KSP2's `OnThrottleMax` and
+    /// `OnThrottleCutoff`: warping on rails, full throttle is locked and cut stops the warp instead.
+    fn throttle_preset_input(&mut self, full: bool) {
+        if !self.rails_warping() {
+            self.set_throttle(interaction::throttle_preset(full));
+        } else if full {
+            self.warp_blocked_note(THROTTLE_LOCKED_BY_WARP);
+        } else {
+            self.stop_warp();
+        }
+    }
+
+    /// One of KSP2's time-warp notifications, at most every half second while a key is held (as
+    /// `NotificationEvents`' throttle-lock note): the throttle lock is passive, a blocked action an alert.
+    fn warp_blocked_note(&self, text: &str) {
+        let now = now_ms();
+        if now - self.warp_note_ms.get() >= 500.0 {
+            self.warp_note_ms.set(now);
+            let tier = if text == THROTTLE_LOCKED_BY_WARP {
+                "passive"
+            } else {
+                "alert"
+            };
+            hud::push(&self.doc, text, tier);
+        }
     }
 
     /// Step the warp toward the warp-to point: as fast as leaves a few seconds, 1x for the last ten.
@@ -13720,7 +13941,7 @@ impl App {
                             .node_burn(&n)
                             .is_some_and(|e| e.short_mps >= hud::SHORT_MPS);
                     el.class_list().toggle_with_force("short", short).ok();
-                    el.set_text_content(Some(&text));
+                    set_text(&self.doc, "fh-burn-text", &text);
                     el.class_list().add_1("on").ok();
                     el.class_list()
                         .toggle_with_force("burning", f.burn_left_mps.is_some())
@@ -14445,7 +14666,7 @@ impl App {
             .science
             .as_ref()
             .filter(|s| s.tech_tree)
-            .map(|s| missions::tracked(&s.missions))
+            .map(|s| missions::tracked(&s.missions, &self.untracked_missions))
             .unwrap_or_default();
         let place = matches!(self.open_menu_screen(), None | Some("ksc" | "vab"));
         let show = self.in_session && self.flying.is_none() && place && !tracked.is_empty();
@@ -15444,6 +15665,24 @@ impl App {
         self.node = Some(next);
         self.show_node_inputs();
         self.send_node();
+    }
+
+    /// The burn timer's Delete All Maneuvers (`ManeuverProvider.DeleteActiveNode`): the active node, the next
+    /// one the timer counts down to, goes with every node after it. Nodes before it are already flown, so the
+    /// whole plan goes, and a burn under way stops.
+    fn delete_all_maneuvers(&mut self) {
+        let Some(vessel) = self
+            .node
+            .map(|n| n.vessel)
+            .or_else(|| self.nodes.first().map(|n| n.vessel))
+        else {
+            return;
+        };
+        if self.node.is_none() {
+            self.node = Some(self.nodes.remove(0));
+        }
+        self.nodes.retain(|n| n.vessel == vessel);
+        self.clear_node();
     }
 
     /// Edit another planned node (a click on its marker): the one edited joins the others.

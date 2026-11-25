@@ -1253,6 +1253,11 @@
     #flight-hud #fh-burn.burning { background: linear-gradient(90deg, #2f5fbf var(--p, 100%), transparent var(--p, 100%)); color: #fff; border-radius: 3px; padding: 1px 6px; }
     #flight-hud #fh-burn.stopped { color: #ff8a6a; }
     #flight-hud #fh-burn.short { color: #ffb347; }
+    /* The original's burn timer trash: Delete All Maneuvers (the next node and every one after it). */
+    #fh-burn-delete { flex: none; width: calc(20 * var(--u)); height: calc(20 * var(--u)); padding: 0; border: 0; border-radius: 3px; background: transparent; cursor: pointer; display: grid; place-items: center; }
+    #fh-burn-delete:hover { background: #ff6a5a33; }
+    #fh-burn-delete i { width: calc(14 * var(--u)); height: calc(14 * var(--u)); background: #9fb0cc; -webkit-mask: url(assets/ui/hud/TrashBin-ICO-onRest.png) center / contain no-repeat; mask: url(assets/ui/hud/TrashBin-ICO-onRest.png) center / contain no-repeat; }
+    #fh-burn-delete:hover i { background: #ff8a6a; }
     #node-summary { font-size: 12px; color: #cfe0ff; margin: 2px 0; }
     #node-summary.short { color: #ffb347; }
     /* ORBITAL.INFO: Ap over Pe, each with its countdown, as the original's two lines. */
@@ -1816,7 +1821,7 @@
       <div class="fh-sas" id="fh-sas" data-ose="flight-sas" data-cap="SAS.CONTROL" data-loc-cap="HUD/sascontrol"></div>
       <div class="fh-core" data-cap="ORBITAL.INFO" data-loc-cap="HUD/ORBITALINFO">
         <div class="fh-row"><span class="fh-label">VERTICAL</span><b id="fh-vspeed">--</b></div>
-        <div class="fh-row fh-burn" id="fh-burn" data-ose="flight-burn" title="Burn timer: start burning when it reaches zero, pointed at the maneuver marker"></div>
+        <div class="fh-row fh-burn" id="fh-burn" data-ose="flight-burn" title="Burn timer: start burning when it reaches zero, pointed at the maneuver marker"><span id="fh-burn-text" data-ose="flight-burn-text"></span><button id="fh-burn-delete" data-ose="burn-delete-all" type="button" title="Delete All Maneuvers" aria-label="Delete All Maneuvers"><i></i></button></div>
         <div class="fh-row fh-orbit" data-ose="flight-apsides"><span class="fh-label" title="Apoapsis: highest point of the orbit and the time to it" data-loc-title="Map/Trajectory/Apoapsis" data-loc="Map/Trajectory/AP">AP</span><b id="fh-ap">--</b><span id="fh-ap-t" class="fh-small">--</span><span class="fh-label" title="Periapsis: lowest point of the orbit and the time to it" data-loc-title="Map/Trajectory/Periapsis" data-loc="Map/Trajectory/PE">PE</span><b id="fh-pe">--</b><span id="fh-pe-t" class="fh-small">--</span></div>
         <div class="fh-row"><span id="fh-attitude">--</span><span id="fh-twr" class="fh-small">--</span><span id="fh-target" class="fh-small" data-ose="flight-target" title="Target: distance and relative speed"></span><span id="fh-aero" class="fh-small" data-ose="flight-aero" title="Lift from wings; jets: thrust follows speed and air, and needs an intake"></span></div>
       </div>

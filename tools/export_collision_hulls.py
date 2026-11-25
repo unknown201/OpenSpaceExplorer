@@ -29,6 +29,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # meshes that are effects, not the part (re-entry glow, plumes, lights)
 SKIP_NODE_WORDS = ("reentry", "plume", "flame", "exhaust", "fx_", "_fx", "glow", "light", "smoke", "shock")
+# an engine's prefab shroud mesh, never drawn: KSP2 builds engine shrouds procedurally (the Swivel's hangs 0.87 m low)
+SKIP_ENGINE_NODE_SUFFIX = "_fairing"
 
 COMPONENT = {5126: ("f", 4), 5120: ("b", 1), 5121: ("B", 1), 5122: ("h", 2), 5123: ("H", 2)}
 NORMALISE = {5120: 127.0, 5121: 255.0, 5122: 32767.0, 5123: 65535.0}
@@ -119,8 +121,8 @@ def positions(doc: dict, binary: bytes, accessor: int) -> list[tuple[float, floa
     return out
 
 
-def model_points(data: bytes) -> list[tuple[float, float, float]]:
-    """Every mesh vertex of the part's model, in the glTF root frame."""
+def model_points(data: bytes, engine: bool = False) -> list[tuple[float, float, float]]:
+    """Every mesh vertex of the part's model, in the glTF root frame (an engine's without its prefab shroud)."""
     doc, binary = read_glb(data)
     nodes = doc.get("nodes", [])
     roots = doc["scenes"][doc.get("scene", 0)]["nodes"]
@@ -131,7 +133,7 @@ def model_points(data: bytes) -> list[tuple[float, float, float]]:
         i, parent = stack.pop()
         n = nodes[i]
         name = (n.get("name") or "").lower()
-        if any(w in name for w in SKIP_NODE_WORDS):
+        if any(w in name for w in SKIP_NODE_WORDS) or (engine and name.endswith(SKIP_ENGINE_NODE_SUFFIX)):
             continue
         m = mat_mul(parent, node_matrix(n))
         if "mesh" in n:
@@ -190,7 +192,7 @@ def main() -> int:
             else:
                 with urllib.request.urlopen(f"{args.base_url.rstrip('/')}/{pid}.glb", timeout=60) as r:
                     data = r.read()
-            pts = model_points(data)
+            pts = model_points(data, engine=pid.startswith("engine_"))
         except Exception as e:  # noqa: BLE001 - a part without a model keeps its box
             missing.append(f"{pid} ({e})")
             continue
