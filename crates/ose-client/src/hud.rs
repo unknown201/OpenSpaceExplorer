@@ -1793,17 +1793,23 @@ pub fn dismiss(doc: &Document, text: &str) {
 pub fn crew_html(
     crew: &[(u16, String)],
     can_eva: bool,
+    blocked: &[u16],
     face: &dyn Fn(&str) -> Option<String>,
 ) -> String {
     let mut html = String::new();
-    for (_, name) in crew {
+    for (seat, name) in crew {
         let n = crate::esc(name);
-        let eva = if can_eva {
+        let eva = if !can_eva {
+            String::new()
+        } else if blocked.contains(seat) {
+            // KSP2 `IVAPortraitEVAObstacleDetector`: the portrait's EVA button is disabled, its tooltip says why
+            format!(
+                "<button data-ose=\"crew-eva\" data-eva=\"{n}\" disabled title=\"{EVA_OBSTACLE}\">EVA</button>"
+            )
+        } else {
             format!(
                 "<button data-ose=\"crew-eva\" data-eva=\"{n}\" title=\"{n} climbs out\">EVA</button>"
             )
-        } else {
-            String::new()
         };
         html.push_str(&format!(
             "<div class=\"fh-kerbal\" data-ose=\"crew-portrait\"><div class=\"pic\">{pic}{eva}</div><div class=\"plate\" title=\"{n}\">{n}</div></div>",
@@ -1814,6 +1820,9 @@ pub fn crew_html(
     }
     html
 }
+
+/// KSP2's `#autoLOC_6100027`, the disabled EVA button's tooltip (`ose_sim::crew::EVA_OBSTACLE_MESSAGE`).
+pub const EVA_OBSTACLE: &str = "EVA is disabled due to an obstacle.";
 
 /// The parts manager list (`PartsManager`): the vessel's parts grouped by name with their count; a row opens
 /// the window of its first part.

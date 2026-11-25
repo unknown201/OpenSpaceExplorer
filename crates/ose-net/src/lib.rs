@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 /// A camera's forward and up, unit vectors (x, y, z).
 pub type CameraAxes = ((f32, f32, f32), (f32, f32, f32));
-pub const PROTOCOL_VERSION: u16 = 83;
+pub const PROTOCOL_VERSION: u16 = 84;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -928,6 +928,10 @@ pub struct FlightReadout {
     pub flex: Vec<PartFlex>,
     /// Kerbals aboard: (craft part index, name).
     pub crew: Vec<(u16, String)>,
+    /// Crewed parts whose hatch something blocks (KSP2 `IVAPortraitEVAObstacleDetector`): their Kerbals'
+    /// EVA buttons are disabled with "EVA is disabled due to an obstacle.".
+    #[serde(default)]
+    pub eva_blocked: Vec<u16>,
     /// This vessel is a Kerbal on EVA.
     pub eva: bool,
     /// Free docking ports (craft part indices) and docked joints (part docked to, part that docked).

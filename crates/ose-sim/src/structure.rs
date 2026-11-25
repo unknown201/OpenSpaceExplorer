@@ -118,6 +118,8 @@ impl FaceCover {
 #[derive(Component)]
 pub struct Structure {
     pub eva_hatches: Vec<Option<crate::crew::HatchFrame>>,
+    /// Each crewed part's EVA clearance point (`crew::obstacle_frames`), craft frame.
+    pub eva_obstacles: Vec<Option<crate::crew::HatchFrame>>,
     pub rigid: RigidVessel,
     occupied_mass_t: Vec<f64>,
     mirrored: Vec<bool>,
@@ -883,23 +885,8 @@ impl Structure {
             })
             .collect();
         let mut s = Structure {
-            eva_hatches: craft
-                .parts
-                .iter()
-                .map(|part| {
-                    let frame = *crate::crew::hatch_frames().get(&part.part_id)?;
-                    let q = part.local_rotation;
-                    let rotate = |v| crate::aero::rotate([q.x, q.y, q.z, q.w], v);
-                    Some(crate::crew::HatchFrame {
-                        position: crate::rigid::to_vessel(
-                            part.local_position + rotate(frame.position),
-                        ),
-                        up: crate::rigid::to_vessel(rotate(frame.up)),
-                        forward: crate::rigid::to_vessel(rotate(frame.forward)),
-                    })
-                })
-                .collect(),
-
+            eva_hatches: crate::crew::frames_in_craft(craft, crate::crew::hatch_frames()),
+            eva_obstacles: crate::crew::frames_in_craft(craft, crate::crew::obstacle_frames()),
             rigid,
             root,
             stage_parts,
