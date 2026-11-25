@@ -148,6 +148,17 @@ test('planning modifier arrows preserve the burn, warp can be stopped, and the o
   await expect(page.locator('#warp')).not.toHaveText('×1');
   await page.locator('[data-ose="warp-stop"]').click();
   await expect(page.locator('#warp')).toHaveText('×1');
+  // The burn timer's Delete All Maneuvers takes the next node and every one after it: the whole plan.
+  await page.locator('[data-ose="add-node"]').click();
+  await page.locator('[data-ose="add-next-node"]').click();
+  await expect(node).toHaveCount(1);
+  const burnTimer = page.locator('[data-ose="flight-burn"]');
+  await expect(burnTimer).toHaveClass(/\bon\b/);
+  await page.locator('[data-ose="burn-delete-all"]').click();
+  await expect(node).toHaveCount(0);
+  await expect(page.locator('.node-other')).toHaveCount(0);
+  await expect(burnTimer).not.toHaveClass(/\bon\b/);
+  await expect(page.locator('[data-ose="node-panel"]')).not.toHaveClass(/\bopen\b/);
   await page.locator('#fh-ksc').click();
   await page.locator('[data-ose="ksc-sessions"]').click();
   const campaign = page.locator('[data-ose="session"]').filter({ hasText: campaignName });
