@@ -822,6 +822,8 @@ pub struct Atmo {
     pub pressure_kpa: Curve,
     pub temperature_k: Curve,
     pub molar_mass: f64,
+    /// `atmosphereAdiabaticIndex`: 1.4 for Kerbin's and Laythe's air, 1.2 for Eve's and Duna's, 1.43 for Jool's.
+    pub adiabatic_index: f64,
 }
 
 impl Atmo {
@@ -832,13 +834,15 @@ impl Atmo {
             self.pressure_kpa.evaluate(alt_m).max(0.0)
         }
     }
-    /// Speed of sound, m/s (ideal diatomic gas).
+    /// Speed of sound, m/s: `AeroUtilities.GetSoundSpeed`, sqrt(adiabatic index x pressure / density), which for
+    /// the ideal gas is sqrt(index x R x T / M) with the body's own index (it was 1.4 everywhere: 8% fast on Eve,
+    /// Duna and Jool, so Mach, drag and heating were read too low there).
     pub fn speed_of_sound(&self, alt_m: f64) -> f64 {
         let t = self.temperature_k.evaluate(alt_m.min(self.depth_m));
         if t <= 0.0 || self.molar_mass <= 0.0 {
             return 0.0;
         }
-        (1.4 * IDEAL_GAS_CONSTANT * t / self.molar_mass).sqrt()
+        (self.adiabatic_index * IDEAL_GAS_CONSTANT * t / self.molar_mass).sqrt()
     }
 
     pub fn density(&self, alt_m: f64) -> f64 {
@@ -3241,6 +3245,7 @@ mod tests {
             pressure_kpa: Curve { keys },
             temperature_k: Curve { keys: tkeys },
             molar_mass: 0.0289644,
+            adiabatic_index: 1.4,
         }
     }
 

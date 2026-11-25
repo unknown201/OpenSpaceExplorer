@@ -28,8 +28,8 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $pilotDir = Join-Path $Ksp2 "BepInEx\ose-parity"
 $plugin = Join-Path $Ksp2 "BepInEx\plugins\OSE.ParityPilot.dll"
 $campaign = Join-Path $env:USERPROFILE "AppData\LocalLow\Intercept Games\Kerbal Space Program 2\Saves\SinglePlayer\OSE Parity"
-$outNames = @{ reentry = "ksp2-reentryorbit-reentry"; pod = "ksp2-reentryorbit-pod"; stack = "ksp2-reentryorbit-stack"; "pod free" = "ksp2-reentryorbit-podfree"; settings = "ksp2-thermal-settings"; jetfly = "ksp2-jetfly" }
-$crafts = @("craft-reentry.json", "craft-drop-pod.json", "craft-stack.json", "craft-jet.json")
+$outNames = @{ reentry = "ksp2-reentryorbit-reentry"; pod = "ksp2-reentryorbit-pod"; stack = "ksp2-reentryorbit-stack"; k1 = "ksp2-reentryorbit-k1"; k2 = "ksp2-reentryorbit-k2"; jet = "ksp2-reentryorbit-jet"; fairing = "ksp2-reentryorbit-fairing"; "pod free" = "ksp2-reentryorbit-podfree"; settings = "ksp2-thermal-settings"; atmosphere = "ksp2-atmosphere"; jetfly = "ksp2-jetfly" }
+$crafts = @("craft-reentry.json", "craft-drop-pod.json", "craft-stack.json", "craft-jet.json", "craft-k1.json", "craft-k2.json", "craft-fairing-nose.json")
 
 if (-not (Test-Path $pilotDir)) { throw "No ${pilotDir}: the parity pilot (BepInEx) is not installed in KSP2." }
 if (Get-Process -Name "KSP2_x64" -ErrorAction SilentlyContinue) { throw "KSP2 is running; close it first." }
@@ -74,7 +74,7 @@ try {
     foreach ($s in $Scenarios) {
         $out = Join-Path $pilotDir "out"
         if (Test-Path $out) { Remove-Item -Recurse -Force $out }
-        Set-Content -Path (Join-Path $pilotDir "run.txt") -Value $(if ($s -eq "settings" -or $s -eq "jetfly") { $s } else { "reentryorbit $s" }) -Encoding ascii -NoNewline
+        Set-Content -Path (Join-Path $pilotDir "run.txt") -Value $(if ($s -eq "settings" -or $s -eq "jetfly" -or $s -eq "atmosphere") { $s } else { "reentryorbit $s" }) -Encoding ascii -NoNewline
         Write-Host "Starting KSP2 for '$s'..."
         Start-Process "steam://rungameid/954850"
         $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
@@ -95,7 +95,7 @@ try {
         if (Test-Path $out) { Copy-Item -Recurse -Force $out $dest }
         $ok = Test-Path (Join-Path $dest "done.txt")
         $log = Join-Path $dest "steps.log"
-        if ((Test-Path $log) -and -not (Select-String -Quiet -SimpleMatch -Path $log -Pattern "scenario $(if ($s -eq 'settings' -or $s -eq 'jetfly') { $s } else { 'reentryorbit ' + $s })")) { Write-Warning "steps.log does not name scenario reentryorbit $s" }
+        if ((Test-Path $log) -and -not (Select-String -Quiet -SimpleMatch -Path $log -Pattern "scenario $(if ($s -eq 'settings' -or $s -eq 'jetfly' -or $s -eq 'atmosphere') { $s } else { 'reentryorbit ' + $s })")) { Write-Warning "steps.log does not name scenario reentryorbit $s" }
         Write-Host ("'$s': " + $(if ($ok) { "done" } else { "did not finish" }) + " -> $dest")
     }
 }

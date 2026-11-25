@@ -182,6 +182,7 @@ namespace OpenSpaceExplorer.Validation
             var scenario = File.ReadAllText(Path.Combine(dir, "run.txt")).Trim();
             Mark("scenario " + scenario);
             if (scenario == "settings") { Mark(ReentryOrbit.ThermalSettings()); yield return Finish("settings"); yield break; }
+            if (scenario == "atmosphere") { Mark(AtmosphereScenario.Run(dir)); yield return Finish("atmosphere"); yield break; }
             double darkUT = -1, brightUT = -1;
             if (scenario == "visuals")
             {
