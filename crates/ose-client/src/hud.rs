@@ -972,20 +972,22 @@ pub fn burn_text(to_node_s: f64, dv_mps: f64, mass_t: f64, full_thrust_kn: f64) 
     burn_line(to_node_s, dv_mps, burn, 0.0)
 }
 
-/// The burn timer's line: the countdown to the node, its delta-v and how long it burns at full throttle, and
-/// what the stages lack when they run dry first (the original's not-enough-delta-v warning).
+/// The burn timer's line, as the original's BURN.TIMER: the delta-v the next node requires, when to start the
+/// burn and when to stop it at full throttle. When the stages hold less than the node asks, OSE adds how much
+/// is missing (KSP2 has no such warning: it just times the burn past the stages, `burn_estimate`).
 pub fn burn_line(to_node_s: f64, dv_mps: f64, burn_s: Option<f64>, short_mps: f64) -> String {
     let mut text = match burn_s {
         Some(b) => format!(
-            "Burn {} \u{b7} \u{394}v {:.0} m/s \u{b7} {} at full throttle",
-            fmt_dt(to_node_s),
+            "\u{394}v required {:.0} m/s \u{b7} start burn {} \u{b7} stop {} ({})",
             dv_mps,
+            fmt_dt(to_node_s),
+            fmt_dt(to_node_s + b),
             fmt_burn(b)
         ),
         None => format!(
-            "Node {} \u{b7} \u{394}v {:.0} m/s \u{b7} throttle up to time the burn",
-            fmt_dt(to_node_s),
-            dv_mps
+            "\u{394}v required {:.0} m/s \u{b7} node {} \u{b7} throttle up to time the burn",
+            dv_mps,
+            fmt_dt(to_node_s)
         ),
     };
     if short_mps >= SHORT_MPS {
@@ -1020,7 +1022,8 @@ pub struct BurnEstimate {
 
 /// Fire the stages in order (the highest stage id first, as staging goes), each at full thrust with its
 /// mass falling as it burns: skip the delta-v the nodes before this one use (`before_mps`), then time
-/// `dv_mps`. A stage delivers the delta-v the readout gives where the vessel is now (vacuum when it has no
+/// `dv_mps`. Past the stages the rest is timed at the last stage's thrust on its empty mass, as KSP2 does
+/// (`reference/ksp2-maneuver`: a 50 m/s node 1.094 s, a 20,000 m/s one 263.0 s on a 1,719 m/s stage). A stage delivers the delta-v the readout gives where the vessel is now (vacuum when it has no
 /// figure for here). None when no stage has an engine and propellant.
 pub fn burn_estimate(
     stages: &[ose_net::StageReadout],
@@ -1038,6 +1041,12 @@ pub fn burn_estimate(
     let mut skip = before_mps.max(0.0);
     let mut want = dv_mps.max(0.0);
     let mut seconds = 0.0;
+    // the last stage's thrust and empty mass: KSP2 times what the stages cannot give at that acceleration
+    let last = order
+        .iter()
+        .rev()
+        .find(|s| stage_thrust(s) > 0.0 && s.end_mass_t > 0.0)
+        .map(|s| (stage_thrust(s), s.end_mass_t));
     for s in order {
         let total = stage_dv(s);
         let used = skip.min(total);
@@ -1052,10 +1061,21 @@ pub fn burn_estimate(
             break;
         }
     }
+    if let Some((thrust_kn, mass_t)) = last.filter(|_| want > 0.0) {
+        seconds += want * mass_t / thrust_kn;
+    }
     Some(BurnEstimate {
         seconds,
         short_mps: want,
     })
+}
+
+fn stage_thrust(s: &ose_net::StageReadout) -> f64 {
+    if s.thrust_now_kn > 0.0 {
+        s.thrust_now_kn
+    } else {
+        s.thrust_kn
+    }
 }
 
 fn stage_dv(s: &ose_net::StageReadout) -> f64 {
@@ -2497,9 +2517,11 @@ mod tests {
     fn burn_starts_at_the_node() {
         // 100 m/s on 10 t with 50 kN: a 20 s burn, starting at the node 70 s on (KSP2's countdown)
         let t = burn_text(70.0, 100.0, 10.0, 50.0);
-        assert!(t.starts_with("Burn T-1:10"), "{t}");
-        assert!(t.contains("20 s"));
-        assert!(burn_text(70.0, 100.0, 10.0, 0.0).starts_with("Node T-1:10"));
+        assert!(
+            t.contains("start burn T-1:10 \u{b7} stop T-1:30 (20 s)"),
+            "{t}"
+        );
+        assert!(burn_text(70.0, 100.0, 10.0, 0.0).contains("node T-1:10"));
     }
 
     fn stage(id: u32, m0: f64, m1: f64, dv: f64, t: f64) -> ose_net::StageReadout {
@@ -2546,10 +2568,30 @@ mod tests {
     }
 
     #[test]
+    fn burn_estimate_matches_ksp2s_maneuver_nodes() {
+        // reference/ksp2-maneuver (KSP2 0.2.2, run-1 craft in a 100 km orbit): its one stage reads 1718.74 m/s
+        // in vacuum over 29.19 s, 4.7425 t to 2.7425 t at 215 kN. KSP2's ManeuverNodeData.BurnDuration: 50 m/s
+        // in 1.0941671 s, and 20,000 m/s (far past the stage, no cap) in 263.022 s.
+        let s = ose_net::StageReadout {
+            thrust_kn: 215.0,
+            ..stage(1, 4.7425, 2.7425, 1718.74, 29.19)
+        };
+        let small = burn_estimate(std::slice::from_ref(&s), 0.0, 50.0).unwrap();
+        assert!((small.seconds - 1.0941671).abs() < 1e-3, "{small:?}");
+        let big = burn_estimate(std::slice::from_ref(&s), 0.0, 20_000.0).unwrap();
+        assert!((big.seconds / 263.022 - 1.0).abs() < 0.005, "{big:?}");
+        assert!((big.short_mps - (20_000.0 - 1718.74)).abs() < 1e-6);
+    }
+
+    #[test]
     fn burn_line_warns_when_the_stages_run_dry() {
         let t = burn_line(70.0, 300.0, Some(150.0), 42.4);
-        assert!(t.starts_with("Burn T-1:10"), "{t}");
-        assert!(t.contains("2m 30s at full throttle"), "{t}");
+        assert!(
+            t.starts_with(
+                "\u{394}v required 300 m/s \u{b7} start burn T-1:10 \u{b7} stop T-3:40 (2m 30s)"
+            ),
+            "{t}"
+        );
         assert!(t.ends_with("not enough \u{394}v: 42 m/s short"), "{t}");
         assert!(!burn_line(70.0, 300.0, Some(15.0), 0.2).contains("short"));
     }

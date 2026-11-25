@@ -13356,7 +13356,23 @@ impl App {
         let ut = self.time.ut_at(now_ms());
         // Burn timer for a node planned on the flown vessel.
         if let Some(el) = self.doc.get_element_by_id("fh-burn") {
-            match self.node.filter(|n| n.vessel == id) {
+            // the next node on the vessel's plan, as the original's timer (not the one being edited)
+            let next = self
+                .node
+                .iter()
+                .chain(self.nodes.iter())
+                .filter(|n| n.vessel == id)
+                .min_by(|a, b| {
+                    // while a burn is flown, its node (the earliest); otherwise a node already passed comes
+                    // last unless it is the only one
+                    let burning = f.burn_left_mps.is_some();
+                    let key = |n: &Node| (!burning && n.ut < ut - 1.0, n.ut);
+                    key(a)
+                        .partial_cmp(&key(b))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .copied();
+            match next {
                 Some(n) => {
                     let dv = (n.prograde_mps.powi(2) + n.normal_mps.powi(2) + n.radial_mps.powi(2))
                         .sqrt();
