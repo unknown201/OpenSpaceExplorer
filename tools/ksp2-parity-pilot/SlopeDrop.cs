@@ -10,7 +10,7 @@ namespace OpenSpaceExplorer.Validation
 {
     // Landing on a slope (thread "Fix relaunch, EVA, landing and parachute glitches": the engine bell sank into
     // the ground on landing). "slope <craft> <speed> <degrees>": the drop craft (craft-drop-<craft>.json) is
-    // teleported over the land west of the KSC, point by point on a lat/lon grid, until the terrain collider under
+    // teleported over the land west of the KSC, point by point on a lat/lon grid, until the dry terrain collider under
     // it is a plane within 0.75 degrees of the wanted slope (five raycasts 3 m apart agree). Then it is set down
     // 1 m above that point falling at `speed` m/s, upright, and every physics tick logs its tilt from the local
     // vertical and from the ground's normal, the height of its root part over the terrain, its vertical speed,
@@ -76,7 +76,7 @@ namespace OpenSpaceExplorer.Validation
             double lat = double.NaN, lon = double.NaN, found = double.NaN;
             using (var w = new StreamWriter(Path.Combine(dir, "out", "slope-probe.csv"), false) { AutoFlush = true })
             {
-                w.WriteLine("lat,lon,slope_deg,spread_deg");
+                w.WriteLine("lat,lon,slope_deg,spread_deg,ground_asl_m");
                 for (double dlon = 0; dlon <= 1.2 && double.IsNaN(found); dlon += 0.05)
                     for (double dlat = -0.3; dlat <= 0.3 && double.IsNaN(found); dlat += 0.05)
                     {
@@ -87,9 +87,11 @@ namespace OpenSpaceExplorer.Validation
                         var root = v == null ? null : Root(v);
                         if (root == null) continue;
                         var up = Up(v, root.position);
-                        if (!Plane(root.position, up, out _, out var slope, out var spread, out _)) { w.WriteLine(F(la) + "," + F(lo) + ",,"); continue; }
-                        w.WriteLine(F(la) + "," + F(lo) + "," + F(slope) + "," + F(spread));
-                        if (Math.Abs(slope - degrees) < 0.75 && spread < 1.0) { lat = la; lon = lo; found = slope; }
+                        if (!Plane(root.position, up, out _, out var slope, out var spread, out var over)) { w.WriteLine(F(la) + "," + F(lo) + ",,,"); continue; }
+                        // the ground's own altitude: a sea floor is no land test
+                        double ground = v.AltitudeFromSeaLevel - over;
+                        w.WriteLine(F(la) + "," + F(lo) + "," + F(slope) + "," + F(spread) + "," + F(ground));
+                        if (ground > 2.0 && Math.Abs(slope - degrees) < 0.75 && spread < 1.0) { lat = la; lon = lo; found = slope; }
                     }
             }
             if (double.IsNaN(found)) { mark("slope: no point within 0.75 deg of " + F(degrees)); yield break; }
