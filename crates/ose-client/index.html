@@ -1091,6 +1091,14 @@
     #tracking .ts-tabs button.on { background: #2f8fff; border-color: #2f8fff; color: #fff; }
     #ts-list { list-style: none; margin: 0; padding: calc(6 * var(--u)); flex: 1; overflow: auto; background: #ebf0ffcc; border: 1px solid #6a718f; }
     .ts-vessel { display: flex; flex-direction: column; padding: calc(6 * var(--u)) calc(10 * var(--u)); margin-bottom: calc(6 * var(--u)); background: #fff; border-left: calc(6 * var(--u)) solid #fff; cursor: pointer; }
+    .ts-group { list-style: none; margin: calc(10 * var(--u)) 0 calc(4 * var(--u)); font-size: calc(12 * var(--u)); font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #4a5068; }
+    .ts-vessel.route .name::before, .ts-vessel.recording .name::before, .ts-vessel.depot .name::before { content: none; }
+    .ts-vessel.route.paused .meta { color: #a4561a; }
+    #ts-info .route-log { margin: calc(6 * var(--u)) 0; padding-left: calc(16 * var(--u)); font-size: calc(12 * var(--u)); }
+    #ts-info .route-log .missed, #ts-info .route-log .lost { color: #b3261e; }
+    #ts-info .route-end, #ts-info .route-stayed { margin: calc(6 * var(--u)) 0; font-size: calc(13 * var(--u)); }
+    #ts-info .route-end button.on { background: #2f8fff; color: #fff; }
+    #ts-info #rt-name { width: 100%; box-sizing: border-box; margin-bottom: calc(4 * var(--u)); }
     .ts-vessel:hover { background: #e3eeff; } .ts-vessel.selected { background: #cde6ff; border-left-color: #2f8fff; }
     .ts-vessel.mine .name::before { content: "\25B2 "; color: #4f8f1f; font-size: calc(11 * var(--u)); }
     .ts-vessel .name { font-weight: 700; font-size: calc(16 * var(--u)); } .ts-vessel .meta { font-size: calc(12 * var(--u)); color: #4a5068; }
@@ -1244,6 +1252,9 @@
     /* The burn timer: the delta-v still to go drains a blue bar; red when the burn stopped short. */
     #flight-hud #fh-burn.burning { background: linear-gradient(90deg, #2f5fbf var(--p, 100%), transparent var(--p, 100%)); color: #fff; border-radius: 3px; padding: 1px 6px; }
     #flight-hud #fh-burn.stopped { color: #ff8a6a; }
+    #flight-hud #fh-burn.short { color: #ffb347; }
+    #node-summary { font-size: 12px; color: #cfe0ff; margin: 2px 0; }
+    #node-summary.short { color: #ffb347; }
     /* ORBITAL.INFO: Ap over Pe, each with its countdown, as the original's two lines. */
     #flight-hud .fh-bottom .fh-orbit { display: grid; grid-template-columns: auto 1fr auto; gap: 0 calc(8 * var(--u)); justify-items: start; }
     #flight-hud .fh-spd, #flight-hud .fh-alt { position: absolute; top: 50%; transform: translateY(-50%); min-width: calc(110 * var(--u)); background: #10141bf0; border: 2px solid; border-radius: calc(4 * var(--u)); padding: calc(2 * var(--u)) calc(8 * var(--u)); text-align: right; }
@@ -1773,7 +1784,7 @@
   <div id="audio" data-ose="audio" hidden></div>
   <div id="tracking" data-ose="tracking">
     <div class="ts-head"><span class="flag"><img src="assets/ui/ICO-Tracking-Station-Med.png" alt="" /></span><h2 data-loc="Menu/KSC/TrackingStation">Tracking Station</h2></div>
-    <div class="ts-tabs"><button id="ts-tab-all" data-ose="ts-tab-all" class="on">All vessels</button><button id="ts-tab-mine" data-ose="ts-tab-mine">Mine</button><button id="ts-tab-colonies" data-ose="ts-tab-colonies">Colonies</button></div>
+    <div class="ts-tabs"><button id="ts-tab-all" data-ose="ts-tab-all" class="on">All vessels</button><button id="ts-tab-mine" data-ose="ts-tab-mine">Mine</button><button id="ts-tab-colonies" data-ose="ts-tab-colonies">Colonies</button><button id="ts-tab-routes" data-ose="ts-tab-routes">Routes</button></div>
     <div id="ts-filters" class="ts-filters" data-ose="ts-filters"></div>
     <ul id="ts-list" data-ose="ts-list"></ul>
     <div id="ts-info" data-ose="ts-info"></div>
@@ -1857,6 +1868,7 @@
     <label>prograde <input id="node-prograde" type="range" min="-1500" max="1500" step="0.1" value="0" /><span id="node-prograde-text">0 m/s</span></label>
     <label>normal <input id="node-normal" type="range" min="-1500" max="1500" step="0.1" value="0" /><span id="node-normal-text">0 m/s</span></label>
     <label>radial <input id="node-radial" type="range" min="-1500" max="1500" step="0.1" value="0" /><span id="node-radial-text">0 m/s</span></label>
+    <div id="node-summary" data-ose="node-summary" title="The node's delta-v and burn time at full throttle, staging as planned"></div>
     <div class="slider-help">Arrow keys: 1 · Shift: 10 · Ctrl: 0.1 (seconds or m/s)</div>
     <div class="reason" id="node-reason"></div>
     <button id="node-warp" data-ose="node-warp" title="Coast with engines off to just before the maneuver">Warp to</button>

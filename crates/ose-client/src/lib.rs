@@ -75,6 +75,7 @@ pub use ose_guidance::plan as rendezvous_plan;
 pub mod colonies_ui;
 mod rendezvous_ui;
 pub mod rnd;
+pub mod routes_ui;
 pub mod scene;
 pub mod settings;
 #[cfg(target_arch = "wasm32")]
@@ -101,9 +102,9 @@ use web_sys::{
 };
 
 use ose_net::{
-    Agency, CampaignMember, ClientMessage, DifficultyDefinition, DifficultyOption,
-    DifficultyPreset, DifficultyValue, PatchEnd, ServerMessage, SessionInfo, SessionMode,
-    PROTOCOL_VERSION, WS_PATH,
+    Agency, CampaignMember, ClientMessage, DepotInfo, DifficultyDefinition, DifficultyOption,
+    DifficultyPreset, DifficultyValue, PatchEnd, RecordingInfo, RouteEnd, RouteInfo, ServerMessage,
+    SessionInfo, SessionMode, StayedRun, PROTOCOL_VERSION, WS_PATH,
 };
 
 /// The hint shown while a Kerbal holds a ladder; taken down when it lets go or boards.
@@ -385,6 +386,15 @@ struct App {
     ts_colonies: bool,
     ts_colony: Option<u64>,
     colonies_asked_ms: f64,
+    /// Delivery routes (protocol 71+): the Routes tab, what is picked there, and the campaign's routes, proving
+    /// flights and depots as the server last sent them.
+    ts_routes: bool,
+    ts_route_pick: Option<routes_ui::Pick>,
+    routes_asked_ms: f64,
+    routes_known: bool,
+    routes: Vec<RouteInfo>,
+    route_recordings: Vec<RecordingInfo>,
+    depots: Vec<DepotInfo>,
     ts_rendered_ms: f64,
     /// Whether the KSC camera is on the launch pad (glides there while the pad dialog is open).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -639,6 +649,11 @@ struct Node {
     prograde_mps: f64,
     normal_mps: f64,
     radial_mps: f64,
+}
+
+/// A node's delta-v, m/s.
+fn node_dv(n: &Node) -> f64 {
+    (n.prograde_mps.powi(2) + n.normal_mps.powi(2) + n.radial_mps.powi(2)).sqrt()
 }
 
 /// Where vessel `vessel` will be at `t` on its planned path (the patch the time falls in, so a node after
@@ -1105,6 +1120,13 @@ pub fn start() -> Result<(), JsValue> {
         ts_colonies: false,
         ts_colony: None,
         colonies_asked_ms: 0.0,
+        ts_routes: false,
+        ts_route_pick: None,
+        routes_asked_ms: 0.0,
+        routes_known: false,
+        routes: Vec::new(),
+        route_recordings: Vec::new(),
+        depots: Vec::new(),
         ts_rendered_ms: 0.0,
         ksc_on_pad: false,
         throttle: 0.0,
@@ -2893,6 +2915,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 let mut app = a.borrow_mut();
                 app.ts_mine_only = mine;
                 app.ts_colonies = false;
+                app.ts_routes = false;
                 app.render_tracking();
             }),
         )?;
@@ -2902,7 +2925,19 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         Box::new(|a| {
             let mut app = a.borrow_mut();
             app.ts_colonies = true;
+            app.ts_routes = false;
             app.ask_colonies(now_ms());
+            app.render_tracking();
+        }),
+    )?;
+    wire(
+        "ts-tab-routes",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.ts_routes = true;
+            app.ts_colonies = false;
+            app.routes_asked_ms = 0.0;
+            app.ask_routes(now_ms());
             app.render_tracking();
         }),
     )?;
@@ -2957,6 +2992,9 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                     }
                     app.ts_colony = None;
                 }
+                return;
+            }
+            if app.route_click(&el) {
                 return;
             }
             if let Some(id) = num("data-ose-colony") {
@@ -7060,6 +7098,38 @@ impl App {
                     self.render_tracking();
                 }
             }
+            ServerMessage::Routes {
+                depots,
+                recordings,
+                routes,
+                reason,
+            } => {
+                if let Some(why) = reason {
+                    hud::push(&self.doc, &format!("Routes: {why}"), "warning");
+                }
+                if self.routes_known {
+                    // a run of a route came home, delivered, or was lost since the last answer
+                    for r in &routes {
+                        let before = self
+                            .routes
+                            .iter()
+                            .find(|o| o.id == r.id)
+                            .map_or(0, |o| o.runs.len());
+                        if r.runs.len() > before {
+                            if let Some((text, tier)) = routes_ui::run_toast(r) {
+                                hud::push(&self.doc, &text, tier);
+                            }
+                        }
+                    }
+                }
+                self.routes_known = true;
+                self.routes = routes;
+                self.route_recordings = recordings;
+                self.depots = depots;
+                if self.tracking_open {
+                    self.render_tracking();
+                }
+            }
             ServerMessage::AgencyNews { by, event } => {
                 let tech = |id: &str| {
                     let key = self
@@ -9208,6 +9278,17 @@ impl App {
             .ok();
         el.class_list().add_1("open").ok();
         self.flight_pam_refresh();
+        // keep the whole window on screen: one opened from a low row of the parts list ran off the bottom
+        let h = web_sys::window()
+            .and_then(|w| w.inner_height().ok())
+            .and_then(|h| h.as_f64())
+            .unwrap_or(900.0);
+        let tall = f64::from(el.offset_height());
+        if y.max(70.0) + tall > h - 8.0 {
+            el.style()
+                .set_property("top", &format!("{}px", (h - 8.0 - tall).max(70.0)))
+                .ok();
+        }
     }
 
     /// Redraw the flight part window from the latest readout (it follows the part's state).
@@ -10997,6 +11078,161 @@ impl App {
         }
     }
 
+    /// Ask the server for the routes, proving flights and depots, at most every 3 s.
+    fn ask_routes(&mut self, now: f64) {
+        if now - self.routes_asked_ms < 3000.0 {
+            return;
+        }
+        self.routes_asked_ms = now;
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::RoutesInfo);
+        }
+    }
+
+    /// The Routes tab: routes, proving flights and depots, and the picked route's or recording's card.
+    fn render_routes_tab(&mut self) {
+        let gone = match self.ts_route_pick {
+            Some(routes_ui::Pick::Route(id)) => !self.routes.iter().any(|r| r.id == id),
+            Some(routes_ui::Pick::Recording(id)) => {
+                !self.route_recordings.iter().any(|p| p.id == id)
+            }
+            None => false,
+        };
+        if gone {
+            self.ts_route_pick = None;
+        }
+        let list = routes_ui::render_list(
+            &self.routes,
+            &self.route_recordings,
+            &self.depots,
+            self.ts_route_pick,
+        );
+        let info = match self.ts_route_pick {
+            Some(routes_ui::Pick::Route(id)) => self
+                .routes
+                .iter()
+                .find(|r| r.id == id)
+                .map(|r| routes_ui::render_route(r, &self.depots, self.time.ut_at(now_ms()))),
+            Some(routes_ui::Pick::Recording(id)) => {
+                self.route_recordings.iter().find(|p| p.id == id).map(|p| {
+                    let made = self.routes.iter().any(|r| r.recording == id);
+                    routes_ui::render_recording(p, self.player_id, made)
+                })
+            }
+            None => None,
+        }
+        .unwrap_or_else(|| {
+            "<div class=\"ts-hint\">Select a route or a proving flight</div>".into()
+        });
+        for (id, html) in [
+            ("ts-list", list),
+            ("ts-info", info),
+            ("ts-filters", String::new()),
+        ] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                let key = format!("{}:{}", html.len(), hud::fnv(&html));
+                if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+                    el.set_inner_html(&html);
+                    el.set_attribute("data-ose-key", &key).ok();
+                }
+            }
+        }
+        for (id, on) in [
+            ("ts-tab-all", false),
+            ("ts-tab-mine", false),
+            ("ts-tab-colonies", false),
+            ("ts-tab-routes", true),
+        ] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                el.class_list().toggle_with_force("on", on).ok();
+            }
+        }
+    }
+
+    /// A click on one of the routes controls in the tracking station; false when it was not one.
+    fn route_click(&mut self, el: &Element) -> bool {
+        let attr = |name: &str| {
+            el.closest(&format!("[{name}]"))
+                .ok()
+                .flatten()
+                .and_then(|e| e.get_attribute(name))
+        };
+        let num = |name: &str| attr(name).and_then(|s| s.parse::<u64>().ok());
+        let msg = if let Some(id) = num("data-ose-route-pause") {
+            let paused = attr("data-ose-paused").as_deref() == Some("true");
+            Some(ClientMessage::PauseRoute {
+                id,
+                paused: !paused,
+            })
+        } else if let Some(id) = num("data-ose-route-delete") {
+            let name = self
+                .routes
+                .iter()
+                .find(|r| r.id == id)
+                .map(|r| r.name.clone())
+                .unwrap_or_default();
+            let sure = web_sys::window()
+                .and_then(|w| {
+                    w.confirm_with_message(&format!(
+                        "Delete the route {name}? A run on its way is left where it is."
+                    ))
+                    .ok()
+                })
+                .unwrap_or(false);
+            sure.then_some(ClientMessage::DeleteRoute { id })
+        } else if let Some(id) = num("data-ose-route-end") {
+            let when = match attr("data-ose-end").as_deref() {
+                Some("Stay") => RouteEnd::Stay,
+                Some("Return") => RouteEnd::Return,
+                Some("LetGo") => RouteEnd::LetGo,
+                _ => RouteEnd::Rotate,
+            };
+            Some(ClientMessage::SetRouteEnd { id, when })
+        } else if let Some(id) = num("data-ose-route-stayed") {
+            let what = match attr("data-ose-what").as_deref() {
+                Some("SendHome") => StayedRun::SendHome,
+                Some("LetGo") => StayedRun::LetGo,
+                _ => StayedRun::Keep,
+            };
+            Some(ClientMessage::RouteStayed { id, what })
+        } else if let Some(id) = num("data-ose-rec-route") {
+            let name = self
+                .doc
+                .get_element_by_id("rt-name")
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                .map(|i| i.value().trim().to_string())
+                .unwrap_or_default();
+            Some(ClientMessage::CreateRoute {
+                recording: id,
+                name,
+            })
+        } else if let Some(id) = num("data-ose-rec-forget") {
+            Some(ClientMessage::ForgetRecording { id })
+        } else if num("data-ose-rec-stop").is_some() {
+            Some(ClientMessage::StopRecording)
+        } else if let Some(vessel) = num("data-ose-rec-start") {
+            Some(ClientMessage::RecordRoute { vessel })
+        } else if let Some(vessel) = num("data-ose-depot") {
+            let depot = attr("data-ose-depot-on").as_deref() == Some("true");
+            Some(ClientMessage::SetDepot { vessel, depot })
+        } else if let Some(id) = num("data-ose-route") {
+            self.ts_route_pick = Some(routes_ui::Pick::Route(id));
+            self.render_tracking();
+            return true;
+        } else if let Some(id) = num("data-ose-recording") {
+            self.ts_route_pick = Some(routes_ui::Pick::Recording(id));
+            self.render_tracking();
+            return true;
+        } else {
+            // typing a route name is not a click on the list behind it
+            return el.closest("#rt-name").ok().flatten().is_some();
+        };
+        if let (Some(msg), Some(ws)) = (msg, &self.ws) {
+            send(ws, &msg);
+        }
+        true
+    }
+
     /// The Colonies tab: the list and the picked colony's card.
     fn render_colonies_tab(&mut self) {
         if self
@@ -11039,6 +11275,13 @@ impl App {
 
     fn render_tracking(&mut self) {
         self.ts_rendered_ms = now_ms();
+        if self.ts_routes {
+            self.render_routes_tab();
+            return;
+        }
+        if let Some(el) = self.doc.get_element_by_id("ts-tab-routes") {
+            el.class_list().toggle_with_force("on", false).ok();
+        }
         if self.ts_colonies {
             self.render_colonies_tab();
             return;
@@ -11078,7 +11321,16 @@ impl App {
                     .and_then(|id| rows.iter().find(|r| r.id == id)),
                 self.ts_body.and_then(|i| self.body_card(i)),
             ) {
-                (Some(r), _) => tracking::render_info(r),
+                (Some(r), _) => {
+                    let mut html = tracking::render_info(r);
+                    let recording = self
+                        .route_recordings
+                        .iter()
+                        .any(|p| Some(p.player) == self.player_id && p.state == "Recording");
+                    let depot = self.depots.iter().any(|d| d.vessel == Some(r.id));
+                    html.push_str(&routes_ui::vessel_actions(r.id, depot, r.mine, recording));
+                    html
+                }
                 (None, Some(card)) => tracking::render_body_info(&card, self.ts_body.unwrap_or(0)),
                 _ => "<div class=\"ts-hint\">Select a vessel or a celestial body</div>".to_string(),
             };
@@ -11112,6 +11364,8 @@ impl App {
             if self.ts_colonies {
                 self.ask_colonies(now);
             }
+            // the routes (for the vessel card's depot button too), every 3 s while the station is open
+            self.ask_routes(now);
             self.render_tracking();
         }
     }
@@ -13413,7 +13667,23 @@ impl App {
         let ut = self.time.ut_at(now_ms());
         // Burn timer for a node planned on the flown vessel.
         if let Some(el) = self.doc.get_element_by_id("fh-burn") {
-            match self.node.filter(|n| n.vessel == id) {
+            // the next node on the vessel's plan, as the original's timer (not the one being edited)
+            let next = self
+                .node
+                .iter()
+                .chain(self.nodes.iter())
+                .filter(|n| n.vessel == id)
+                .min_by(|a, b| {
+                    // while a burn is flown, its node (the earliest); otherwise a node already passed comes
+                    // last unless it is the only one
+                    let burning = f.burn_left_mps.is_some();
+                    let key = |n: &Node| (!burning && n.ut < ut - 1.0, n.ut);
+                    key(a)
+                        .partial_cmp(&key(b))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .copied();
+            match next {
                 Some(n) => {
                     let dv = (n.prograde_mps.powi(2) + n.normal_mps.powi(2) + n.radial_mps.powi(2))
                         .sqrt();
@@ -13439,8 +13709,17 @@ impl App {
                             dv
                         ),
                         (None, Some(why)) => format!("Burn stopped: {why}"),
-                        _ => hud::burn_text(n.ut - ut, dv, f.mass_t, full),
+                        _ => match self.node_burn(&n) {
+                            Some(e) => hud::burn_line(n.ut - ut, dv, Some(e.seconds), e.short_mps),
+                            None => hud::burn_text(n.ut - ut, dv, f.mass_t, full),
+                        },
                     };
+                    let short = f.burn_left_mps.is_none()
+                        && f.burn_stopped.is_none()
+                        && self
+                            .node_burn(&n)
+                            .is_some_and(|e| e.short_mps >= hud::SHORT_MPS);
+                    el.class_list().toggle_with_force("short", short).ok();
                     el.set_text_content(Some(&text));
                     el.class_list().add_1("on").ok();
                     el.class_list()
@@ -14507,6 +14786,24 @@ impl App {
                 .fold(0.0f32, f32::max);
             el.set_attribute("data-ose-gimbal", &format!("{:.2}", gimbal.to_degrees()))
                 .ok();
+            // Test hook: metres to the nearest other vessel around the same body, from the latest snapshot
+            // (every vessel in it is at the same tick), whether or not the 3D view draws it.
+            if let Some(scene) = self.scene.as_ref() {
+                if let Some(me) = self.flying.and_then(|id| scene.vessel(id)) {
+                    let nearest = scene
+                        .vessels
+                        .iter()
+                        .filter(|o| o.id != me.id && o.reference_body == me.reference_body)
+                        .map(|o| (o.position_m - me.position_m).length())
+                        .fold(f64::INFINITY, f64::min);
+                    if nearest.is_finite() {
+                        el.set_attribute("data-ose-nearest-m", &format!("{nearest:.0}"))
+                            .ok();
+                    } else {
+                        el.remove_attribute("data-ose-nearest-m").ok();
+                    }
+                }
+            }
         }
     }
 
@@ -15316,6 +15613,28 @@ impl App {
         };
         if let Some(node) = self.node {
             set("node-dt-text", &hud::fmt_dt(node.ut - ut));
+            // The node's delta-v, its burn time and whether the stages hold it (the original's maneuver
+            // panel and its not-enough-delta-v warning).
+            let dv = node_dv(&node);
+            let est = self.node_burn(&node);
+            let mut text = format!("\u{394}v {dv:.1} m/s");
+            if let Some(e) = est {
+                text.push_str(&format!(" \u{b7} burn {}", hud::fmt_burn(e.seconds)));
+            }
+            let short = est.map(|e| e.short_mps).unwrap_or(0.0);
+            if short >= hud::SHORT_MPS {
+                text.push_str(&format!(
+                    " \u{b7} not enough \u{394}v: {short:.0} m/s short"
+                ));
+            }
+            set("node-summary", &text);
+            if let Some(el) = self.doc.get_element_by_id("node-summary") {
+                el.class_list()
+                    .toggle_with_force("short", short >= hud::SHORT_MPS)
+                    .ok();
+                el.set_attribute("data-ose-short", &format!("{short:.1}"))
+                    .ok();
+            }
         }
         // The orbit point's popup counts down too, and goes with the map or once the point is passed.
         if let Some(t) = self.orbit_popup {
@@ -15325,6 +15644,20 @@ impl App {
                 set("orbit-popup-t", &hud::fmt_dt(t - ut));
             }
         }
+    }
+
+    /// How node `n` falls on its vessel's stages, after the delta-v of the nodes planned before it: the
+    /// burn time at full throttle and what the stages lack. None without a stage readout (the vessel is not
+    /// flown here) or with no engine and propellant left.
+    fn node_burn(&self, n: &Node) -> Option<hud::BurnEstimate> {
+        let f = self.scene.as_ref()?.vessel(n.vessel)?.flight.as_ref()?;
+        let before: f64 = self
+            .nodes
+            .iter()
+            .filter(|m| m.vessel == n.vessel && m.ut < n.ut)
+            .map(node_dv)
+            .sum();
+        hud::burn_estimate(&f.stage_list, before, node_dv(n))
     }
 
     /// Place the node marker on the vessel's current orbit at the burn time.
@@ -16043,8 +16376,11 @@ impl App {
             .and_then(|k| k.1.as_ref())
             .map(|c| c.parts.iter().map(|p| p.guid.clone()).collect());
         // the colonies on this body, for their markers in the view
-        let site_colonies: Vec<&ose_net::ColonyInfo> =
-            self.colonies.iter().filter(|c| c.body == body.id).collect();
+        let site_colonies: Vec<&ose_net::ColonyInfo> = self
+            .colonies
+            .iter()
+            .filter(|c| c.body == body.id && !c.orbital)
+            .collect();
         let sites: Vec<(f64, f64)> = site_colonies
             .iter()
             .map(|c| (c.lat_deg, c.lon_deg))
@@ -16490,7 +16826,15 @@ impl App {
                             b.radius_m / 1000.0 / self.orbit_dist_km * h >= COLONY_MARKER_MIN_PX
                         })
                 })
-                .and_then(|c| colony_position(scene, &self.body_spins, c, ut))
+                .and_then(|c| {
+                    // an orbital colony is where its station (the first of its vessels) is
+                    if c.orbital {
+                        let v = scene.vessel(*c.vessels.first()?)?;
+                        Some(scene.vessel_position(v, ut))
+                    } else {
+                        colony_position(scene, &self.body_spins, c, ut)
+                    }
+                })
                 .map(to_km);
             match place.filter(|p| !hidden_by_body(*p)).and_then(project) {
                 Some((x, y)) => {

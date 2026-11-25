@@ -402,13 +402,11 @@ pub fn models_for(
     names.iter().all(|n| gpu.has_model(n)).then_some(names)
 }
 
-/// An engine's shroud as the original builds it (`ose_data::engine_shroud`): one panel, a lathe from the
-/// bottom ring (`target_radius`) up to the top ring, in the part's frame.
-pub fn shroud_shape(
-    d: &ose_data::engine_shroud::ShroudDef,
-    target_radius: f64,
-) -> (FairingShape, FairingDef) {
-    let [lo, hi] = d.rings(target_radius);
+/// A part's procedural wall as the original builds it (`ose_data::engine_shroud::wall_for`: an engine's or heat
+/// shield's shroud, a tube's or engine mount's wall): one panel, a lathe from the bottom ring up to the top ring,
+/// in the part's frame.
+pub fn shroud_shape(w: &ose_data::engine_shroud::Wall) -> (FairingShape, FairingDef) {
+    let [lo, hi] = w.rings;
     let shape = FairingShape {
         sections: vec![(0.0, lo.1), (hi.0 - lo.0, hi.1)],
         capped: false,
@@ -417,13 +415,13 @@ pub fn shroud_shape(
     };
     let def = FairingDef {
         mass_t: 0.0,
-        base_radius: d.base_radius,
+        base_radius: hi.1,
         cap_radius: 0.0,
-        max_radius: d.base_radius.max(target_radius),
+        max_radius: lo.1.max(hi.1),
         mass_area_ratio: 0.0,
         height_min: 0.0,
-        height_max: d.height,
-        side_count: d.side_count,
+        height_max: hi.0 - lo.0,
+        side_count: w.side_count,
         length_snap: 0.0,
         radius_snap: 0.0,
         ejection_force: 0.0,
@@ -436,21 +434,26 @@ pub fn shroud_shape(
     (shape, def)
 }
 
-/// The model name of `part_id`'s shroud flaring to `target_radius`.
-pub fn shroud_model_name(part_id: &str, target_radius: f64) -> String {
-    format!("shroud:{part_id}:{:.4}", target_radius)
+/// The model name of `part_id`'s wall `w`.
+pub fn shroud_model_name(part_id: &str, w: &ose_data::engine_shroud::Wall) -> String {
+    let [lo, hi] = w.rings;
+    format!(
+        "shroud:{part_id}:{:.4}:{:.4}:{:.4}:{:.4}",
+        lo.0, lo.1, hi.0, hi.1
+    )
 }
 
-/// Part `i`'s engine shroud model, when a part hangs from its shroud node, once it is loaded.
+/// Part `i`'s procedural wall model (shroud, tube or engine mount wall), when a part sits on its node, once it
+/// is loaded.
 #[cfg(target_arch = "wasm32")]
 pub fn shroud_model_for(
     gpu: &mut crate::render::Renderer,
     craft: &ose_data::craft::Craft,
     i: usize,
 ) -> Option<String> {
-    let (d, target) = ose_data::engine_shroud::shroud_for(craft, i)?;
-    let name = shroud_model_name(&craft.parts[i].part_id, target);
-    let (shape, def) = shroud_shape(d, target);
+    let w = ose_data::engine_shroud::wall_for(craft, i)?;
+    let name = shroud_model_name(&craft.parts[i].part_id, &w);
+    let (shape, def) = shroud_shape(&w);
     // The base GLB is only fetched to drive the build; the shroud carries its own material.
     gpu.request_built_model(&name, BASE_URL, move |_| Ok(shroud_glb(&shape, &def)));
     gpu.has_model(&name).then_some(name)
@@ -500,7 +503,11 @@ mod tests {
     #[test]
     fn swivel_shroud_mesh_wraps_the_engine_between_its_nodes() {
         let d = ose_data::engine_shroud::def("engine_1v_methalox_swivel").unwrap();
-        let (shape, def) = shroud_shape(d, 0.625);
+        let w = ose_data::engine_shroud::Wall {
+            rings: d.rings(0.625),
+            side_count: d.side_count,
+        };
+        let (shape, def) = shroud_shape(&w);
         let (pos, _, tris) = piece_mesh(&shape, &def, 0);
         assert!(!tris.is_empty());
         let ys: Vec<f32> = pos.iter().map(|p| p[1]).collect();
@@ -522,7 +529,11 @@ mod tests {
     #[test]
     fn shroud_uses_ksp2_procedural_fairing_material_and_uvs() {
         let d = ose_data::engine_shroud::def("engine_1v_methalox_swivel").unwrap();
-        let (shape, def) = shroud_shape(d, 0.625);
+        let w = ose_data::engine_shroud::Wall {
+            rings: d.rings(0.625),
+            side_count: d.side_count,
+        };
+        let (shape, def) = shroud_shape(&w);
         let uv = shroud_uvs(&shape, &def);
         // u spans a ninth of the texture round the shroud, v the 1.68 m slant over 3
         let umax = uv.iter().map(|t| t[0]).fold(0.0, f32::max);
@@ -605,5 +616,26 @@ mod tests {
         assert_eq!(c, [0.5, 0.25, 0.25, 1.0]);
         tint_base(&mut c, None);
         assert_eq!(c, [0.5, 0.25, 0.25, 1.0]);
+    }
+
+    #[test]
+    fn tube_wall_mesh_spans_ksp2s_panels() {
+        // reference/ksp2-procparts: tube_1v_procedural under a 2.5 m tank, panels from y 0.100 (r 0.625) to
+        // 1.250 (r 1.25)
+        let w = ose_data::engine_shroud::Wall {
+            rings: [(0.1, 0.625), (1.25, 1.25)],
+            side_count: 24,
+        };
+        let (shape, def) = shroud_shape(&w);
+        let (pos, _, tris) = piece_mesh(&shape, &def, 0);
+        assert!(!tris.is_empty());
+        let at = |y: f32| {
+            pos.iter()
+                .filter(|p| (p[1] - y).abs() < 1e-4)
+                .map(|p| (p[0] * p[0] + p[2] * p[2]).sqrt())
+                .fold(0.0, f32::max)
+        };
+        assert!((at(0.1) - 0.625).abs() < 1e-4 && (at(1.25) - 1.25).abs() < 1e-4);
+        assert!(pos.iter().all(|p| p[1] > 0.1 - 1e-4 && p[1] < 1.25 + 1e-4));
     }
 }

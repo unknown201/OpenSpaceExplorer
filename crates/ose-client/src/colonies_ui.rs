@@ -24,8 +24,8 @@ fn units(u: f64) -> String {
 pub fn render_list(colonies: &[ColonyInfo], selected: Option<u64>) -> String {
     if colonies.is_empty() {
         return "<li class=\"ts-hint\" data-ose=\"colony-none\">No colonies yet. Land a crewed vessel with a \
-                colony trunk away from Kerbin's space center and press Found colony here in the trunk's \
-                part window.</li>"
+                colony trunk away from Kerbin's space center, or put one in a stable orbit, and press \
+                Found colony here in the trunk's part window.</li>"
             .into();
     }
     colonies
@@ -87,8 +87,14 @@ pub fn render_info(c: &ColonyInfo, me: Option<u64>) -> String {
         (n, Some(t)) => format!("next in {:.1} h ({n} empty seats)", t / 3600.0),
     };
     // the same field the server's drills dig from, so the card can say what a drill here would make
-    let share = ose_data::abundance::ore(&c.body, c.lat_deg, c.lon_deg);
-    let ore = if share <= 0.0 {
+    let share = if c.orbital {
+        0.0
+    } else {
+        ose_data::abundance::ore(&c.body, c.lat_deg, c.lon_deg)
+    };
+    let ore = if c.orbital {
+        "none: it is in orbit".to_string()
+    } else if share <= 0.0 {
         "none here".to_string()
     } else {
         let rate = ose_data::colony::MINING
@@ -109,19 +115,27 @@ pub fn render_info(c: &ColonyInfo, me: Option<u64>) -> String {
     };
     format!(
         "<h3>{name}</h3><div class=\"ts-owner\">Founded by {owner}</div><dl>\
-         <dt>Body</dt><dd>{body}</dd><dt>Site</dt><dd>{lat:.3}\u{b0}, {lon:.3}\u{b0}</dd>\
+         <dt>Body</dt><dd>{body}</dd><dt>Site</dt><dd>{site}</dd>\
          <dt>Vessels</dt><dd>{n}</dd><dt>Residents</dt><dd>{residents}</dd>\
          <dt>Newcomers</dt><dd>{arrivals} moved in; {newcomers}</dd>\
          <dt>Ore in the ground</dt><dd>{ore}</dd>\
          <dt>Launches</dt><dd>{launches}</dd>{stock}</dl>\
-         <div class=\"ts-hint\">Its launch pad is in the VAB's launch sites. A craft launched there takes its \
+         <div class=\"ts-hint\">Its {pad} is in the VAB's launch sites. A craft launched there takes its \
          fuel and its dry mass in Metal from this stock.</div>\
          <div class=\"ts-actions\">{abandon}</div>",
         name = esc(&c.name),
         owner = esc(&c.owner_name),
         body = esc(&c.body),
-        lat = c.lat_deg,
-        lon = c.lon_deg,
+        site = if c.orbital {
+            "in orbit: the station that founded it and the vessels within 300 m".to_string()
+        } else {
+            format!("{:.3}\u{b0}, {:.3}\u{b0}", c.lat_deg, c.lon_deg)
+        },
+        pad = if c.orbital {
+            "dock, 400 m behind the station on its orbit,"
+        } else {
+            "launch pad"
+        },
         n = c.vessels.len(),
         launches = c.launches,
         arrivals = c.arrivals,
@@ -136,8 +150,9 @@ pub fn map_tooltip(c: &ColonyInfo, mine: bool) -> String {
         c.owner_name.clone()
     };
     format!(
-        "{} \u{b7} colony on the {}\n{whose}\n{} Kerbals \u{b7} {} vessels",
+        "{} \u{b7} colony {} the {}\n{whose}\n{} Kerbals \u{b7} {} vessels",
         c.name,
+        if c.orbital { "in orbit of" } else { "on" },
         c.body,
         c.residents.len(),
         c.vessels.len()
@@ -195,6 +210,7 @@ mod tests {
             vacancies: 1,
             arrivals: 0,
             next_arrival_in_s: Some(43_200.0),
+            orbital: false,
         }
     }
 
@@ -236,6 +252,13 @@ mod tests {
             ..c.clone()
         };
         assert!(render_info(&jool, None).contains("Ore in the ground</dt><dd>none here"));
+        let station = ColonyInfo {
+            orbital: true,
+            ..c.clone()
+        };
+        let html = render_info(&station, None);
+        assert!(html.contains("<dt>Site</dt><dd>in orbit") && html.contains("dock, 400 m behind"));
+        assert!(map_tooltip(&station, true).contains("colony in orbit of the Mun"));
         assert!(!render_info(&c, Some(8)).contains("colony-abandon"));
         let list = render_list(&[c], Some(3));
         assert!(
