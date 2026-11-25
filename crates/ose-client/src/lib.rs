@@ -9278,6 +9278,17 @@ impl App {
             .ok();
         el.class_list().add_1("open").ok();
         self.flight_pam_refresh();
+        // keep the whole window on screen: one opened from a low row of the parts list ran off the bottom
+        let h = web_sys::window()
+            .and_then(|w| w.inner_height().ok())
+            .and_then(|h| h.as_f64())
+            .unwrap_or(900.0);
+        let tall = f64::from(el.offset_height());
+        if y.max(70.0) + tall > h - 8.0 {
+            el.style()
+                .set_property("top", &format!("{}px", (h - 8.0 - tall).max(70.0)))
+                .ok();
+        }
     }
 
     /// Redraw the flight part window from the latest readout (it follows the part's state).
@@ -14775,6 +14786,24 @@ impl App {
                 .fold(0.0f32, f32::max);
             el.set_attribute("data-ose-gimbal", &format!("{:.2}", gimbal.to_degrees()))
                 .ok();
+            // Test hook: metres to the nearest other vessel around the same body, from the latest snapshot
+            // (every vessel in it is at the same tick), whether or not the 3D view draws it.
+            if let Some(scene) = self.scene.as_ref() {
+                if let Some(me) = self.flying.and_then(|id| scene.vessel(id)) {
+                    let nearest = scene
+                        .vessels
+                        .iter()
+                        .filter(|o| o.id != me.id && o.reference_body == me.reference_body)
+                        .map(|o| (o.position_m - me.position_m).length())
+                        .fold(f64::INFINITY, f64::min);
+                    if nearest.is_finite() {
+                        el.set_attribute("data-ose-nearest-m", &format!("{nearest:.0}"))
+                            .ok();
+                    } else {
+                        el.remove_attribute("data-ose-nearest-m").ok();
+                    }
+                }
+            }
         }
     }
 
@@ -16347,8 +16376,11 @@ impl App {
             .and_then(|k| k.1.as_ref())
             .map(|c| c.parts.iter().map(|p| p.guid.clone()).collect());
         // the colonies on this body, for their markers in the view
-        let site_colonies: Vec<&ose_net::ColonyInfo> =
-            self.colonies.iter().filter(|c| c.body == body.id).collect();
+        let site_colonies: Vec<&ose_net::ColonyInfo> = self
+            .colonies
+            .iter()
+            .filter(|c| c.body == body.id && !c.orbital)
+            .collect();
         let sites: Vec<(f64, f64)> = site_colonies
             .iter()
             .map(|c| (c.lat_deg, c.lon_deg))
@@ -16794,7 +16826,15 @@ impl App {
                             b.radius_m / 1000.0 / self.orbit_dist_km * h >= COLONY_MARKER_MIN_PX
                         })
                 })
-                .and_then(|c| colony_position(scene, &self.body_spins, c, ut))
+                .and_then(|c| {
+                    // an orbital colony is where its station (the first of its vessels) is
+                    if c.orbital {
+                        let v = scene.vessel(*c.vessels.first()?)?;
+                        Some(scene.vessel_position(v, ut))
+                    } else {
+                        colony_position(scene, &self.body_spins, c, ut)
+                    }
+                })
                 .map(to_km);
             match place.filter(|p| !hidden_by_body(*p)).and_then(project) {
                 Some((x, y)) => {

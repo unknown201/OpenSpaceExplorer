@@ -8,8 +8,14 @@
 //! colony's stock and the Kerbals aboard are its residents. Nothing is abstracted: a tanker that lands next
 //! to the colony adds its fuel to the stock, and a craft launched from the colony's pad is paid for out of
 //! the tanks round it and crewed by Kerbals who leave the colony's vessels.
+//!
+//! An **orbital colony** (design step 7) is founded the same way by a crewed vessel with a trunk in a stable
+//! orbit. It has no fixed place: it is wherever the vessel carrying that trunk (its anchor) is, and the
+//! vessels within `RADIUS_M` of the anchor in orbit belong to it. Its pad is a dock in space, `PAD_DISTANCE_M`
+//! behind the anchor on its orbit, where a new craft starts out moving with it.
 use bevy_ecs::entity::Entity;
 use ose_data::craft::Craft;
+use ose_math::DVec3;
 use ose_sim::{bodies::ReferenceBody, Universe};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -52,6 +58,29 @@ pub struct Colony {
     /// Kerbals who have moved in on their own (`settle`).
     #[serde(default)]
     pub arrivals: u32,
+    /// An orbital colony: the guid of the colony trunk that founded it. The colony is where the vessel with
+    /// that part is (its anchor); `body` follows it and `lat_deg`/`lon_deg` mean nothing.
+    #[serde(default)]
+    pub anchor: Option<String>,
+    /// Where the anchor was last seen: a craft launched twice carries the same part guids, so the vessel
+    /// nearest where the anchor would be now is the anchor.
+    #[serde(default)]
+    pub anchor_seen: Option<Seen>,
+}
+
+/// A vessel's body (`CelestialBody::id`), position and velocity relative to it (m, m/s), and the time.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Seen {
+    pub body: String,
+    pub r: DVec3,
+    pub v: DVec3,
+    pub ut: f64,
+}
+
+impl Colony {
+    pub fn orbital(&self) -> bool {
+        self.anchor.is_some()
+    }
 }
 
 /// A campaign's colonies. Kept in the campaign save.
@@ -110,6 +139,70 @@ pub fn travel(r: f64, (lat, lon): (f64, f64), heading_deg: f64, d: f64) -> (f64,
     (p2.to_degrees(), lon2)
 }
 
+/// A vessel's body and its position and velocity relative to it (m, m/s), and whether it is on the ground.
+pub fn place(u: &Universe, e: Entity) -> Option<(Entity, DVec3, DVec3, bool)> {
+    let b = u.world.get::<ReferenceBody>(e)?.0;
+    if let Some(p) = u.powered(e) {
+        return Some((b, p.r, p.v, (p.landed || p.splashed) && !p.crashed));
+    }
+    let landed = u.dormant(e).is_some_and(|p| p.landed || p.splashed);
+    let (_, _, orbit) = u.vessel(e)?;
+    let (r, v) = orbit.state_at(u.ut());
+    Some((b, r, v, landed))
+}
+
+/// The lowest a stable orbit can go round a body: above its air, or its mountains (m above the radius).
+fn safe_height(u: &Universe, body: Entity) -> f64 {
+    match u.atmosphere(body) {
+        Some(a) => a.depth_m + 1_000.0,
+        None => u
+            .world
+            .get::<ose_sim::bodies::Body>(body)
+            .map(|b| b.max_terrain_height_m + 1_000.0)
+            .unwrap_or(10_000.0),
+    }
+}
+
+/// The vessel carrying an orbital colony's trunk, if it is still in one piece: of several with that part (the
+/// same craft launched again), the one nearest where the anchor was last seen would be now.
+pub fn anchor_vessel(u: &mut Universe, c: &Colony) -> Option<Entity> {
+    let all = u.vessels();
+    anchor_among(u, c, all)
+}
+
+/// [`anchor_vessel`] out of the vessels `among`.
+pub fn anchor_among(
+    u: &Universe,
+    c: &Colony,
+    among: impl IntoIterator<Item = Entity>,
+) -> Option<Entity> {
+    let guid = c.anchor.as_deref()?;
+    let with: Vec<Entity> = among.into_iter().filter(|&e| u.has_part(e, guid)).collect();
+    if with.len() <= 1 {
+        return with.first().copied();
+    }
+    let seen = c.anchor_seen.as_ref()?;
+    let body = u.body_entity(&seen.body)?;
+    let expect = seen.r + seen.v * (u.ut() - seen.ut);
+    with.into_iter()
+        .filter_map(|e| {
+            let (b, r, _, _) = place(u, e)?;
+            (b == body).then(|| (e, (r - expect).length()))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(e, _)| e)
+}
+
+fn seen(u: &Universe, e: Entity) -> Option<Seen> {
+    let (b, r, v, _) = place(u, e)?;
+    Some(Seen {
+        body: u.body_id(b)?.to_string(),
+        r,
+        v,
+        ut: u.ut(),
+    })
+}
+
 /// Kerbals on EVA and planted flags are not part of a colony.
 fn is_vessel(u: &Universe, e: Entity) -> bool {
     u.eva_kerbal(e).is_none() && !u.is_flag(e)
@@ -144,20 +237,23 @@ impl Colonies {
             return Err("only a vessel can found a colony".into());
         }
         let (body, lat, lon, landed) = whereabouts(u, e).ok_or("no such vessel")?;
-        if !landed {
-            return Err("land first: a colony is founded on the ground".into());
-        }
         let craft = u.current_craft(e).ok_or("the vessel has no parts")?;
-        if !craft.parts.iter().any(|p| is_colony_part(&p.part_id)) {
+        let Some(trunk) = craft.parts.iter().find(|p| is_colony_part(&p.part_id)) else {
             return Err("the vessel needs a colony trunk".into());
-        }
+        };
+        let trunk = trunk.guid.clone();
         if u.crew(e).is_empty() {
             return Err("a colony needs a Kerbal aboard to found it".into());
         }
         let body_id = u.body_id(body).ok_or("unknown body")?.to_string();
+        if !landed {
+            return self.found_in_orbit(u, e, owner, name, body, body_id, trunk);
+        }
         let r = radius_of(u, body);
         if let Some(near) = self.colonies.iter().find(|c| {
-            c.body == body_id && surface_distance(r, (c.lat_deg, c.lon_deg), (lat, lon)) < SPACING_M
+            !c.orbital()
+                && c.body == body_id
+                && surface_distance(r, (c.lat_deg, c.lon_deg), (lat, lon)) < SPACING_M
         }) {
             return Err(format!(
                 "too close to {}: colonies stand at least {:.0} km apart",
@@ -165,11 +261,7 @@ impl Colonies {
                 SPACING_M / 1000.0
             ));
         }
-        self.next_id = self
-            .next_id
-            .max(self.colonies.iter().map(|c| c.id).max().unwrap_or(0))
-            + 1;
-        let id = self.next_id;
+        let id = self.next_id();
         self.colonies.push(Colony {
             id,
             name: name.to_string(),
@@ -181,8 +273,91 @@ impl Colonies {
             launches: 0,
             last_arrival_ut: None,
             arrivals: 0,
+            anchor: None,
+            anchor_seen: None,
         });
         Ok(id)
+    }
+
+    fn next_id(&mut self) -> u64 {
+        self.next_id = self
+            .next_id
+            .max(self.colonies.iter().map(|c| c.id).max().unwrap_or(0))
+            + 1;
+        self.next_id
+    }
+
+    /// Found an orbital colony on vessel `e` (design step 7): its orbit must clear the body's air and
+    /// mountains, and it must stand clear of the other orbital colonies there.
+    #[allow(clippy::too_many_arguments)]
+    fn found_in_orbit(
+        &mut self,
+        u: &mut Universe,
+        e: Entity,
+        owner: u64,
+        name: &str,
+        body: Entity,
+        body_id: String,
+        trunk: String,
+    ) -> Result<u64, String> {
+        let (_, _, orbit) = u.vessel(e).ok_or("no such vessel")?;
+        let radius = radius_of(u, body);
+        let floor = radius + safe_height(u, body);
+        if orbit.eccentricity() >= 1.0 || orbit.periapsis() < floor {
+            return Err(format!(
+                "land, or reach a stable orbit with its lowest point over {:.0} km, to found a colony",
+                (floor - radius) / 1000.0
+            ));
+        }
+        let (_, here, _, _) = place(u, e).ok_or("no such vessel")?;
+        let others: Vec<Colony> = self
+            .colonies
+            .iter()
+            .filter(|c| c.orbital())
+            .cloned()
+            .collect();
+        for c in &others {
+            if c.anchor.as_deref() == Some(trunk.as_str()) {
+                return Err(format!("this trunk already anchors {}", c.name));
+            }
+            let near = anchor_vessel(u, c)
+                .and_then(|a| place(u, a))
+                .is_some_and(|(b, r, _, _)| b == body && (r - here).length() < SPACING_M);
+            if near {
+                return Err(format!(
+                    "too close to {}: colonies stand at least {:.0} km apart",
+                    c.name,
+                    SPACING_M / 1000.0
+                ));
+            }
+        }
+        let id = self.next_id();
+        self.colonies.push(Colony {
+            id,
+            name: name.to_string(),
+            owner,
+            body: body_id,
+            lat_deg: 0.0,
+            lon_deg: 0.0,
+            founded_ut: u.ut(),
+            launches: 0,
+            last_arrival_ut: None,
+            arrivals: 0,
+            anchor: Some(trunk),
+            anchor_seen: seen(u, e),
+        });
+        Ok(id)
+    }
+
+    /// Keep each orbital colony's body that of its anchor, which may have moved into another sphere of
+    /// influence.
+    pub fn track(&mut self, u: &mut Universe) {
+        for c in self.colonies.iter_mut().filter(|c| c.orbital()) {
+            if let Some(now) = anchor_vessel(u, c).and_then(|a| seen(u, a)) {
+                c.body = now.body.clone();
+                c.anchor_seen = Some(now);
+            }
+        }
     }
 
     /// Give up a colony: its vessels stay where they are. Only its founder may.
@@ -196,8 +371,27 @@ impl Colonies {
     }
 }
 
-/// The vessels that belong to a colony: every vessel landed within `RADIUS_M` of its site.
+/// The vessels that belong to a colony: every vessel landed within `RADIUS_M` of its site, or for an orbital
+/// colony its anchor first, then every vessel in space within `RADIUS_M` of it.
 pub fn members(u: &mut Universe, c: &Colony) -> Vec<Entity> {
+    if c.orbital() {
+        let Some(a) = anchor_vessel(u, c) else {
+            return Vec::new();
+        };
+        let Some((body, at, _, false)) = place(u, a) else {
+            return Vec::new();
+        };
+        let all = u.vessels();
+        let mut out = vec![a];
+        out.extend(all.into_iter().filter(|&e| {
+            e != a
+                && is_vessel(u, e)
+                && place(u, e).is_some_and(|(b, r, _, landed)| {
+                    b == body && !landed && (r - at).length() <= RADIUS_M
+                })
+        }));
+        return out;
+    }
     let Some(body) = u.body_entity(&c.body) else {
         return Vec::new();
     };
@@ -313,8 +507,28 @@ impl Colonies {
     }
 }
 
-/// Where a colony's launch pad stands: `PAD_DISTANCE_M` east of its site.
+/// Where an orbital colony's dock is now: its body, and the position and velocity there (relative to the
+/// body, m and m/s), `PAD_DISTANCE_M` behind the anchor on its path and moving with it.
+pub fn dock(u: &mut Universe, c: &Colony) -> Option<(Entity, DVec3, DVec3)> {
+    let a = anchor_vessel(u, c)?;
+    dock_behind(u, a)
+}
+
+/// The dock behind anchor vessel `a` (see [`dock`]).
+pub fn dock_behind(u: &Universe, a: Entity) -> Option<(Entity, DVec3, DVec3)> {
+    let (body, r, v, landed) = place(u, a)?;
+    if landed || v.length() <= 0.0 {
+        return None;
+    }
+    Some((body, r - v.normalized() * PAD_DISTANCE_M, v))
+}
+
+/// Where a colony's launch pad stands: `PAD_DISTANCE_M` east of its site (`None` for an orbital colony,
+/// whose pad is its [`dock`]).
 pub fn pad(u: &Universe, c: &Colony) -> Option<(f64, f64)> {
+    if c.orbital() {
+        return None;
+    }
     let body = u.body_entity(&c.body)?;
     let r = radius_of(u, body);
     Some(travel(r, (c.lat_deg, c.lon_deg), 90.0, PAD_DISTANCE_M))
