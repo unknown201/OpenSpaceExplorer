@@ -24,6 +24,9 @@ fn corners(h: DVec3) -> [DVec3; 8] {
     })
 }
 
+/// How fast a craft too tall for the slope it stands on starts to fall over, rad/s (our own figure).
+const SLOPE_TOPPLE_RAD_S: f64 = 0.3;
+
 /// Exact volume and centroid of a box clipped by `normal.dot(x) <= depth`.
 pub fn submerged_box(half: DVec3, normal: DVec3, depth: f64) -> (f64, DVec3) {
     let extent = half.x * normal.x.abs() + half.y * normal.y.abs() + half.z * normal.z.abs();
@@ -460,23 +463,62 @@ impl Structure {
             // The rolling/parked proxy changes pitch on the runway. Seat its current rotated bounds
             // on the support plane before the first airborne sweep, so rotating the nose does not
             // create a fictitious high-speed tail strike from an overlapping initial pose.
-            let f = flight::vessel_basis(p);
             let up = p.r.normalized();
             let centre = self.mass_properties().centre_m;
-            let lowest = (0..self.rigid.len())
-                .filter(|&i| self.rigid.present[i])
-                .map(|i| {
-                    let (c, h) = self.part_box(i);
-                    world(f, c - centre).dot(up)
-                        - h.x * f.0.dot(up).abs()
-                        - h.y * f.1.dot(up).abs()
-                        - h.z * f.2.dot(up).abs()
-                        + self.rest_sag_m(i)
-                })
-                .fold(f64::INFINITY, f64::min);
-            let radius = support(p.r, ut + dt) - lowest;
-            if p.r.length() < radius {
-                p.r = up * radius;
+            if p.level || p.tipped || p.walker || before.deck.is_some() {
+                let f = flight::vessel_basis(p);
+                let lowest = (0..self.rigid.len())
+                    .filter(|&i| self.rigid.present[i])
+                    .map(|i| {
+                        let (c, h) = self.part_box(i);
+                        world(f, c - centre).dot(up)
+                            - h.x * f.0.dot(up).abs()
+                            - h.y * f.1.dot(up).abs()
+                            - h.z * f.2.dot(up).abs()
+                            + self.rest_sag_m(i)
+                    })
+                    .fold(f64::INFINITY, f64::min);
+                let radius = support(p.r, ut + dt) - lowest;
+                if p.r.length() < radius {
+                    p.r = up * radius;
+                }
+                return;
+            }
+            // An upright craft rests on the ground under each of its corners, not under its centre: on a
+            // slope KSP2's colliders hold its uphill side up and it settles flush with the ground (or falls
+            // over when its centre of mass is past its footprint), where the centre alone left the uphill
+            // rim of an engine bell buried in the hillside.
+            let gap = |p: &Powered| {
+                let f = flight::vessel_basis(p);
+                (0..self.rigid.len())
+                    .filter(|&i| self.rigid.present[i])
+                    .flat_map(|i| {
+                        let (c, h) = self.part_box(i);
+                        let sag = self.rest_sag_m(i);
+                        corners(h).map(move |q| (c + q - centre, sag))
+                    })
+                    .map(|(q, sag)| {
+                        let at = p.r + world(f, q);
+                        at.length() - support(at, ut + dt) + sag
+                    })
+                    .fold(f64::INFINITY, f64::min)
+            };
+            let before_gap = gap(p);
+            let normal = flight::ground_normal(body, terrain, p.r, ut + dt);
+            let slope = normal.dot(up).clamp(-1.0, 1.0).acos();
+            if p.ground_clearance_m > 0.0 && slope.tan() > p.footprint_m / p.ground_clearance_m {
+                // too steep to stand on: it leaves the ground's hold and topples downhill
+                let downhill = normal - up * normal.dot(up);
+                p.landed = false;
+                if downhill.length() > 1e-9 {
+                    p.angvel = up.cross(downhill.normalized()) * SLOPE_TOPPLE_RAD_S;
+                }
+                return;
+            }
+            // the flight step turned it toward the slope (`flight::SLOPE_SETTLE_RAD_S`) and stood it on the
+            // ground under its centre: seat its lowest corner on the ground (only lifted, once it lifts off)
+            if before_gap < 0.0 || p.landed {
+                p.r = up * (p.r.length() - before_gap);
             }
             return;
         }
