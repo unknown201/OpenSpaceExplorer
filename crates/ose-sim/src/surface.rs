@@ -576,9 +576,26 @@ impl Structure {
         let top = old_frame.2 + (frame.2 - old_frame.2) * hit;
         flight::set_vessel_top(p, (top - p.facing * top.dot(p.facing)).normalized());
         frame = flight::vessel_basis(p);
+        // At landing speeds, corners that will reach the ground within the rest of this step take part too, as
+        // speculative contacts (PhysX's): a craft coming down on a slope meets it with both rims in one solve, instead of
+        // its uphill rim alone flinging it round before the downhill one touches.
+        let rest_dt = (dt * (1.0 - hit)).max(1e-6);
+        let reach = {
+            let v = p.v - spin(body).cross(p.r);
+            let w = (p.angvel + p.facing * p.roll_rate).length();
+            // a crash is struck corner by corner: speculation would slow it before it lands
+            let gentle = v.length() < flight::CRASH_SPEED_MPS;
+            move |r: DVec3| {
+                if gentle {
+                    (v.length() + w * r.length()) * rest_dt
+                } else {
+                    0.0
+                }
+            }
+        };
         contacts.retain(|&(_, r, travel)| {
             let at = p.r + world(frame, r);
-            at.length() - support(at, ut + hit * dt) + travel <= 0.01
+            at.length() - support(at, ut + hit * dt) + travel <= 0.01 + reach(r)
         });
         if contacts.is_empty() {
             return;
@@ -602,6 +619,12 @@ impl Structure {
                 local(frame, normal(body, terrain, at, ut + hit * dt))
             };
             normals.push(n);
+            let gap = at.length() - support(at, ut + hit * dt) + travel;
+            if gap > 0.01 {
+                // not touching yet: it may close the gap this step, no faster
+                targets.push(-(gap - 0.01) / rest_dt);
+                continue;
+            }
             let v = velocity + omega.cross(r);
             normal_impact = normal_impact.max((-v.dot(n)).max(0.0));
             let speed = if self.gear_out[i] && self.gear_defs[i].is_some() {
