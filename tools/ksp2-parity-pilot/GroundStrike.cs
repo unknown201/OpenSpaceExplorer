@@ -3,7 +3,9 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using KSP;
 using KSP.Game;
+using KSP.Modules;
 using KSP.Sim;
 using KSP.Sim.impl;
 using UnityEngine;
@@ -26,6 +28,12 @@ namespace OpenSpaceExplorer.Validation
     //           (Run 2 cut as it lifted at 50 m/s and nosed over; run 3 held 18 degrees from 25 m and climbed to
     //           470 m; run 4 cut at 52 m/s with the stick back and climbed to 49 m; run 5 centred the stick at
     //           12 degrees and 52 m/s, hopped and rolled out on its wheels.)
+    //   taxi    ground handling on the runway, with every wheel logged each tick (taxi-wheels.csv: grounded, load,
+    //           forward and sideways slip, rpm, motor and brake torque, steer angle, suspension travel):
+    //             settle 5 s (engine staged at zero throttle, brakes on); accel brakes off, full throttle to 25 m/s;
+    //             coast throttle cut 12 s; brake brakes on until under 0.2 m/s (20 s at most); taxi brakes off,
+    //             full throttle to 10 m/s; steer throttle cut, SAS off, wheel steering full right 10 s while it
+    //             coasts; stop steering centred, brakes on 8 s.
     //   stack   the drop stack (craft-drop-stack.json: pod, tanks, Swivel) set down upright on Runway_1 at 4 m/s.
     // Only inputs and action groups are used; physics is never modified.
     public static class GroundStrike
@@ -33,6 +41,16 @@ namespace OpenSpaceExplorer.Validation
         static GameInstance G => GameManager.Instance.Game;
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
         static string F(double x) => x.ToString("R", Inv);
+
+        // every wheel collider of the craft, by part index
+        static IEnumerable<(int, WheelCollider)> Wheels(VesselComponent v)
+        {
+            foreach (var (i, _, frame) in Parts(v))
+            {
+                if (frame == null) continue;
+                foreach (var wc in frame.GetComponentsInChildren<WheelCollider>()) yield return (i, wc);
+            }
+        }
 
         public static string Craft(string mode) => mode == "stack" ? "craft-drop-stack.json" : "craft-jet.json";
 
@@ -197,6 +215,12 @@ namespace OpenSpaceExplorer.Validation
                 using (var pw = new StreamWriter(Path.Combine(dir, "out", "strike-parts.csv"), false))
                 {
                     w.WriteLine("t,phase,parts,srf_speed,vspeed,over_ground_m,pitch_deg,roll_deg,heading_deg,in_pitch,situation");
+                    StreamWriter ww = null;
+                    if (mode == "taxi")
+                    {
+                        ww = new StreamWriter(Path.Combine(dir, "out", "taxi-wheels.csv"), false);
+                        ww.WriteLine("t,phase,index,wheel,grounded,load_n,forward_slip,sideways_slip,rpm,motor_torque,brake_torque,steer_deg,travel_m,suspension_m,radius_m,throttle,wheel_steer,brakes,thrust_kn");
+                    }
                     pw.WriteLine("t,lost_id");
                     double last = double.NegativeInfinity;
                     var left = new HashSet<string>();
@@ -223,7 +247,25 @@ namespace OpenSpaceExplorer.Validation
                         if (root != null) over = OverGround(root.position, Up(v, root.position));
                         w.WriteLine(string.Join(",", new[] { F(t), phase, now.Count.ToString(Inv), F(v.SrfSpeedMagnitude), F(v.VerticalSrfSpeed), F(over),
                             F(v.Pitch_HorizonRelative), F(v.Roll_HorizonRelative), F(v.Heading), F(v.flightCtrlState.pitch), v.Situation.ToString() }));
+                        if (ww != null)
+                        {
+                            double thrust = 0;
+                            foreach (var part in v.SimulationObject.PartOwner.Parts)
+                                if (part.TryGetModuleData<PartComponentModule_Engine, Data_Engine>(out var de)) thrust += de.FinalThrustValue;
+                            string brakes = v.GetActionGroupState(KSPActionGroup.Brakes).ToString();
+                            foreach (var (i, wc) in Wheels(v))
+                            {
+                                bool grounded = wc.GetGroundHit(out var hit);
+                                wc.GetWorldPose(out var pos, out _);
+                                var top = wc.transform.TransformPoint(wc.center);
+                                ww.WriteLine(string.Join(",", new[] { F(t), phase, i.ToString(Inv), wc.name, grounded ? "1" : "0",
+                                    F(grounded ? hit.force : 0), F(grounded ? hit.forwardSlip : 0), F(grounded ? hit.sidewaysSlip : 0), F(wc.rpm),
+                                    F(wc.motorTorque), F(wc.brakeTorque), F(wc.steerAngle), F((top - pos).magnitude), F(wc.suspensionDistance), F(wc.radius),
+                                    F(v.flightCtrlState.mainThrottle), F(v.flightCtrlState.wheelSteer), brakes, F(thrust) }));
+                            }
+                        }
                     }
+                    ww?.Dispose();
                 }
             }
             void Phase(string p) { phase = p; mark("strike " + mode + " " + p); }
@@ -244,6 +286,43 @@ namespace OpenSpaceExplorer.Validation
                 yield return new WaitForSeconds(1f);
                 Attach(G.ViewController.GetActiveSimVessel());
                 yield return new WaitForSeconds(11f);
+            }
+            else if (mode == "taxi")
+            {
+                // SAS holds it straight while it speeds up, coasts and brakes; off for the steering
+                vessel.SetAutopilotEnableDisable(true);
+                SetGroup(KSPActionGroup.Brakes, true);
+                input.OverrideInputThrottleCutoff(true);
+                vessel.ActivateNextStage();
+                Phase("settle");
+                yield return new WaitForSeconds(5f);
+                SetGroup(KSPActionGroup.Brakes, false);
+                input.OverrideInputMaxThrottle(true);
+                Phase("accel");
+                t0 = 0;
+                while (t0 < 60 && (G.ViewController.GetActiveSimVessel()?.SrfSpeedMagnitude ?? 0) < 25) { t0 += Time.deltaTime; yield return null; }
+                input.OverrideInputThrottleCutoff(true);
+                Phase("coast");
+                yield return new WaitForSeconds(12f);
+                SetGroup(KSPActionGroup.Brakes, true);
+                Phase("brake");
+                t0 = 0;
+                while (t0 < 20 && (G.ViewController.GetActiveSimVessel()?.SrfSpeedMagnitude ?? 0) > 0.2) { t0 += Time.deltaTime; yield return null; }
+                SetGroup(KSPActionGroup.Brakes, false);
+                input.OverrideInputMaxThrottle(true);
+                Phase("taxi");
+                t0 = 0;
+                while (t0 < 30 && (G.ViewController.GetActiveSimVessel()?.SrfSpeedMagnitude ?? 0) < 10) { t0 += Time.deltaTime; yield return null; }
+                input.OverrideInputThrottleCutoff(true);
+                vessel.SetAutopilotEnableDisable(false);
+                InputHolder.WheelSteer = 1f;
+                Phase("steer");
+                yield return new WaitForSeconds(10f);
+                InputHolder.WheelSteer = null;
+                FlightCtrlStateInputOverride.InputWheelSteeringOverride = 0f;
+                SetGroup(KSPActionGroup.Brakes, true);
+                Phase("stop");
+                yield return new WaitForSeconds(8f);
             }
             else
             {
