@@ -120,6 +120,10 @@ impl FaceCover {
     }
 }
 
+/// A part's drag cube with its shroud or wall on, its corners turned with it (vessel frame, from its
+/// position), and the part holding the wall up.
+type WallCube = (ose_data::DragCube, [DVec3; 8], Option<usize>);
+
 #[derive(Component)]
 pub struct Structure {
     pub eva_hatches: Vec<Option<crate::crew::HatchFrame>>,
@@ -343,7 +347,7 @@ pub struct Structure {
     /// An engine's shroud, or a tube's or engine mount's wall, while a part sits on its node
     /// (`ose_data::engine_shroud`): the part's drag cube with the wall, its corners turned with the part
     /// (vessel frame, from its position), and the part holding it up.
-    wall_cube: Vec<Option<(ose_data::DragCube, [DVec3; 8], Option<usize>)>>,
+    wall_cube: Vec<Option<WallCube>>,
     pub cargo_bay: Vec<bool>,
     /// Parts whose crossfeed the pilot can switch (`PartDef::crossfeed_toggle`).
     pub crossfeed_toggle: Vec<bool>,
