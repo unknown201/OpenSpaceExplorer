@@ -13,165 +13,176 @@ test('planning modifier arrows preserve the burn, warp can be stopped, and the o
   await page.locator('#create-name').fill(campaignName);
   await page.locator('#create-mode').selectOption('Sandbox');
   await page.locator('#create').click();
-  await page.locator('[data-ose="ksc-launchpad"]').click();
-  await page.locator('[data-ose="craft"]').filter({ hasText: 'Stock12_StartRocket' }).click();
-  await page.locator('[data-ose="launch-altitude"]').fill('300');
-  await page.locator('[data-ose="lp-orbit"]').click();
-  await expect(page.locator('#flight-hud.open')).toBeVisible();
-  await expect.poll(() => page.locator('#fh-throttle-fill').evaluate(e => (e as HTMLElement).style.height)).toBe('0%');
-  await page.keyboard.press('m');
-  await page.locator('[data-ose="add-node"]').click();
-  const node = page.locator('[data-ose="maneuver-node"]');
-  const range = page.locator('#node-prograde');
-  await range.evaluate(el => {
-    (el as HTMLInputElement).value = '40.7';
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-  });
-  // The panel gives the node's delta-v and its burn time on the stages, and warns when they run dry first.
-  const summary = page.locator('[data-ose="node-summary"]');
-  await expect(summary).toHaveText(/^Δv 40\.7 m\/s · burn \d+ s$/);
-  await expect(summary).not.toHaveClass(/short/);
-  await range.evaluate(el => {
-    (el as HTMLInputElement).value = '1500';
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-  });
-  await expect(summary).toHaveText(/^Δv 1500\.0 m\/s · burn .+ · not enough Δv: \d+ m\/s short$/);
-  await expect(summary).toHaveClass(/short/);
-  await range.evaluate(el => {
-    (el as HTMLInputElement).value = '40.7';
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-  });
-  await expect(summary).not.toHaveClass(/short/);
-  const time = page.locator('#node-dt');
-  const originalUT = Number(await node.getAttribute('data-ose-ut'));
-  await time.focus();
-  await page.keyboard.press('Shift+ArrowRight');
-  expect(Number(await node.getAttribute('data-ose-ut')) - originalUT).toBeCloseTo(10, 1);
-  await page.keyboard.press('Control+ArrowLeft');
-  expect(Number(await node.getAttribute('data-ose-ut')) - originalUT).toBeCloseTo(9.9, 1);
-  await expect(node).toHaveAttribute('data-ose-prograde', '40.7');
-  await range.focus();
-  await page.keyboard.press('ArrowRight');
-  await page.keyboard.press('Shift+ArrowRight');
-  await page.keyboard.press('Control+ArrowLeft');
-  await expect(range).toHaveValue('51.6');
-  // A held modifier on the map must not leak into the flight throttle.
-  await page.locator('[data-ose="node-warp"]').focus();
-  await page.keyboard.down('Shift');
-  await page.waitForTimeout(400);
-  await page.keyboard.up('Shift');
-  await expect.poll(() => page.locator('#fh-throttle-fill').evaluate(e => (e as HTMLElement).style.height)).toBe('0%');
-  await page.locator('[data-ose="flight-throttle-full"]').click();
-  await expect.poll(() => page.locator('#fh-throttle-fill').evaluate(e => (e as HTMLElement).style.height)).toBe('100%');
-  await page.locator('[data-ose="node-warp"]').click();
-  await expect(page.locator('#node-warp')).toHaveText('Stop warp');
-  await expect.poll(() => page.locator('#fh-throttle-fill').evaluate(e => (e as HTMLElement).style.height)).toBe('0%');
-  await time.focus();
-  await page.keyboard.press('/');
-  await expect(page.locator('#node-warp')).toHaveText('Warp to');
-  await expect(page.locator('#warp')).toHaveText('×1');
-  await page.locator('[data-ose="node-warp"]').click();
-  await page.locator('[data-ose="warp-stop"]').click();
-  await expect(page.locator('#warp')).toHaveText('×1');
-  await expect(page.locator('#node-warp')).toHaveText('Warp to');
-  // A click on the orbit offers the original's popup there: time to the point, Add maneuver, Warp to.
-  await page.locator('[data-ose="clear-node"]').click();
-  await expect(node).toHaveCount(0);
-  // the point of the orbit farthest from the vessel that nothing covers (its marker and label, the HUD and its
-  // navball and speed gauge canvases), read
-  // afresh each time since the view follows the vessel
-  const canvas = page.locator('#gpu');
-  // After a node is cleared its planned orbit stays on the map until the server's new prediction arrives,
-  // which a slow browser (Firefox in CI) can see well after the node is gone: a click picked from the old
-  // orbit then lands beside the new one. Wait for the single patch of the coasting orbit, and for the view to
-  // hold still, before picking from it.
-  const readOrbit = () =>
-    canvas.evaluate(c => [c.getAttribute('data-ose-orbit-points') ?? '', c.getAttribute('data-ose-orbit-vessel') ?? '']);
-  const parse = (s: string) => s.split(';').filter(Boolean).map(p => p.split(' ').map(Number));
-  const settled = async () => {
-    let last = parse((await readOrbit())[0]);
-    await expect
-      .poll(async () => {
-        await page.waitForTimeout(250);
-        const now = parse((await readOrbit())[0]);
-        const still =
-          now.length > 1 &&
-          now.length === last.length &&
-          now.every(([x, y], i) => Math.abs(x - last[i][0]) <= 2 && Math.abs(y - last[i][1]) <= 2);
-        last = now;
-        return still;
-      }, { timeout: 15_000 })
-      .toBe(true);
-    return readOrbit();
-  };
-  const orbitPoint = async () => {
-    await expect(canvas).toHaveAttribute('data-ose-orbit-points', /\d+ \d+;/);
-    await expect(canvas).toHaveAttribute('data-ose-orbit-patches', '1', { timeout: 15_000 });
-    const [pointsAttr, vesselAttr] = await settled();
-    const [vesX, vesY] = vesselAttr.split(' ').map(Number);
-    // the 2D fallback map draws on #map (the WebGPU canvas is hidden then)
-    const rect = (await canvas.boundingBox()) ?? (await page.locator('#map').boundingBox())!;
-    const vessel = { x: rect.x + vesX, y: rect.y + vesY };
-    const points = parse(pointsAttr).map(([x, y]) => ({ x: rect.x + x, y: rect.y + y }));
-    const clear = await page.evaluate(ps => ps.map(p => ['gpu', 'map'].includes(document.elementFromPoint(p.x, p.y)?.id ?? '')), points);
-    const dist = (p: { x: number; y: number }) => Math.hypot(p.x - vessel.x, p.y - vessel.y);
-    const at = points.filter((_, i) => clear[i]).sort((a, b) => dist(b) - dist(a))[0];
-    expect(at).toBeDefined();
-    return { at, vessel };
-  };
-  let { at, vessel } = await orbitPoint();
-  const popup = page.locator('[data-ose="orbit-popup"]');
-  await page.mouse.click(at.x, at.y);
-  await expect(popup).toBeVisible();
-  // well round the 47:35 orbit from the vessel
-  await expect(page.locator('[data-ose="orbit-popup-time"]')).toHaveText(/^T-[1-3]\d:\d\d$/);
-  const pointUT = Number(await popup.getAttribute('data-ose-ut'));
-  await page.locator('[data-ose="orbit-add-node"]').click();
-  await expect(popup).toBeHidden();
-  await expect(node).toHaveCount(1);
-  expect(Number(await node.getAttribute('data-ose-ut'))).toBeCloseTo(pointUT, 0);
-  await page.locator('[data-ose="clear-node"]').click();
-  // ...and Warp to coasts there; a click off the orbit closes the popup.
-  ({ at, vessel } = await orbitPoint());
-  await page.mouse.click(at.x, at.y);
-  await expect(popup).toBeVisible();
-  // a point part of the way across from it toward the vessel: off the orbit, and not under the popup or a label
-  const offs = [0.25, 0.35, 0.5, 0.65].map(f => ({ x: at.x + (vessel.x - at.x) * f, y: at.y + (vessel.y - at.y) * f }));
-  const free = await page.evaluate(ps => ps.map(p => ['gpu', 'map'].includes(document.elementFromPoint(p.x, p.y)?.id ?? '')), offs);
-  const off = offs.find((_, i) => free[i])!;
-  expect(off).toBeDefined();
-  await page.mouse.click(off.x, off.y);
-  await expect(popup).toBeHidden();
-  ({ at, vessel } = await orbitPoint());
-  await page.mouse.click(at.x, at.y);
-  await page.locator('[data-ose="orbit-warp"]').click();
-  await expect(page.locator('#warp')).not.toHaveText('×1');
-  await page.locator('[data-ose="warp-stop"]').click();
-  await expect(page.locator('#warp')).toHaveText('×1');
-  // The burn timer's Delete All Maneuvers takes the next node and every one after it: the whole plan.
-  await page.locator('[data-ose="add-node"]').click();
-  await page.locator('[data-ose="add-next-node"]').click();
-  await expect(node).toHaveCount(1);
-  const burnTimer = page.locator('[data-ose="flight-burn"]');
-  await expect(burnTimer).toHaveClass(/\bon\b/);
-  await page.locator('[data-ose="burn-delete-all"]').click();
-  await expect(node).toHaveCount(0);
-  await expect(page.locator('.node-other')).toHaveCount(0);
-  await expect(burnTimer).not.toHaveClass(/\bon\b/);
-  await expect(page.locator('[data-ose="node-panel"]')).not.toHaveClass(/\bopen\b/);
-  await page.locator('#fh-ksc').click();
-  await page.locator('[data-ose="ksc-sessions"]').click();
-  const campaign = page.locator('[data-ose="session"]').filter({ hasText: campaignName });
-  await expect(campaign).toHaveCount(1);
+  // The campaign goes at the end whether the test passed or not: one left behind by a failure kept the
+  // server busy for the tests after it (gameplay.spec's resume of its shared campaign timed out).
   page.on('dialog', dialog => dialog.accept());
-  // A campaign update queued before LeaveSession can reopen KSC after the first exit.
-  // Retry only the cleanup handshake; all waypoint assertions above have already passed.
-  await expect(async () => {
-    if (await campaign.count() === 0) return;
-    const exit = page.locator('[data-ose="ksc-sessions"]');
-    if (await exit.isVisible()) await exit.click();
-    await campaign.locator('[data-ose="session-delete"]').click({ timeout: 1500 });
-    await expect(campaign).toHaveCount(0, { timeout: 3000 });
-  }).toPass({ timeout: 20_000 });
+  const cleanup = async () => {
+    const ksc = page.locator('#fh-ksc');
+    if (await ksc.isVisible().catch(() => false)) await ksc.click();
+    await page.locator('[data-ose="ksc-sessions"]').click();
+    const campaign = page.locator('[data-ose="session"]').filter({ hasText: campaignName });
+    // A campaign update queued before LeaveSession can reopen KSC after the first exit.
+    // Retry only the cleanup handshake.
+    await expect(async () => {
+      if (await campaign.count() === 0) return;
+      const exit = page.locator('[data-ose="ksc-sessions"]');
+      if (await exit.isVisible()) await exit.click();
+      await campaign.locator('[data-ose="session-delete"]').click({ timeout: 1500 });
+      await expect(campaign).toHaveCount(0, { timeout: 3000 });
+    }).toPass({ timeout: 20_000 });
+  };
+  let passed = false;
+  try {
+    await page.locator('[data-ose="ksc-launchpad"]').click();
+    await page.locator('[data-ose="craft"]').filter({ hasText: 'Stock12_StartRocket' }).click();
+    await page.locator('[data-ose="launch-altitude"]').fill('300');
+    await page.locator('[data-ose="lp-orbit"]').click();
+    await expect(page.locator('#flight-hud.open')).toBeVisible();
+    await expect.poll(() => page.locator('#fh-throttle-fill').evaluate(e => (e as HTMLElement).style.height)).toBe('0%');
+    await page.keyboard.press('m');
+    await page.locator('[data-ose="add-node"]').click();
+    const node = page.locator('[data-ose="maneuver-node"]');
+    const range = page.locator('#node-prograde');
+    await range.evaluate(el => {
+      (el as HTMLInputElement).value = '40.7';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    // The panel gives the node's delta-v and its burn time on the stages, and warns when they run dry first.
+    const summary = page.locator('[data-ose="node-summary"]');
+    await expect(summary).toHaveText(/^Δv 40\.7 m\/s · burn \d+ s$/);
+    await expect(summary).not.toHaveClass(/short/);
+    await range.evaluate(el => {
+      (el as HTMLInputElement).value = '1500';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await expect(summary).toHaveText(/^Δv 1500\.0 m\/s · burn .+ · not enough Δv: \d+ m\/s short$/);
+    await expect(summary).toHaveClass(/short/);
+    await range.evaluate(el => {
+      (el as HTMLInputElement).value = '40.7';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await expect(summary).not.toHaveClass(/short/);
+    const time = page.locator('#node-dt');
+    const originalUT = Number(await node.getAttribute('data-ose-ut'));
+    await time.focus();
+    await page.keyboard.press('Shift+ArrowRight');
+    expect(Number(await node.getAttribute('data-ose-ut')) - originalUT).toBeCloseTo(10, 1);
+    await page.keyboard.press('Control+ArrowLeft');
+    expect(Number(await node.getAttribute('data-ose-ut')) - originalUT).toBeCloseTo(9.9, 1);
+    await expect(node).toHaveAttribute('data-ose-prograde', '40.7');
+    await range.focus();
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('Shift+ArrowRight');
+    await page.keyboard.press('Control+ArrowLeft');
+    await expect(range).toHaveValue('51.6');
+    // A held modifier on the map must not leak into the flight throttle.
+    await page.locator('[data-ose="node-warp"]').focus();
+    await page.keyboard.down('Shift');
+    await page.waitForTimeout(400);
+    await page.keyboard.up('Shift');
+    await expect.poll(() => page.locator('#fh-throttle-fill').evaluate(e => (e as HTMLElement).style.height)).toBe('0%');
+    await page.locator('[data-ose="flight-throttle-full"]').click();
+    await expect.poll(() => page.locator('#fh-throttle-fill').evaluate(e => (e as HTMLElement).style.height)).toBe('100%');
+    await page.locator('[data-ose="node-warp"]').click();
+    await expect(page.locator('#node-warp')).toHaveText('Stop warp');
+    await expect.poll(() => page.locator('#fh-throttle-fill').evaluate(e => (e as HTMLElement).style.height)).toBe('0%');
+    await time.focus();
+    await page.keyboard.press('/');
+    await expect(page.locator('#node-warp')).toHaveText('Warp to');
+    await expect(page.locator('#warp')).toHaveText('×1');
+    await page.locator('[data-ose="node-warp"]').click();
+    await page.locator('[data-ose="warp-stop"]').click();
+    await expect(page.locator('#warp')).toHaveText('×1');
+    await expect(page.locator('#node-warp')).toHaveText('Warp to');
+    // A click on the orbit offers the original's popup there: time to the point, Add maneuver, Warp to.
+    await page.locator('[data-ose="clear-node"]').click();
+    await expect(node).toHaveCount(0);
+    // the point of the orbit farthest from the vessel that nothing covers (its marker and label, the HUD and its
+    // navball and speed gauge canvases), read
+    // afresh each time since the view follows the vessel
+    const canvas = page.locator('#gpu');
+    // After a node is cleared its planned orbit stays on the map until the server's new prediction arrives,
+    // which a slow browser (Firefox in CI) can see well after the node is gone: a click picked from the old
+    // orbit then lands beside the new one. Wait for the single patch of the coasting orbit, and for the view to
+    // hold still, before picking from it.
+    const readOrbit = () =>
+      canvas.evaluate(c => [c.getAttribute('data-ose-orbit-points') ?? '', c.getAttribute('data-ose-orbit-vessel') ?? '']);
+    const parse = (s: string) => s.split(';').filter(Boolean).map(p => p.split(' ').map(Number));
+    const settled = async () => {
+      let last = parse((await readOrbit())[0]);
+      await expect
+        .poll(async () => {
+          await page.waitForTimeout(250);
+          const now = parse((await readOrbit())[0]);
+          const still =
+            now.length > 1 &&
+            now.length === last.length &&
+            now.every(([x, y], i) => Math.abs(x - last[i][0]) <= 2 && Math.abs(y - last[i][1]) <= 2);
+          last = now;
+          return still;
+        }, { timeout: 15_000 })
+        .toBe(true);
+      return readOrbit();
+    };
+    const orbitPoint = async () => {
+      await expect(canvas).toHaveAttribute('data-ose-orbit-points', /\d+ \d+;/);
+      await expect(canvas).toHaveAttribute('data-ose-orbit-patches', '1', { timeout: 15_000 });
+      const [pointsAttr, vesselAttr] = await settled();
+      const [vesX, vesY] = vesselAttr.split(' ').map(Number);
+      // the 2D fallback map draws on #map (the WebGPU canvas is hidden then)
+      const rect = (await canvas.boundingBox()) ?? (await page.locator('#map').boundingBox())!;
+      const vessel = { x: rect.x + vesX, y: rect.y + vesY };
+      const points = parse(pointsAttr).map(([x, y]) => ({ x: rect.x + x, y: rect.y + y }));
+      const clear = await page.evaluate(ps => ps.map(p => ['gpu', 'map'].includes(document.elementFromPoint(p.x, p.y)?.id ?? '')), points);
+      const dist = (p: { x: number; y: number }) => Math.hypot(p.x - vessel.x, p.y - vessel.y);
+      const at = points.filter((_, i) => clear[i]).sort((a, b) => dist(b) - dist(a))[0];
+      expect(at).toBeDefined();
+      return { at, vessel };
+    };
+    let { at, vessel } = await orbitPoint();
+    const popup = page.locator('[data-ose="orbit-popup"]');
+    await page.mouse.click(at.x, at.y);
+    await expect(popup).toBeVisible();
+    // well round the 47:35 orbit from the vessel
+    await expect(page.locator('[data-ose="orbit-popup-time"]')).toHaveText(/^T-[1-3]\d:\d\d$/);
+    const pointUT = Number(await popup.getAttribute('data-ose-ut'));
+    await page.locator('[data-ose="orbit-add-node"]').click();
+    await expect(popup).toBeHidden();
+    await expect(node).toHaveCount(1);
+    expect(Number(await node.getAttribute('data-ose-ut'))).toBeCloseTo(pointUT, 0);
+    await page.locator('[data-ose="clear-node"]').click();
+    // ...and Warp to coasts there; a click off the orbit closes the popup.
+    ({ at, vessel } = await orbitPoint());
+    await page.mouse.click(at.x, at.y);
+    await expect(popup).toBeVisible();
+    // a point part of the way across from it toward the vessel: off the orbit, and not under the popup or a label
+    const offs = [0.25, 0.35, 0.5, 0.65].map(f => ({ x: at.x + (vessel.x - at.x) * f, y: at.y + (vessel.y - at.y) * f }));
+    const free = await page.evaluate(ps => ps.map(p => ['gpu', 'map'].includes(document.elementFromPoint(p.x, p.y)?.id ?? '')), offs);
+    const off = offs.find((_, i) => free[i])!;
+    expect(off).toBeDefined();
+    await page.mouse.click(off.x, off.y);
+    await expect(popup).toBeHidden();
+    ({ at, vessel } = await orbitPoint());
+    await page.mouse.click(at.x, at.y);
+    await page.locator('[data-ose="orbit-warp"]').click();
+    await expect(page.locator('#warp')).not.toHaveText('×1');
+    await page.locator('[data-ose="warp-stop"]').click();
+    await expect(page.locator('#warp')).toHaveText('×1');
+    // The burn timer's Delete All Maneuvers takes the next node and every one after it: the whole plan.
+    await page.locator('[data-ose="add-node"]').click();
+    await page.locator('[data-ose="add-next-node"]').click();
+    await expect(node).toHaveCount(1);
+    const burnTimer = page.locator('[data-ose="flight-burn"]');
+    await expect(burnTimer).toHaveClass(/\bon\b/);
+    await page.locator('[data-ose="burn-delete-all"]').click();
+    await expect(node).toHaveCount(0);
+    await expect(page.locator('.node-other:visible')).toHaveCount(0);
+    await expect(burnTimer).not.toHaveClass(/\bon\b/);
+    await expect(page.locator('[data-ose="node-panel"]')).not.toHaveClass(/\bopen\b/);
+    passed = true;
+  } finally {
+    if (passed) await cleanup();
+    else await cleanup().catch(e => console.log(`cleanup after a failure: ${e}`));
+  }
   expect(errors).toEqual([]);
 });
