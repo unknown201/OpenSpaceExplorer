@@ -108,6 +108,11 @@ use ose_net::{
 };
 
 /// The hint shown while a Kerbal holds a ladder; taken down when it lets go or boards.
+/// KSP2's time-warp notifications (`Flight/NotificationEvent/ThrottleLockedDueToTimewarp`,
+/// `Notification/Alert/ActionBlockedByTimeWarpDesc`, `HUD/Tooltips/EVADisabledByTimeWarp`).
+const THROTTLE_LOCKED_BY_WARP: &str = "Throttle is locked while Time Warp is over 1x.";
+const WARP_BLOCKED: &str = "That action cannot be performed while you are time warping";
+const EVA_BLOCKED_BY_WARP: &str = "EVA is disabled because time warp is not 1x.";
 const LADDER_HINT: &str = "On the ladder: W/S climb, Space or F lets go";
 const BODY_LABEL_CLASS: &str = "body";
 
@@ -433,6 +438,8 @@ struct App {
     /// apoapsis and periapsis markers from the last map frame, for clicks on them.
     warp_to: Option<(f64, String)>,
     warp_to_sent_ms: f64,
+    /// When the last "blocked by time warp" toast showed, so a held key does not stack them.
+    warp_note_ms: std::cell::Cell<f64>,
     apsis_ut: [f64; 2],
     toasts: hud::Toasts,
     /// The flown vessel as last seen, for event toasts (signal, charge, sphere of influence, orbit, landing).
@@ -1153,6 +1160,7 @@ pub fn start() -> Result<(), JsValue> {
         alt_terrain: false,
         warp_to: None,
         warp_to_sent_ms: 0.0,
+        warp_note_ms: std::cell::Cell::new(f64::NEG_INFINITY),
         apsis_ut: [f64::NAN; 2],
         toasts: hud::Toasts::default(),
         flight_watch: std::cell::RefCell::new(None),
@@ -2515,8 +2523,14 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         }),
     )?;
     wire("fh-stage-btn", Box::new(|a| a.borrow_mut().flight_stage()))?;
-    wire("fh-full", Box::new(|a| a.borrow_mut().set_throttle(1.0)))?;
-    wire("fh-cut", Box::new(|a| a.borrow_mut().set_throttle(0.0)))?;
+    wire(
+        "fh-full",
+        Box::new(|a| a.borrow_mut().throttle_preset_input(true)),
+    )?;
+    wire(
+        "fh-cut",
+        Box::new(|a| a.borrow_mut().throttle_preset_input(false)),
+    )?;
     wire("fh-map", Box::new(|a| a.borrow_mut().toggle_flight_map()))?;
     wire(
         "fh-ksc",
@@ -5905,11 +5919,15 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         true
                     }
                     "KeyZ" => {
-                        app.set_throttle(interaction::throttle_preset(true));
+                        app.throttle_preset_input(true);
                         true
                     }
                     // `OnThrottleCutoff`: X cuts the throttle, and with left Alt (the trim modifier) held also
                     // zeroes the trim
+                    "KeyX" if app.rails_warping() => {
+                        app.throttle_preset_input(false);
+                        true
+                    }
                     "KeyX" => {
                         app.keys.throttle_cutoff_pressed();
                         app.set_throttle(0.0);
@@ -11895,6 +11913,11 @@ impl App {
     fn crew_eva(&self, kerbal: Option<String>) {
         let Some(vessel) = self.flying else { return };
         let Some(ws) = &self.ws else { return };
+        // KSP2's crew portraits disable EVA while time warps at any rate (`IVAPortraits`).
+        if self.time.warp > 1 {
+            self.warp_blocked_note(EVA_BLOCKED_BY_WARP);
+            return;
+        }
         self.ftue("FTUE_First_EVA");
         self.crew_pending.set(Some("fh-eva"));
         send(ws, &ClientMessage::GoEva { vessel, kerbal });
@@ -12428,6 +12451,11 @@ impl App {
 
     fn flight_stage(&mut self) {
         let Some(vessel) = self.flying else { return };
+        // KSP2's `OnStage`: staging waits for normal time (`ActionBlockedByTimeWarpMessage`).
+        if self.rails_warping() {
+            self.warp_blocked_note(WARP_BLOCKED);
+            return;
+        }
         // As the original's: with no stages left Space does nothing (the server would end the last stage's
         // burn and drop its propellant).
         if self.stages_left() == Some(0) {
@@ -13002,7 +13030,9 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         let additional = {
             let (axes, throttle) = analog::poll(&self.analog);
-            if let Some(throttle) = throttle.filter(|_| self.warp_to.is_none()) {
+            if let Some(throttle) =
+                throttle.filter(|_| self.warp_to.is_none() && !self.rails_warping())
+            {
                 if (throttle - self.throttle).abs() > 0.002 {
                     self.throttle = throttle;
                     self.controls_dirty = true;
@@ -13077,7 +13107,10 @@ impl App {
             k.wheel_steer() as f32 * scale as f32,
             k.brakes() || self.brakes_latched,
         );
-        if thr_in != 0.0 {
+        if thr_in != 0.0 && self.rails_warping() {
+            // KSP2's `OnThrottleDelta` on rails: the throttle holds and says why.
+            self.warp_blocked_note(THROTTLE_LOCKED_BY_WARP);
+        } else if thr_in != 0.0 {
             if self.warp_to.is_some() {
                 self.stop_warp();
             }
@@ -13256,6 +13289,46 @@ impl App {
     fn stop_warp(&mut self) {
         self.warp_to = None;
         self.request_warp(1);
+    }
+
+    /// Whether the vessel flown warps on rails now (`interaction::rails_warp`): KSP2 locks its throttle,
+    /// staging and X then.
+    fn rails_warping(&self) -> bool {
+        let Some(f) = self
+            .flying
+            .and_then(|id| self.scene.as_ref()?.vessel(id))
+            .and_then(|v| v.flight.as_ref())
+        else {
+            return false;
+        };
+        interaction::rails_warp(self.time.warp, f.situation, f.surface_speed_mps)
+    }
+
+    /// Full throttle (Z, the HUD's up arrow) or cut (X, down arrow) as KSP2's `OnThrottleMax` and
+    /// `OnThrottleCutoff`: warping on rails, full throttle is locked and cut stops the warp instead.
+    fn throttle_preset_input(&mut self, full: bool) {
+        if !self.rails_warping() {
+            self.set_throttle(interaction::throttle_preset(full));
+        } else if full {
+            self.warp_blocked_note(THROTTLE_LOCKED_BY_WARP);
+        } else {
+            self.stop_warp();
+        }
+    }
+
+    /// One of KSP2's time-warp notifications, at most every half second while a key is held (as
+    /// `NotificationEvents`' throttle-lock note): the throttle lock is passive, a blocked action an alert.
+    fn warp_blocked_note(&self, text: &str) {
+        let now = now_ms();
+        if now - self.warp_note_ms.get() >= 500.0 {
+            self.warp_note_ms.set(now);
+            let tier = if text == THROTTLE_LOCKED_BY_WARP {
+                "passive"
+            } else {
+                "alert"
+            };
+            hud::push(&self.doc, text, tier);
+        }
     }
 
     /// Step the warp toward the warp-to point: as fast as leaves a few seconds, 1x for the last ten.

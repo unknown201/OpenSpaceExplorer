@@ -2514,11 +2514,16 @@ fn crew_request(s: &Shared, player_id: u64, msg: ClientMessage) -> ServerMessage
             let Some(e) = owned_vessel(s, vessel, player_id) else {
                 return ack(vessel, Err("not your vessel".into()));
             };
-            let r = s
-                .universe
-                .lock()
-                .expect("sim lock")
-                .go_eva(e, kerbal.as_deref());
+            let mut u = s.universe.lock().expect("sim lock");
+            // KSP2's crew portraits disable EVA while time warps at any rate (`IVAPortraits`).
+            if u.warp() > 1 {
+                return ack(
+                    vessel,
+                    Err("EVA is disabled because time warp is not 1x.".into()),
+                );
+            }
+            let r = u.go_eva(e, kerbal.as_deref());
+            drop(u);
             ack(
                 vessel,
                 r.map(|k| Some(crew_docking::register(s, k, Some(player_id)))),
