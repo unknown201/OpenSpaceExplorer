@@ -117,7 +117,7 @@ fn part_fairing(v: &Value) -> Option<ose_data::fairing::FairingShape> {
 }
 
 /// A control surface's settings as built (`Data_ControlSurface`): the authority limit, in degrees of its
-/// range, the axes it answers, inversion and deployment.
+/// range, the axes it answers, inversion and deployment; and a wheel's steering (`part_wheel_steering`).
 fn part_control(v: &Value) -> Option<ose_data::flight_geometry::PartControl> {
     fn find(v: &Value) -> Option<&Value> {
         match v {
@@ -131,12 +131,14 @@ fn part_control(v: &Value) -> Option<ose_data::flight_geometry::PartControl> {
             _ => None,
         }
     }
-    let d = find(v)?;
+    let mut c = ose_data::flight_geometry::PartControl::default();
+    let mut any = part_wheel_steering(v, &mut c);
+    let Some(d) = find(v) else {
+        return any.then_some(c);
+    };
     let stored = |k: &str| d[k].get("storedValue").cloned().unwrap_or(Value::Null);
     let flag = |k: &str| stored(k).as_bool();
     let range = d["CtrlSurfaceRange"].as_f64().filter(|r| *r > 0.0);
-    let mut c = ose_data::flight_geometry::PartControl::default();
-    let mut any = false;
     if let Some(limit) = stored("AuthorityLimiter")
         .as_f64()
         .filter(|l| l.is_finite())
@@ -165,6 +167,45 @@ fn part_control(v: &Value) -> Option<ose_data::flight_geometry::PartControl> {
         any |= on;
     }
     any.then_some(c)
+}
+
+/// A wheel's steering as built (`Data_WheelSteering`), into `c`; true when it differs from the defaults (the
+/// jet's main gear is built with `SteeringEnabled` off, so only its nose wheel steers).
+fn part_wheel_steering(v: &Value, c: &mut ose_data::flight_geometry::PartControl) -> bool {
+    fn find(v: &Value) -> Option<&Value> {
+        match v {
+            Value::Object(m) => {
+                if m.get("Name").and_then(|n| n.as_str()) == Some("Data_WheelSteering") {
+                    return m.get("DataObject");
+                }
+                m.values().find_map(find)
+            }
+            Value::Array(a) => a.iter().find_map(find),
+            _ => None,
+        }
+    }
+    let Some(d) = find(v) else {
+        return false;
+    };
+    let stored = |k: &str| d[k].get("storedValue").cloned().unwrap_or(Value::Null);
+    let mut any = false;
+    if let Some(on) = stored("SteeringEnabled").as_bool() {
+        c.wheel_steering = on;
+        any |= !on;
+    }
+    if let Some(on) = stored("SteeringInvert").as_bool() {
+        c.wheel_steer_invert = on;
+        any |= on;
+    }
+    if stored("AutoSteeringAdjust").as_bool() == Some(false) {
+        let angle = stored("AngleTweakable").as_f64().filter(|a| *a >= 0.0);
+        let response = stored("ResponseTweakable").as_f64().filter(|r| *r >= 0.0);
+        if let (Some(a), Some(r)) = (angle, response) {
+            c.wheel_steer_manual = Some((a, r));
+            any = true;
+        }
+    }
+    any
 }
 
 /// Turn the authority limits `part_control` left in degrees into fractions of each part's range

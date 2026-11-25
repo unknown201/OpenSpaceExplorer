@@ -715,7 +715,13 @@ pub struct DriveWheel {
     pub torque_knm: Option<ose_data::Curve>,
     pub ec_per_s: f64,
     pub brake_knm: f64,
+    /// It steers (a steerable wheel with its steering on), the other way round (`SteeringInvert`), and, with
+    /// `AutoSteeringAdjust` off, at a set angle (degrees) and response.
     pub steers: bool,
+    #[serde(default)]
+    pub steer_invert: bool,
+    #[serde(default)]
+    pub steer_manual: Option<(f64, f64)>,
     /// Where it stands from the centre of mass, m (forward along the drive direction, right of it).
     #[serde(default)]
     pub at_m: [f64; 2],

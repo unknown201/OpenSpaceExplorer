@@ -3001,12 +3001,15 @@ impl Structure {
             .enumerate()
             .map(|(k, &i)| {
                 let g = self.gear_defs[i].as_ref().expect("gear");
+                let cfg = p.part_control(i);
                 crate::flight::DriveWheel {
                     radius_m: g.radius_m,
                     torque_knm: g.motor.as_ref().map(|m| m.torque_curve.clone()),
                     ec_per_s: g.motor.as_ref().map(|m| m.ec_per_s).unwrap_or(0.0),
                     brake_knm: g.brake_torque_knm,
-                    steers: g.steerable,
+                    steers: g.steerable && cfg.wheel_steering,
+                    steer_invert: cfg.wheel_steer_invert,
+                    steer_manual: cfg.wheel_steer_manual,
                     at_m: place(self.rigid.rest_position(i) - mass.centre_m),
                     dynamics: g.dynamics.clone(),
                     state: if carry {

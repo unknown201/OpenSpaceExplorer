@@ -115,6 +115,12 @@ pub struct PartControl {
     /// Pitch/roll/yaw followed by translation X/Y/Z in control axes.
     pub rcs_axes: [bool; 6],
     pub thrust_limiter: f64,
+    /// Wheel steering (`Data_WheelSteering`): on (`SteeringEnabled`) and inverted (`SteeringInvert`); with
+    /// `AutoSteeringAdjust` off, the steering angle in degrees (`AngleTweakable`) and the response
+    /// (`ResponseTweakable`) it keeps at every speed, else `None` (the part's curves set both by speed).
+    pub wheel_steering: bool,
+    pub wheel_steer_invert: bool,
+    pub wheel_steer_manual: Option<(f64, f64)>,
 }
 impl Default for PartControl {
     fn default() -> Self {
@@ -136,6 +142,9 @@ impl Default for PartControl {
             surface_invert: false,
             rcs_axes: [true; 6],
             thrust_limiter: 1.,
+            wheel_steering: true,
+            wheel_steer_invert: false,
+            wheel_steer_manual: None,
         }
     }
 }

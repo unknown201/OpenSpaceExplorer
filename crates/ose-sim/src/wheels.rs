@@ -481,7 +481,10 @@ impl Drive {
                     .fold(f64::MIN, f64::max)
                     .max(0.01);
                 let speed = st.velocity_mps[1].abs();
-                let (max_angle, response) = if d.steering_curve.keys.is_empty() {
+                let (max_angle, response) = if let Some((angle, response)) = wheel.steer_manual {
+                    // AutoSteeringAdjust off: the angle as set and the response scaled as set, at any speed
+                    (angle, d.steering_response * response)
+                } else if d.steering_curve.keys.is_empty() {
                     (range, d.steering_response * d.steering_response)
                 } else {
                     let share = if d.steering_max_angle_curve.keys.is_empty() {
@@ -494,8 +497,13 @@ impl Drive {
                         d.steering_response * d.steering_curve.evaluate(speed) / range,
                     )
                 };
+                let steer = if wheel.steer_invert {
+                    -self.steer
+                } else {
+                    self.steer
+                };
                 let input = if max_angle > 0.0 {
-                    (steer_target_deg(wheel.at_m, self.steer, range) / max_angle).clamp(-1.0, 1.0)
+                    (steer_target_deg(wheel.at_m, steer, range) / max_angle).clamp(-1.0, 1.0)
                 } else {
                     0.0
                 };
