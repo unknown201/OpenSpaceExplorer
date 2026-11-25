@@ -1,4 +1,105 @@
 {
+ "floating_walls": {
+  "enginemount_1v_procedural": {
+   "base_radius": 0.625,
+   "length": 1.25,
+   "max_target": -1,
+   "min_target": -1,
+   "node": "dynamic_floating",
+   "node_size": 1,
+   "side_count": 24,
+   "start_height": -0.029,
+   "up": -1.0
+  },
+  "enginemount_2v_procedural": {
+   "base_radius": 1.25,
+   "length": 2.5,
+   "max_target": -1,
+   "min_target": -1,
+   "node": "dynamic_floating",
+   "node_size": 2,
+   "side_count": 36,
+   "start_height": 0.049,
+   "up": -1.0
+  },
+  "enginemount_3v_procedural": {
+   "base_radius": 1.875,
+   "length": 3.75,
+   "max_target": -1,
+   "min_target": -1,
+   "node": "dynamic_floating",
+   "node_size": 3,
+   "side_count": 36,
+   "start_height": 0.144,
+   "up": -1.0
+  },
+  "enginemount_4v_procedural": {
+   "base_radius": 2.5,
+   "length": 5.0,
+   "max_target": -1,
+   "min_target": -1,
+   "node": "dynamic_floating",
+   "node_size": 4,
+   "side_count": 48,
+   "start_height": 0.136,
+   "up": -1.0
+  },
+  "tube_0v_procedural": {
+   "base_radius": 0.3125,
+   "length": 0.625,
+   "max_target": -1,
+   "min_target": -1,
+   "node": "dynamic_floating",
+   "node_size": 1,
+   "side_count": 24,
+   "start_height": 0.0275,
+   "up": 1.0
+  },
+  "tube_1v_procedural": {
+   "base_radius": 0.625,
+   "length": 1.25,
+   "max_target": -1,
+   "min_target": -1,
+   "node": "dynamic_floating",
+   "node_size": 1,
+   "side_count": 24,
+   "start_height": 0.1,
+   "up": 1.0
+  },
+  "tube_2v_procedural": {
+   "base_radius": 1.25,
+   "length": 2.5,
+   "max_target": -1,
+   "min_target": -1,
+   "node": "dynamic_floating",
+   "node_size": 2,
+   "side_count": 36,
+   "start_height": 0.1,
+   "up": 1.0
+  },
+  "tube_3v_procedural": {
+   "base_radius": 1.875,
+   "length": 3.75,
+   "max_target": -1,
+   "min_target": -1,
+   "node": "dynamic_floating",
+   "node_size": 1,
+   "side_count": 36,
+   "start_height": 0.1,
+   "up": 1.0
+  },
+  "tube_4v_procedural": {
+   "base_radius": 2.5,
+   "length": 5.0,
+   "max_target": -1,
+   "min_target": -1,
+   "node": "dynamic_floating",
+   "node_size": 4,
+   "side_count": 48,
+   "start_height": 0.1,
+   "up": 1.0
+  }
+ },
  "shrouds": {
   "engine_0v_methalox_ant": {
    "base_radius": 0.3125,
@@ -723,10 +824,12 @@
   },
   "enginemount_1v_procedural": {
    "bottom": 1,
+   "dynamic_floating": 1,
    "top": 1
   },
   "enginemount_2v_procedural": {
    "bottom": 1,
+   "dynamic_floating": 2,
    "top": 2
   },
   "enginemount_3v_m3": {
@@ -735,10 +838,12 @@
   },
   "enginemount_3v_procedural": {
    "bottom": 2,
+   "dynamic_floating": 3,
    "top": 3
   },
   "enginemount_4v_procedural": {
    "bottom": 3,
+   "dynamic_floating": 4,
    "top": 4
   },
   "escapesystem_1v_launch": {
@@ -1555,19 +1660,24 @@
    "top": 4
   },
   "tube_0v_procedural": {
-   "bottom": 0
+   "bottom": 0,
+   "dynamic_floating": 1
   },
   "tube_1v_procedural": {
-   "bottom": 1
+   "bottom": 1,
+   "dynamic_floating": 1
   },
   "tube_2v_procedural": {
-   "bottom": 2
+   "bottom": 2,
+   "dynamic_floating": 2
   },
   "tube_3v_procedural": {
-   "bottom": 3
+   "bottom": 3,
+   "dynamic_floating": 1
   },
   "tube_4v_procedural": {
-   "bottom": 4
+   "bottom": 4,
+   "dynamic_floating": 4
   }
  }
 }
