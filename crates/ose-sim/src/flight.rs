@@ -408,6 +408,14 @@ pub struct Powered {
     /// A Kerbal in the water (`crate::swim`): its water-drag state while it floats, `None` out of the water.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eva_water: Option<crate::swim::InWater>,
+    /// The player's camera while flying a Kerbal's jetpack: its forward and up, unit vectors in the same
+    /// inertial frame as `facing` (`EvaCamera`, protocol 82). The pack's push is read against it and the Kerbal
+    /// turns to face along it (`JetpackKerbalCharacterStateHandler.UpdateInputCameraFeatures`).
+    #[serde(skip)]
+    pub eva_camera: Option<(DVec3, DVec3)>,
+    /// KSP2's `_isAlignToCameraAllowed`: set by a push, cleared once the Kerbal faces the camera.
+    #[serde(skip)]
+    pub eva_align: bool,
     /// Body lift and wings/surfaces this step (including surface drag), kN, inertial, and the
     /// airflow's torque about the centre of mass, kN·m, inertial.
     #[serde(default)]
@@ -1097,6 +1105,8 @@ impl Powered {
             eva_sprint: 0.0,
             eva_push_s: 0.0,
             eva_water: None,
+            eva_camera: None,
+            eva_align: false,
             rcs: RcsState::default(),
             lift_kn: DVec3::ZERO,
             aero_torque_knm: DVec3::ZERO,
@@ -2028,10 +2038,17 @@ pub fn integrate_with_propulsion(
         p.eva_water = None;
     }
     let jetpack = if p.walker && p.jetpack.is_some() && propulsion.is_none() {
+        // `IsAboveHighAltitude`: over `GroundAndSeaHighAltitude` from both the sea and the ground below
+        let high = p.jetpack.as_ref().is_some_and(|j| {
+            alt > j.align.high_altitude_m
+                && r_mag - crate::surface::solid_radius(body, terrain, p.r, ut)
+                    > j.align.high_altitude_m
+        });
         Some(crate::jetpack::resolve(
             p,
             pressure_atm,
             walk_dir.is_none() && !p.eva_hop,
+            high,
             omega,
             dt,
         ))

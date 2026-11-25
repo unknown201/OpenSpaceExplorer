@@ -521,6 +521,9 @@ struct App {
     /// turning and throttling.
     lin_mode: bool,
     translate_sent: (f32, f32, f32),
+    /// The camera last sent for a Kerbal's jetpack (protocol 82) and when (ms).
+    eva_camera_sent: Option<EvaCamera>,
+    eva_camera_at: f64,
     /// EVA: run as last sent, and a Space press not yet sent as a jump.
     eva_run_sent: bool,
     /// EVA ladders (protocol 45): F asked to grab (a refusal then boards instead), the climb sent last,
@@ -822,6 +825,9 @@ fn set_input_value(doc: &Document, id: &str, v: f64) {
         el.set_value(&format!("{v}"));
     }
 }
+
+/// A camera's forward and up, unit vectors (`ClientMessage::EvaCamera`).
+type EvaCamera = ose_net::CameraAxes;
 
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -1199,6 +1205,8 @@ pub fn start() -> Result<(), JsValue> {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
         translate_sent: (0.0, 0.0, 0.0),
+        eva_camera_sent: None,
+        eva_camera_at: 0.0,
         eva_run_sent: false,
         eva_grab: false,
         eva_climb_sent: 0.0,
@@ -12432,6 +12440,51 @@ impl App {
         self.send_controls();
     }
 
+    /// The camera's forward and up in the flown vessel's inertial frame (the frame of its readout's
+    /// `facing`), from the last rendered frame.
+    fn eva_camera_now(&self) -> Option<EvaCamera> {
+        #[cfg(target_arch = "wasm32")]
+        let local = self.flight3d.look_local;
+        #[cfg(not(target_arch = "wasm32"))]
+        let local: Option<(glam::DVec3, glam::DVec3)> = None;
+        let (forward, up) = local?;
+        let f = self.scene.as_ref()?.vessel(self.flying?)?.flight.as_ref()?;
+        let g = |d: ose_math::DVec3| glam::DVec3::new(d.x, d.y, d.z);
+        let (facing, roll) = (g(f.facing), g(f.roll_ref));
+        if facing.length() < 0.5 || roll.length() < 0.5 {
+            return None;
+        }
+        let right = facing.cross(roll);
+        let world = |l: glam::DVec3| {
+            let w = (right * l.x + facing * l.y + roll * l.z).normalize_or_zero();
+            (w.x as f32, w.y as f32, w.z as f32)
+        };
+        Some((world(forward), world(up)))
+    }
+
+    /// Send the jetpack camera when it has turned more than half a degree since the last one sent (at most
+    /// ten a second), or `None` once it is not to be used.
+    fn send_eva_camera(&mut self, vessel: u64, now: f64, camera: Option<EvaCamera>) {
+        let dot = |a: (f32, f32, f32), b: (f32, f32, f32)| a.0 * b.0 + a.1 * b.1 + a.2 * b.2;
+        let turned = match (self.eva_camera_sent, camera) {
+            (None, None) => false,
+            (Some(a), Some(b)) => {
+                let still = 0.5_f32.to_radians().cos();
+                (dot(a.0, b.0) < still || dot(a.1, b.1) < still)
+                    && now - self.eva_camera_at >= 100.0
+            }
+            _ => true,
+        };
+        if !turned {
+            return;
+        }
+        self.eva_camera_sent = camera;
+        self.eva_camera_at = now;
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::EvaCamera { vessel, camera });
+        }
+    }
+
     /// Where the vessel points now as pitch above the horizon and compass heading, from the flight view's
     /// navball frame (None before the first flight frame).
     /// The compass heading the flight camera looks along, once it has drawn (degrees).
@@ -12632,7 +12685,8 @@ impl App {
     /// A Kerbal on EVA, as the original's EVA keys (protocol 33). On the ground W/S/A/D (and Q/E) walk away
     /// from, toward, left and right of the camera and the Kerbal turns to face where it walks, as the
     /// original's `MoveGroundKerbalCharacterStateHandler`; Shift runs and Space jumps. In the air the
-    /// jetpack: Shift or Space up, Ctrl down, W/S and Q/E push ahead, back and sideways, A/D turn. The server
+    /// jetpack: Shift or Space up, Ctrl down, W/S push ahead and back, A/D and Q/E sideways, all along the
+    /// camera, and the Kerbal turns to face the way the camera looks (protocol 82). The server
     /// walks a Kerbal with throttle and a level heading; the pack takes `Translate` (y up along the Kerbal,
     /// z its front, x its right).
     fn eva_keys_tick(&mut self, now: f64, dt: f64) {
@@ -12714,15 +12768,23 @@ impl App {
                 );
             }
         }
+        if (on_ladder || landed) && self.eva_camera_sent.is_some() {
+            self.send_eva_camera(vessel, now, None);
+        }
         if on_ladder {
             return;
         }
         if !landed {
-            let translate = (
-                strafe as f32,
-                f32::from(shift) - f32::from(ctrl),
-                walk as f32,
-            );
+            // KSP2's jetpack reads the keys against the camera and turns the Kerbal to face along it
+            // (protocol 82): A/D (and Q/E) push sideways (`MoveLeftRight`) rather than turn
+            let camera = self.eva_camera_now();
+            self.send_eva_camera(vessel, now, camera);
+            let (side, turn) = if camera.is_some() {
+                (side, 0.0)
+            } else {
+                (strafe, turn)
+            };
+            let translate = (side as f32, f32::from(shift) - f32::from(ctrl), walk as f32);
             if translate != self.translate_sent {
                 self.translate_sent = translate;
                 if let Some(ws) = &self.ws {
