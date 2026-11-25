@@ -565,18 +565,29 @@ impl Universe {
         let Some(body) = self.world.get::<bodies::ReferenceBody>(e).map(|b| b.0) else {
             return false;
         };
-        // the ground under it
+        // the ground under it: terrain and sea floor, not the water (KSP2's Kerbal cast layers, 0, 15, 17, 19
+        // and 28, leave out Unity's water layer 4)
         if let Some(b) = self.world.get::<bodies::Body>(body) {
             let terrain = self
                 .world
                 .get::<flight::Terrain>(body)
                 .map(|t| t.0.as_ref());
             let ut = self.ut();
+            let solid = |r: DVec3| {
+                let (lat, lon) = flight::lat_lon(b, r, ut);
+                let site = b
+                    .site
+                    .as_ref()
+                    .and_then(|s| s.ground_radius(b.radius_m, crate::campus::direction(lat, lon)));
+                site.unwrap_or_else(|| {
+                    b.radius_m + terrain.map(|t| t.height_m(lat, lon)).unwrap_or(0.0)
+                })
+            };
             let reach = EVA_OBSTACLE_FAR_M + EVA_OBSTACLE_RADIUS_M + hatch.length();
-            if p.r.length() - flight::ground_radius(b, terrain, p.r, ut) < reach + 1.0
+            if p.r.length() - solid(p.r) < reach + 1.0
                 && samples.iter().any(|s| {
                     let r = p.r + *s;
-                    r.length() - flight::ground_radius(b, terrain, r, ut) < EVA_OBSTACLE_RADIUS_M
+                    r.length() - solid(r) < EVA_OBSTACLE_RADIUS_M
                 })
             {
                 return true;
