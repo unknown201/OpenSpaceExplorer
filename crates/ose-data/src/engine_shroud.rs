@@ -9,6 +9,12 @@
 //! engine's own node and capped at `MaxAutoFairingTargetRadius` when larger, looked up in
 //! `ObjectAssemblyPartTracker.AssemblySizeTypeDiameters` (`Module_Fairing.CalculateTargetAttachmentDiameter`).
 //!
+//! Procedural tubes and engine mounts have a wall of the same kind (`WallDef`): from `FairingStartHeight` out
+//! along `LocalUpAxis` to their floating node `Length` away, built once a part sits on that node and flaring to
+//! its size. A KSP2 VAB capture (reference/ksp2-procparts) shows the sections as part-frame heights along the
+//! axis: tube_1v_procedural 0.1:0.625 to 1.25:1.25 under a 2.5 m tank, enginemount_1v_procedural 0.029:0.625 to
+//! 1.25:0.625 down to a 1.25 m decoupler, and no wall with nothing on the node.
+//!
 //! Definitions come from `assets/own/engine-shrouds.json` (tools/export_engine_shrouds.py).
 
 use crate::craft::Craft;
@@ -40,9 +46,36 @@ pub struct ShroudDef {
     pub max_target: i32,
 }
 
+/// A procedural tube's or engine mount's wall (`Data_Fairing` with a floating node, not a shroud).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct WallDef {
+    /// The floating node at the wall's far end (`FloatingAttachNodeTag`).
+    pub node: String,
+    pub node_size: i32,
+    /// `LocalUpAxis.y`: +1 for a tube (the wall runs up), -1 for an engine mount (down).
+    pub up: f64,
+    /// Part-frame height where the wall starts (`FairingStartHeight`), m.
+    pub start_height: f64,
+    /// `LengthEditDefault`: the wall ends `length` along the axis, at the floating node, m.
+    pub length: f64,
+    pub base_radius: f64,
+    pub side_count: u32,
+    pub min_target: i32,
+    pub max_target: i32,
+}
+
+/// A wall to draw: (part-frame height, radius) rings from the bottom up, and its side count.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Wall {
+    pub rings: [(f64, f64); 2],
+    pub side_count: u32,
+}
+
 #[derive(Deserialize)]
 struct File {
     shrouds: BTreeMap<String, ShroudDef>,
+    #[serde(default)]
+    floating_walls: BTreeMap<String, WallDef>,
     stack_node_sizes: BTreeMap<String, BTreeMap<String, i32>>,
 }
 
@@ -58,6 +91,10 @@ pub fn def(part_id: &str) -> Option<&'static ShroudDef> {
     file().shrouds.get(part_id)
 }
 
+pub fn wall_def(part_id: &str) -> Option<&'static WallDef> {
+    file().floating_walls.get(part_id)
+}
+
 /// The size class of stack node `node` on part `part_id`.
 pub fn node_size(part_id: &str, node: &str) -> Option<i32> {
     file().stack_node_sizes.get(part_id)?.get(node).copied()
@@ -67,15 +104,7 @@ impl ShroudDef {
     /// The bottom ring's radius, m, with a node of size class `other` attached
     /// (`Module_Fairing.CalculateTargetAttachmentDiameter`).
     pub fn target_radius(&self, other: Option<i32>) -> f64 {
-        let own = self.node_size + 1;
-        let mut value = other.map_or(own, |s| s + 1);
-        value = value.clamp(0, SIZE_DIAMETERS.len() as i32 - 1);
-        if self.max_target > 0 && value > own {
-            value = value.min(self.max_target);
-        } else if self.min_target > 0 && value < own {
-            value = value.max(self.min_target);
-        }
-        SIZE_DIAMETERS[value as usize] * 0.5
+        target_radius(self.node_size, self.min_target, self.max_target, other)
     }
 
     /// The wall as (part-frame height, radius) rings from the bottom up.
@@ -87,13 +116,26 @@ impl ShroudDef {
     }
 }
 
-/// Part `i`'s shroud when it is an engine with a part on its shroud node: its definition and the bottom
-/// ring's radius. The part on the node can hang from the engine (a child on that node) or carry it (the
-/// engine attached to its parent by that node).
-pub fn shroud_for(craft: &Craft, i: usize) -> Option<(&'static ShroudDef, f64)> {
+/// `Module_Fairing.CalculateTargetAttachmentDiameter` / 2: the wall's far ring for a part with node size class
+/// `other` on the node (of size class `node_size`), held within `MinAutoFairingTargetRadius` and
+/// `MaxAutoFairingTargetRadius` (size indices; -1 for none).
+pub fn target_radius(node_size: i32, min_target: i32, max_target: i32, other: Option<i32>) -> f64 {
+    let own = node_size + 1;
+    let mut value = other.map_or(own, |s| s + 1);
+    value = value.clamp(0, SIZE_DIAMETERS.len() as i32 - 1);
+    if max_target > 0 && value > own {
+        value = value.min(max_target);
+    } else if min_target > 0 && value < own {
+        value = value.max(min_target);
+    }
+    SIZE_DIAMETERS[value as usize] * 0.5
+}
+
+/// The size class of the part on part `i`'s node `node`, when one is there: a child hanging from that node, or
+/// the parent part `i` itself hangs from by it. `Some(None)` when that part's node has no known size.
+fn on_node(craft: &Craft, i: usize, node: &str) -> Option<Option<i32>> {
     let p = craft.parts.get(i)?;
-    let d = def(&p.part_id)?;
-    let other = if p.own_node.as_deref() == Some(d.node.as_str()) {
+    if p.own_node.as_deref() == Some(node) {
         let parent = &craft.parts[p.parent?];
         Some(
             p.parent_node
@@ -104,9 +146,42 @@ pub fn shroud_for(craft: &Craft, i: usize) -> Option<(&'static ShroudDef, f64)> 
         craft
             .parts
             .iter()
-            .find(|q| q.parent == Some(i) && q.parent_node.as_deref() == Some(d.node.as_str()))
+            .find(|q| q.parent == Some(i) && q.parent_node.as_deref() == Some(node))
             .map(|q| q.own_node.as_deref().and_then(|n| node_size(&q.part_id, n)))
-    }?;
+    }
+}
+
+/// Part `i`'s procedural wall, an engine's or heat shield's shroud or a tube's or engine mount's wall, when
+/// a part sits on its node.
+pub fn wall_for(craft: &Craft, i: usize) -> Option<Wall> {
+    if let Some((d, r)) = shroud_for(craft, i) {
+        let [lo, hi] = d.rings(r);
+        return Some(Wall {
+            rings: [lo, hi],
+            side_count: d.side_count,
+        });
+    }
+    let d = wall_def(&craft.parts.get(i)?.part_id)?;
+    let other = on_node(craft, i, &d.node)?;
+    let target = target_radius(d.node_size, d.min_target, d.max_target, other);
+    let start = (d.start_height, d.base_radius);
+    let end = (d.up * d.length, target);
+    Some(Wall {
+        rings: if end.0 < start.0 {
+            [end, start]
+        } else {
+            [start, end]
+        },
+        side_count: d.side_count,
+    })
+}
+
+/// Part `i`'s shroud when it is an engine with a part on its shroud node: its definition and the bottom
+/// ring's radius. The part on the node can hang from the engine (a child on that node) or carry it (the
+/// engine attached to its parent by that node).
+pub fn shroud_for(craft: &Craft, i: usize) -> Option<(&'static ShroudDef, f64)> {
+    let d = def(&craft.parts.get(i)?.part_id)?;
+    let other = on_node(craft, i, &d.node)?;
     Some((d, d.target_radius(other)))
 }
 
@@ -206,6 +281,70 @@ mod tests {
             part("heatshield_1v", Some(0), "top", "bottom"),
         ]);
         assert!(shroud_for(&bare, 1).is_none());
+    }
+
+    #[test]
+    fn tube_wall_matches_ksp2_vab_capture() {
+        // reference/ksp2-procparts: a tube on the pod has no wall until a part sits on its floating node; with
+        // a 2.5 m tank there the wall runs 0.1:0.625 to 1.25:1.25, with a 1.25 m tank to 1.25:0.625.
+        let bare = craft(vec![
+            part("pod_1v_conical_crew", None, "", ""),
+            part("tube_1v_procedural", Some(0), "bottom", "top"),
+        ]);
+        assert!(wall_for(&bare, 1).is_none());
+        let wide = craft(vec![
+            part("pod_1v_conical_crew", None, "", ""),
+            part("tube_1v_procedural", Some(0), "bottom", "top"),
+            part(
+                "fueltank_2v_inline_methalox_1x2",
+                Some(1),
+                "bottom",
+                "dynamic_floating",
+            ),
+        ]);
+        let w = wall_for(&wide, 1).unwrap();
+        assert_eq!(w.rings, [(0.1, 0.625), (1.25, 1.25)]);
+        assert_eq!(w.side_count, 24);
+        // hung from a tank by its floating node: the wall flares to that tank
+        let hung = craft(vec![
+            part("fueltank_1v_inline_methalox_1x2", None, "", ""),
+            part("tube_1v_procedural", Some(0), "dynamic_floating", "bottom"),
+        ]);
+        assert_eq!(
+            wall_for(&hung, 1).unwrap().rings,
+            [(0.1, 0.625), (1.25, 0.625)]
+        );
+    }
+
+    #[test]
+    fn engine_mount_wall_runs_down_to_its_floating_node() {
+        // reference/ksp2-procparts: enginemount_1v_procedural with a decoupler on its floating node, panels
+        // from y -1.25 to -0.029 at 0.625 m; the node at y -1.25 in the parts catalog.
+        let c = craft(vec![
+            part("fueltank_1v_inline_methalox_1x2", None, "", ""),
+            part("enginemount_1v_procedural", Some(0), "top", "bottom"),
+            part("decoupler_1v_inline", Some(1), "top", "dynamic_floating"),
+        ]);
+        let w = wall_for(&c, 1).unwrap();
+        assert_eq!(w.rings, [(-1.25, 0.625), (-0.029, 0.625)]);
+        let catalog: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        for (id, d) in &file().floating_walls {
+            let p = catalog.iter().find(|p| p["id"] == id.as_str()).unwrap();
+            let n = p["attach_nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|n| n["id"] == d.node.as_str())
+                .unwrap_or_else(|| panic!("{id} has no {} node", d.node));
+            assert_eq!(
+                n["position"]["y"].as_f64().unwrap(),
+                d.up * d.length,
+                "{id}"
+            );
+            assert_eq!(n["orientation"]["y"].as_f64().unwrap(), d.up, "{id}");
+        }
+        assert_eq!(file().floating_walls.len(), 9);
     }
 
     #[test]

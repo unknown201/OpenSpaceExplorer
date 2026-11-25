@@ -213,7 +213,7 @@ namespace OpenSpaceExplorer.Validation
                 yield return Shot("v1-ksc-night-before-vab");
             }
             bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking" || scenario == "thrustwarp" || scenario == "warp" || scenario == "burn" || scenario == "maneuver" || scenario == "jetpack" || scenario == "evaorbit" || scenario.StartsWith("reentryorbit ");
-            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario.StartsWith("strike ") ? GroundStrike.Craft(scenario.Split(' ')[1]) : scenario.StartsWith("reentryorbit ") ? ReentryOrbit.Craft(scenario.Split(' ')[1]) : scenario == "rcs" ? "craft-rcs.json" : (scenario == "jet" || scenario == "jetfly") ? "craft-jet.json" : scenario == "rover" ? "craft-rover.json" : (scenario == "legs" || scenario == "legsrunway") ? "craft-legs.json" : scenario == "fuelline" ? "craft-fuelline.json" : scenario == "crossfeed" ? "craft-crossfeed.json" : scenario == "asparagus" ? "craft-asparagus.json" : (scenario == "struts" || scenario == "strutslong") ? "craft-struts.json" : scenario == "transfer" ? "craft-crossfeed.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "fairings" ? "craft-fairing.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : scenario.StartsWith("sepland ") ? "craft-sepland.json" : (orbital || (scenario.StartsWith("eva") && scenario != "eva")) ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
+            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario.StartsWith("strike ") ? GroundStrike.Craft(scenario.Split(' ')[1]) : scenario.StartsWith("reentryorbit ") ? ReentryOrbit.Craft(scenario.Split(' ')[1]) : scenario == "rcs" ? "craft-rcs.json" : (scenario == "jet" || scenario == "jetfly") ? "craft-jet.json" : scenario == "rover" ? "craft-rover.json" : (scenario == "legs" || scenario == "legsrunway") ? "craft-legs.json" : scenario == "fuelline" ? "craft-fuelline.json" : scenario == "crossfeed" ? "craft-crossfeed.json" : scenario == "asparagus" ? "craft-asparagus.json" : (scenario == "struts" || scenario == "strutslong") ? "craft-struts.json" : scenario == "transfer" ? "craft-crossfeed.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "fairings" ? "craft-fairing.json" : scenario == "docking" ? "craft-docking.json" : scenario == "procparts" ? "craft-drop-pod.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : scenario.StartsWith("sepland ") ? "craft-sepland.json" : (orbital || (scenario.StartsWith("eva") && scenario != "eva")) ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
                 : new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
@@ -224,6 +224,7 @@ namespace OpenSpaceExplorer.Validation
             yield return new WaitForSeconds(10f);
             Mark("vab " + State);
             yield return Shot("03-vab");
+            if (scenario == "procparts") yield return ProcPartsScenario.Run(dir, Mark, Shot);
             if (scenario == "jet" || scenario == "jetfly" || (scenario.StartsWith("strike ") && scenario != "strike stack"))
             {
                 // a plane: the hangar orientation and the runway, as the stock assembly's own launch site
@@ -282,6 +283,7 @@ namespace OpenSpaceExplorer.Validation
             if (scenario == "transfer") { yield return Transfer(vessel); yield break; }
             if (scenario == "reentry") { yield return Reentry(vessel); yield break; }
             if (scenario == "fairings") { yield return FairingScenario.Run(vessel, dir, Mark); yield return Finish("fairings"); yield break; }
+            if (scenario == "procparts") { yield return Finish("procparts"); yield break; }
             if (scenario == "camera") { yield return CameraScenario.Run(dir, Mark); yield return Finish("camera"); yield break; }
             if (scenario.StartsWith("strike ")) { yield return GroundStrike.Run(this, vessel, dir, scenario.Split(' ')[1], Mark); yield return Finish("strike"); yield break; }
             if (scenario == "chutelook") { yield return ChuteLook.Run(vessel, dir, Mark); yield return Finish("chutelook"); yield break; }
