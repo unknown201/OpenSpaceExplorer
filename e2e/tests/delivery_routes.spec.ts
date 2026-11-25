@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { deleteTestCampaign } from "../helpers/campaign";
 
 // Delivery routes in the tracking station (docs/delivery-routes-design.md, step 3): a vessel in orbit is marked
 // as a depot from its card and shows up in the Routes tab; a craft on the pad starts a proving flight, which
@@ -15,7 +16,8 @@ test("the Routes tab marks depots and records proving flights", async ({ page, b
     await page.locator("#create-details > summary").click();
   }
   await page.selectOption("#create-mode", "Sandbox");
-  await page.fill("#create-name", `routes ${Date.now()}`);
+  const campaign = `routes ${Date.now()}`;
+  await page.fill("#create-name", campaign);
   await page.locator('[data-ose="create"]').click();
   await page.locator('[data-ose="ksc-launchpad"]').waitFor();
   const hints = page.getByRole("button", { name: "No more hints", exact: true });
@@ -67,4 +69,6 @@ test("the Routes tab marks depots and records proving flights", async ({ page, b
   await expect(proving).toHaveCount(0, { timeout: 10_000 });
   await expect(page.locator("#ts-info")).toContainText("Select a route or a proving flight");
   expect(errors).toEqual([]);
+  // later tests join the first campaign in the list: leave none behind
+  await deleteTestCampaign(page, campaign);
 });
