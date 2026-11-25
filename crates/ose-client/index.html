@@ -1252,6 +1252,9 @@
     /* The burn timer: the delta-v still to go drains a blue bar; red when the burn stopped short. */
     #flight-hud #fh-burn.burning { background: linear-gradient(90deg, #2f5fbf var(--p, 100%), transparent var(--p, 100%)); color: #fff; border-radius: 3px; padding: 1px 6px; }
     #flight-hud #fh-burn.stopped { color: #ff8a6a; }
+    #flight-hud #fh-burn.short { color: #ffb347; }
+    #node-summary { font-size: 12px; color: #cfe0ff; margin: 2px 0; }
+    #node-summary.short { color: #ffb347; }
     /* ORBITAL.INFO: Ap over Pe, each with its countdown, as the original's two lines. */
     #flight-hud .fh-bottom .fh-orbit { display: grid; grid-template-columns: auto 1fr auto; gap: 0 calc(8 * var(--u)); justify-items: start; }
     #flight-hud .fh-spd, #flight-hud .fh-alt { position: absolute; top: 50%; transform: translateY(-50%); min-width: calc(110 * var(--u)); background: #10141bf0; border: 2px solid; border-radius: calc(4 * var(--u)); padding: calc(2 * var(--u)) calc(8 * var(--u)); text-align: right; }
@@ -1865,6 +1868,7 @@
     <label>prograde <input id="node-prograde" type="range" min="-1500" max="1500" step="0.1" value="0" /><span id="node-prograde-text">0 m/s</span></label>
     <label>normal <input id="node-normal" type="range" min="-1500" max="1500" step="0.1" value="0" /><span id="node-normal-text">0 m/s</span></label>
     <label>radial <input id="node-radial" type="range" min="-1500" max="1500" step="0.1" value="0" /><span id="node-radial-text">0 m/s</span></label>
+    <div id="node-summary" data-ose="node-summary" title="The node's delta-v and burn time at full throttle, staging as planned"></div>
     <div class="slider-help">Arrow keys: 1 · Shift: 10 · Ctrl: 0.1 (seconds or m/s)</div>
     <div class="reason" id="node-reason"></div>
     <button id="node-warp" data-ose="node-warp" title="Coast with engines off to just before the maneuver">Warp to</button>

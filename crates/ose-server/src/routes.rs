@@ -201,11 +201,9 @@ pub fn handle(s: &Shared, player: u64, msg: &ClientMessage) -> ServerMessage {
                     if !landed {
                         return None;
                     }
-                    c.colonies
-                        .colonies
-                        .clone()
-                        .into_iter()
-                        .find(|col| ose_colonies::members(&mut u, col).contains(&e))
+                    c.colonies.colonies.clone().into_iter().find(|col| {
+                        !col.orbital() && ose_colonies::members(&mut u, col).contains(&e)
+                    })
                 });
             match at {
                 Some(col) => {
