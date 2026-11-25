@@ -38,7 +38,7 @@ namespace OpenSpaceExplorer.Validation
             bool map = Map("EnableFlightMap", mark);
             yield return new WaitForSeconds(4f);
             object small = AddNode(vessel, ut + 600, 50, mark);
-            yield return new WaitForSeconds(4f);
+            yield return new WaitForSeconds(8f);
             DumpNodes(dir, "nodes-small.txt", vessel, mark);
             Texts(dir, "ui-small-map.txt");
             yield return shot("m01-small-map");
@@ -51,7 +51,7 @@ namespace OpenSpaceExplorer.Validation
             Map("EnableFlightMap", mark);
             yield return new WaitForSeconds(4f);
             object big = AddNode(vessel, ut + 1500, 20000, mark);
-            yield return new WaitForSeconds(4f);
+            yield return new WaitForSeconds(8f);
             DumpNodes(dir, "nodes-short.txt", vessel, mark);
             Texts(dir, "ui-short-map.txt");
             yield return shot("m03-short-map");
@@ -118,10 +118,13 @@ namespace OpenSpaceExplorer.Validation
                     mark("BurnVector set via " + (prop != null && prop.CanWrite ? "property" : "field"));
                 }
                 catch (Exception e) { mark("BurnVector failed: " + (e.InnerException ?? e).Message); }
+            // the node's place on the orbit, which UpdateNodeDetails needs (it threw a null reference without it)
+            Call(node, "SetManeuverState", mark, vessel.Orbit);
+            Call(node, "InitializeTransform", mark);
             var m = Maneuvers(mark);
             var add = m?.GetType().GetMethods(Pub).FirstOrDefault(x => x.Name == "AddNodeToVessel" && x.GetParameters().Length == 1);
             if (add != null)
-                try { add.Invoke(m, new[] { node }); mark("node via AddNodeToVessel at UT " + ut.ToString("F0", Inv) + ", prograde " + prograde.ToString("F0", Inv)); return node; }
+                try { add.Invoke(m, new[] { node }); mark("node via AddNodeToVessel at UT " + ut.ToString("F0", Inv) + ", prograde " + prograde.ToString("F0", Inv)); Settle(m, node, mark); return node; }
                 catch (Exception e) { mark("AddNodeToVessel failed: " + (e.InnerException ?? e).GetType().Name + " " + (e.InnerException ?? e).Message + "\n" + (e.InnerException ?? e).StackTrace); }
             // the vessel's own maneuver plan
             var so = vessel.SimulationObject;
@@ -132,12 +135,44 @@ namespace OpenSpaceExplorer.Validation
                 if (plan == null) { mark("SimulationObject." + p.Name + " is null"); continue; }
                 foreach (var am in plan.GetType().GetMethods(Pub).Where(x => x.Name == "AddNode" && x.GetParameters().Length >= 1 && x.GetParameters()[0].ParameterType.IsAssignableFrom(type)))
                 {
-                    var args = am.GetParameters().Select((x, i) => i == 0 ? node : x.ParameterType == typeof(bool) ? (object)true : x.HasDefaultValue ? x.DefaultValue : null).ToArray();
-                    try { am.Invoke(plan, args); mark("node via " + p.Name + ".AddNode at UT " + ut.ToString("F0", Inv) + ", prograde " + prograde.ToString("F0", Inv)); return node; }
+                    // a flag that clears or replaces the other nodes stays off (the first node went when the second came)
+                    var args = am.GetParameters().Select((x, i) => i == 0 ? node
+                        : x.ParameterType == typeof(bool) ? (object)!(x.Name.IndexOf("clear", StringComparison.OrdinalIgnoreCase) >= 0 || x.Name.IndexOf("replace", StringComparison.OrdinalIgnoreCase) >= 0 || x.Name.IndexOf("remove", StringComparison.OrdinalIgnoreCase) >= 0)
+                        : x.HasDefaultValue ? x.DefaultValue : null).ToArray();
+                    mark(p.Name + ".AddNode(" + string.Join(", ", am.GetParameters().Select((x, i) => x.ParameterType.Name + " " + x.Name + "=" + (i == 0 ? "node" : Convert.ToString(args[i], Inv)))) + ")");
+                    try { am.Invoke(plan, args); mark("node via " + p.Name + ".AddNode at UT " + ut.ToString("F0", Inv) + ", prograde " + prograde.ToString("F0", Inv)); Settle(plan, node, mark); Settle(m, node, mark); return node; }
                     catch (Exception e) { mark(p.Name + ".AddNode failed: " + (e.InnerException ?? e).GetType().Name + " " + (e.InnerException ?? e).Message + "\n" + (e.InnerException ?? e).StackTrace); }
                 }
             }
             return null;
+        }
+
+        // Ask KSP2 to work the node out (burn delta-v and duration): UpdateChangeOnNode with its own burn vector,
+        // then RefreshManeuverNodeState for each node index, whichever this object has.
+        static void Settle(object owner, object node, Action<string> mark)
+        {
+            if (owner == null) return;
+            var burn = node.GetType().GetField("BurnVector", Pub)?.GetValue(node);
+            foreach (var u in owner.GetType().GetMethods(Pub).Where(x => x.Name == "UpdateChangeOnNode"))
+            {
+                var ps = u.GetParameters();
+                var args = ps.Select(x => x.ParameterType.IsInstanceOfType(node) ? node : burn != null && x.ParameterType.IsInstanceOfType(burn) ? burn : x.HasDefaultValue ? x.DefaultValue : null).ToArray();
+                try { u.Invoke(owner, args); mark(owner.GetType().Name + ".UpdateChangeOnNode(" + string.Join(",", ps.Select(x => x.ParameterType.Name)) + ") ok"); }
+                catch (Exception e) { mark(owner.GetType().Name + ".UpdateChangeOnNode(" + string.Join(",", ps.Select(x => x.ParameterType.Name)) + ") failed: " + (e.InnerException ?? e).GetType().Name + " " + (e.InnerException ?? e).Message); }
+            }
+            var refresh = owner.GetType().GetMethods(Pub).FirstOrDefault(x => x.Name == "RefreshManeuverNodeState" && x.GetParameters().Length == 1);
+            if (refresh != null)
+                for (int i = 0; i < 2; i++)
+                    try { refresh.Invoke(owner, new object[] { i }); }
+                    catch (Exception e) { mark("RefreshManeuverNodeState(" + i + ") failed: " + (e.InnerException ?? e).Message); }
+        }
+
+        static void Call(object o, string name, Action<string> mark, params object[] args)
+        {
+            var m = o.GetType().GetMethods(Pub).FirstOrDefault(x => x.Name == name && x.GetParameters().Length == args.Length);
+            if (m == null) { mark("no " + o.GetType().Name + "." + name); return; }
+            try { m.Invoke(o, args); mark(o.GetType().Name + "." + name + " ok"); }
+            catch (Exception e) { mark(o.GetType().Name + "." + name + " failed: " + (e.InnerException ?? e).GetType().Name + " " + (e.InnerException ?? e).Message); }
         }
 
         static bool Map(string name, Action<string> mark)
