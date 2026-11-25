@@ -30,26 +30,33 @@ namespace OpenSpaceExplorer.Validation
             vessel.SetAutopilotEnableDisable(true);
             yield return new WaitForSeconds(5f);
             DumpDeltaV(dir, "deltav-start.txt", vessel);
+            Api(dir, vessel);
             yield return shot("m00-orbit-flight");
 
+            // KSP2 makes a node's gizmo as it is added, which needs the map: plan with the map open
             double ut = G.UniverseModel.UniverseTime;
+            bool map = Map("EnableFlightMap", mark);
+            yield return new WaitForSeconds(4f);
             object small = AddNode(vessel, ut + 600, 50, mark);
             yield return new WaitForSeconds(4f);
             DumpNodes(dir, "nodes-small.txt", vessel, mark);
-            Texts(dir, "ui-small-flight.txt");
-            yield return shot("m01-small-flight");
-            bool map = ToggleMap(dir, mark);
-            yield return new WaitForSeconds(4f);
             Texts(dir, "ui-small-map.txt");
-            yield return shot("m02-small-map");
+            yield return shot("m01-small-map");
+            Map("DisableMap", mark);
+            yield return new WaitForSeconds(4f);
+            Texts(dir, "ui-small-flight.txt");
+            yield return shot("m02-small-flight");
 
             // far more than any stock stage holds: the second node, after the first
+            Map("EnableFlightMap", mark);
+            yield return new WaitForSeconds(4f);
             object big = AddNode(vessel, ut + 1500, 20000, mark);
             yield return new WaitForSeconds(4f);
             DumpNodes(dir, "nodes-short.txt", vessel, mark);
             Texts(dir, "ui-short-map.txt");
             yield return shot("m03-short-map");
-            if (map) { ToggleMap(dir, mark); yield return new WaitForSeconds(4f); }
+            Map("DisableMap", mark);
+            yield return new WaitForSeconds(4f);
             Texts(dir, "ui-short-flight.txt");
             yield return shot("m04-short-flight");
             DumpDeltaV(dir, "deltav-end.txt", vessel);
@@ -64,32 +71,82 @@ namespace OpenSpaceExplorer.Validation
             return m;
         }
 
+        static Type NodeType => typeof(VesselComponent).Assembly.GetTypes().FirstOrDefault(t => t.Name == "ManeuverNodeData");
+
+        static string Members(Type t) => t == null ? "null" : t.FullName + "\n" + string.Join("\n",
+            t.GetProperties(Pub).Select(p => "  prop " + p.PropertyType.Name + " " + p.Name + (p.CanWrite ? " (set)" : ""))
+            .Concat(t.GetFields(Pub).Select(f => "  field " + f.FieldType.Name + " " + f.Name))
+            .Concat(t.GetMethods(Pub).Where(m => !m.IsSpecialName).Select(m => "  method " + m.ReturnType.Name + " " + m.Name + "(" + string.Join(",", m.GetParameters().Select(x => x.ParameterType.Name)) + ")")));
+
+        // What this build offers for maneuvers: the node type, the maneuver store, and the vessel's maneuver members.
+        static void Api(string dir, VesselComponent vessel)
+        {
+            var sb = new StringBuilder();
+            try
+            {
+                sb.AppendLine(Members(NodeType));
+                sb.AppendLine(Members(G.SpaceSimulation?.GetType().GetProperty("Maneuvers", Pub)?.PropertyType));
+                var so = vessel.SimulationObject;
+                foreach (var p in so.GetType().GetProperties(Pub).Where(p => p.Name.Contains("Maneuver")))
+                    sb.AppendLine("SimulationObject." + p.Name + ": " + Members(p.PropertyType));
+                foreach (var p in vessel.GetType().GetProperties(Pub).Where(p => p.Name.Contains("Maneuver")))
+                    sb.AppendLine("VesselComponent." + p.Name + ": " + Members(p.PropertyType));
+            }
+            catch (Exception e) { sb.AppendLine("failed: " + e); }
+            File.WriteAllText(Path.Combine(dir, "out", "maneuver-api.txt"), sb.ToString());
+        }
+
         static object AddNode(VesselComponent vessel, double ut, double prograde, Action<string> mark)
         {
-            var type = typeof(VesselComponent).Assembly.GetTypes().FirstOrDefault(t => t.Name == "ManeuverNodeData");
+            var type = NodeType;
             if (type == null) { mark("no ManeuverNodeData type"); return null; }
-            var id = vessel.SimulationObject.GlobalId;
             var ctor = type.GetConstructors().FirstOrDefault(c => c.GetParameters().Length == 3);
-            mark("ManeuverNodeData ctors: " + string.Join(" | ", type.GetConstructors().Select(c => string.Join(",", c.GetParameters().Select(p => p.ParameterType.Name + " " + p.Name)))));
             if (ctor == null) return null;
             object node;
-            try { node = ctor.Invoke(new object[] { id, false, ut }); }
-            catch (Exception e) { mark("ManeuverNodeData ctor failed: " + e.InnerException?.Message); return null; }
-            var burn = type.GetProperty("BurnVector", Pub);
-            if (burn != null)
-            {
-                // KSP2's burn vector: x radial, y normal, z prograde
-                var v = Activator.CreateInstance(burn.PropertyType, 0.0, 0.0, prograde);
-                burn.SetValue(node, v);
-            }
-            else mark("no ManeuverNodeData.BurnVector");
+            try { node = ctor.Invoke(new object[] { vessel.SimulationObject.GlobalId, false, ut }); }
+            catch (Exception e) { mark("ManeuverNodeData ctor failed: " + (e.InnerException ?? e).Message); return null; }
+            // KSP2's burn vector: x radial, y normal, z prograde (a property or a field, by build)
+            var prop = type.GetProperty("BurnVector", Pub);
+            var field = type.GetField("BurnVector", Pub);
+            var vt = prop?.PropertyType ?? field?.FieldType;
+            if (vt == null) mark("no ManeuverNodeData.BurnVector (see maneuver-api.txt)");
+            else
+                try
+                {
+                    var v = Activator.CreateInstance(vt, 0.0, 0.0, prograde);
+                    if (prop != null && prop.CanWrite) prop.SetValue(node, v); else field?.SetValue(node, v);
+                    mark("BurnVector set via " + (prop != null && prop.CanWrite ? "property" : "field"));
+                }
+                catch (Exception e) { mark("BurnVector failed: " + (e.InnerException ?? e).Message); }
             var m = Maneuvers(mark);
             var add = m?.GetType().GetMethods(Pub).FirstOrDefault(x => x.Name == "AddNodeToVessel" && x.GetParameters().Length == 1);
-            if (add == null) { mark("no AddNodeToVessel: " + string.Join(",", m?.GetType().GetMethods(Pub).Select(x => x.Name).Distinct() ?? new string[0])); return null; }
-            try { add.Invoke(m, new[] { node }); }
-            catch (Exception e) { mark("AddNodeToVessel failed: " + e.InnerException?.Message); return null; }
-            mark("node at UT " + ut.ToString("F0", Inv) + ", prograde " + prograde.ToString("F0", Inv) + " m/s");
-            return node;
+            if (add != null)
+                try { add.Invoke(m, new[] { node }); mark("node via AddNodeToVessel at UT " + ut.ToString("F0", Inv) + ", prograde " + prograde.ToString("F0", Inv)); return node; }
+                catch (Exception e) { mark("AddNodeToVessel failed: " + (e.InnerException ?? e).GetType().Name + " " + (e.InnerException ?? e).Message + "\n" + (e.InnerException ?? e).StackTrace); }
+            // the vessel's own maneuver plan
+            var so = vessel.SimulationObject;
+            foreach (var p in so.GetType().GetProperties(Pub).Where(p => p.Name.Contains("Maneuver")))
+            {
+                object plan;
+                try { plan = p.GetValue(so); } catch { continue; }
+                if (plan == null) { mark("SimulationObject." + p.Name + " is null"); continue; }
+                foreach (var am in plan.GetType().GetMethods(Pub).Where(x => x.Name == "AddNode" && x.GetParameters().Length >= 1 && x.GetParameters()[0].ParameterType.IsAssignableFrom(type)))
+                {
+                    var args = am.GetParameters().Select((x, i) => i == 0 ? node : x.ParameterType == typeof(bool) ? (object)true : x.HasDefaultValue ? x.DefaultValue : null).ToArray();
+                    try { am.Invoke(plan, args); mark("node via " + p.Name + ".AddNode at UT " + ut.ToString("F0", Inv) + ", prograde " + prograde.ToString("F0", Inv)); return node; }
+                    catch (Exception e) { mark(p.Name + ".AddNode failed: " + (e.InnerException ?? e).GetType().Name + " " + (e.InnerException ?? e).Message + "\n" + (e.InnerException ?? e).StackTrace); }
+                }
+            }
+            return null;
+        }
+
+        static bool Map(string name, Action<string> mark)
+        {
+            var map = G.GetType().GetProperty("Map", Pub)?.GetValue(G);
+            var m = map?.GetType().GetMethods(Pub).FirstOrDefault(x => x.Name == name && x.GetParameters().All(p => p.HasDefaultValue));
+            if (m == null) { mark("no Map." + name); return false; }
+            try { m.Invoke(map, m.GetParameters().Select(p => p.DefaultValue).ToArray()); mark("map: " + name); return true; }
+            catch (Exception e) { mark("map " + name + " failed: " + (e.InnerException ?? e).Message); return false; }
         }
 
         static void DumpNodes(string dir, string file, VesselComponent vessel, Action<string> mark)
@@ -105,25 +162,6 @@ namespace OpenSpaceExplorer.Validation
             else sb.AppendLine("no GetNodesForVessel");
             File.WriteAllText(Path.Combine(dir, "out", file), sb.ToString());
             mark(file + ": " + i + " nodes");
-        }
-
-        // The map toggle: whatever this build calls it, on the game's Map object (every method name goes to map-api.txt).
-        static bool ToggleMap(string dir, Action<string> mark)
-        {
-            var map = G.GetType().GetProperty("Map", Pub)?.GetValue(G);
-            if (map == null) { mark("no Game.Map"); return false; }
-            var methods = map.GetType().GetMethods(Pub);
-            File.WriteAllText(Path.Combine(dir, "out", "map-api.txt"),
-                string.Join("\n", methods.Select(x => x.ReturnType.Name + " " + x.Name + "(" + string.Join(",", x.GetParameters().Select(p => p.ParameterType.Name)) + ")")));
-            foreach (var name in new[] { "ToggleMap", "ToggleMapView", "OpenMap", "ShowMap", "EnterMapView" })
-            {
-                var m = methods.FirstOrDefault(x => x.Name == name && x.GetParameters().Length == 0);
-                if (m == null) continue;
-                try { m.Invoke(map, null); mark("map: " + name); return true; }
-                catch (Exception e) { mark("map " + name + " failed: " + e.InnerException?.Message); }
-            }
-            mark("no map toggle found (see map-api.txt)");
-            return false;
         }
 
         // Every active TextMeshPro text on screen with its hierarchy path.
