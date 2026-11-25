@@ -267,9 +267,10 @@ fn place_as_ksp2(
 }
 
 /// The climb after rotation, SAS holding: from KSP2's state at the start of the climb (68 m/s, nose 10.8
-/// degrees up, full throttle) SAS trims the elevons as KSP2's does (within half a degree once settled) and the
-/// jet settles a little flatter (about 4 degrees against KSP2's 6, a difference from the first seconds' SAS
-/// transient; it held about 12 before the authority limit was resolved).
+/// degrees up and still pitching up at 0.45 rad/s from the rotation, full throttle) SAS checks the swing and
+/// trims the elevons as KSP2's does, and the jet climbs as KSP2's: the nose within 0.6 degrees, the elevons
+/// within 0.35 and the speed within 2 m/s for 19 s (it held about 12 degrees before the authority limit was
+/// resolved; started without the rotation's spin it settled 2 degrees flatter).
 #[test]
 fn ksp2_jet_climb_hold_trims_the_elevons_as_in_ksp2() {
     let (c, _, _) = jet();
@@ -288,6 +289,11 @@ fn ksp2_jet_climb_hold_trims_the_elevons_as_in_ksp2() {
         u.step();
     }
     place_as_ksp2(&mut u, v, spin, radius, &surfaces, &trace, t0);
+    // still pitching up from the rotation at 0.452 rad/s (KSP2's cockpit spin at 19.70 s)
+    let mut p = u.powered(v).unwrap().clone();
+    let cx = flight::control_basis(&p).0;
+    p.angvel = cx * 0.452;
+    u.set_powered(v, p);
     let at = |rows: &[Row], t: f64| -> Row {
         rows.iter()
             .min_by(|a, b| (num(a, "t") - t).abs().total_cmp(&(num(b, "t") - t).abs()))
@@ -311,12 +317,12 @@ fn ksp2_jet_climb_hold_trims_the_elevons_as_in_ksp2() {
             if t - t0 >= 3.0 {
                 let ksp2 = num(&at(&surfaces, t), "deflection_deg");
                 assert!(
-                    (elevon - ksp2).abs() < 0.5,
+                    (elevon - ksp2).abs() < 0.35,
                     "{:.1} s: elevon {elevon:.2} vs KSP2 {ksp2:.2}",
                     t - t0
                 );
                 assert!(
-                    (pitch - num(&kt, "pitch_deg")).abs() < 3.0,
+                    (pitch - num(&kt, "pitch_deg")).abs() < 0.8,
                     "{:.1} s: pitch {pitch:.2} vs KSP2 {:.2}",
                     t - t0,
                     num(&kt, "pitch_deg")
