@@ -21,11 +21,11 @@ namespace OpenSpaceExplorer.Validation
     //   land    Stock04_Jet (craft-jet.json) takes off from Runway_1, climbs to 25 m over the ground, throttle
     //           cut, and is flown down onto the runway (pitch held to sink at 1.5 m/s), gear down; 15 s rolling.
     //   belly   the same with the gear raised before the descent: it lands on its belly.
-    //   tail    rolls at full throttle to 45 m/s (it lifts off at about 50), cuts the throttle, then pulls full stick
-    //           back while it slows; once the nose is 12 degrees up or it lifts off, the stick is centred, so it
-    //           sits back on its tail rather than flying. (Run 2 cut as it lifted at 50 m/s and nosed over; run 3
-    //           held 18 degrees from 25 m and climbed to 470 m; run 4 cut at 8 degrees but 52 m/s with the stick
-    //           still back, climbed to 49 m and fell through nose first.)
+    //   tail    rolls at full throttle to 38 m/s, cuts the throttle and holds the stick full back until it is down
+    //           to 8 m/s: too slow to fly away, it rotates on its main gear until the tail meets the runway.
+    //           (Run 2 cut as it lifted at 50 m/s and nosed over; run 3 held 18 degrees from 25 m and climbed to
+    //           470 m; run 4 cut at 52 m/s with the stick back and climbed to 49 m; run 5 centred the stick at
+    //           12 degrees and 52 m/s, hopped and rolled out on its wheels.)
     //   stack   the drop stack (craft-drop-stack.json: pod, tanks, Swivel) set down upright on Runway_1 at 4 m/s.
     // Only inputs and action groups are used; physics is never modified.
     public static class GroundStrike
@@ -255,36 +255,26 @@ namespace OpenSpaceExplorer.Validation
                 if (mode == "tail")
                 {
                     t0 = 0;
-                    while (t0 < 90 && (G.ViewController.GetActiveSimVessel()?.SrfSpeedMagnitude ?? 0) < 45) { t0 += Time.deltaTime; yield return null; }
+                    while (t0 < 90 && (G.ViewController.GetActiveSimVessel()?.SrfSpeedMagnitude ?? 0) < 38) { t0 += Time.deltaTime; yield return null; }
                     input.OverrideInputThrottleCutoff(true);
-                    Phase("cut");
                     InputHolder.Pitch = 1f;
-                    Phase("rotate");
-                    t0 = 0;
-                    while (t0 < 20)
-                    {
-                        var v = G.ViewController.GetActiveSimVessel();
-                        if (v == null || v.Pitch_HorizonRelative > 12 || v.Situation == VesselSituations.Flying) break;
-                        t0 += Time.deltaTime; yield return null;
-                    }
-                    InputHolder.Pitch = 0f;
-                    var at = G.ViewController.GetActiveSimVessel();
-                    Phase("centred at pitch " + (at?.Pitch_HorizonRelative ?? 0).ToString("F1", Inv) + " " + (at?.SrfSpeedMagnitude ?? 0).ToString("F1", Inv) + " m/s " + (at?.Situation.ToString() ?? "?"));
-                    // it slows on its main gear and tail, or settles back onto them
+                    Phase("cut and rotate");
                     t0 = 0;
                     bool flying = false;
-                    while (t0 < 20)
+                    double maxPitch = -90;
+                    while (t0 < 40)
                     {
                         var v = G.ViewController.GetActiveSimVessel();
                         if (v == null) break;
+                        maxPitch = Math.Max(maxPitch, v.Pitch_HorizonRelative);
                         if (v.Situation == VesselSituations.Flying) flying = true;
                         else if (flying) { Phase("struck"); flying = false; }
-                        if (v.SrfSpeedMagnitude < 2) break;
+                        if (v.SrfSpeedMagnitude < 8) break;
                         t0 += Time.deltaTime; yield return null;
                     }
                     InputHolder.Pitch = null;
                     SetGroup(KSPActionGroup.Brakes, true);
-                    Phase("after");
+                    Phase("after (pitch peaked at " + maxPitch.ToString("F1", Inv) + ")");
                     yield return new WaitForSeconds(5f);
                     goto done;
                 }
