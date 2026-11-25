@@ -1065,10 +1065,14 @@ fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
                 orbit: elements(&orbit),
                 on_rails: u.powered(e).is_none(),
                 flight: flight_readout(u, e, body, &s.parts).map(|mut f| {
-                    // the staging list from the vessel as it is now, here
-                    if let (Some(craft), Some(p)) = (u.current_craft(e), u.powered(e)) {
+                    // the staging list from the vessel as it is now, here: also on rails, where a
+                    // maneuver is planned (its burn time and whether the stages hold it need the list)
+                    let r = u
+                        .powered(e)
+                        .map(|p| p.r.length())
+                        .unwrap_or_else(|| orbit.state_at(u.ut()).0.length());
+                    if let Some(craft) = u.current_craft(e) {
                         let b = u.world.get::<ose_sim::bodies::Body>(body);
-                        let r = p.r.length();
                         let g = b.map(|b| b.mu / (r * r)).unwrap_or(0.0);
                         let atm = u
                             .atmosphere(body)

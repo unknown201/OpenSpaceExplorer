@@ -968,25 +968,115 @@ pub fn tracker_html(
 /// GetStartBurnTime` counts down to the node's time and the burn then runs for `BurnDuration`).
 /// `full_thrust_kn` 0 leaves the length unknown.
 pub fn burn_text(to_node_s: f64, dv_mps: f64, mass_t: f64, full_thrust_kn: f64) -> String {
-    let burn = if full_thrust_kn > 0.0 {
-        Some(dv_mps * mass_t / full_thrust_kn)
-    } else {
-        None
-    };
-    let start = to_node_s;
-    match burn {
+    let burn = (full_thrust_kn > 0.0).then(|| dv_mps * mass_t / full_thrust_kn);
+    burn_line(to_node_s, dv_mps, burn, 0.0)
+}
+
+/// The burn timer's line: the countdown to the node, its delta-v and how long it burns at full throttle, and
+/// what the stages lack when they run dry first (the original's not-enough-delta-v warning).
+pub fn burn_line(to_node_s: f64, dv_mps: f64, burn_s: Option<f64>, short_mps: f64) -> String {
+    let mut text = match burn_s {
         Some(b) => format!(
-            "Burn {} \u{b7} \u{394}v {:.0} m/s \u{b7} {:.0} s at full throttle",
-            fmt_dt(start),
+            "Burn {} \u{b7} \u{394}v {:.0} m/s \u{b7} {} at full throttle",
+            fmt_dt(to_node_s),
             dv_mps,
-            b
+            fmt_burn(b)
         ),
         None => format!(
             "Node {} \u{b7} \u{394}v {:.0} m/s \u{b7} throttle up to time the burn",
             fmt_dt(to_node_s),
             dv_mps
         ),
+    };
+    if short_mps >= SHORT_MPS {
+        text.push_str(&format!(
+            " \u{b7} not enough \u{394}v: {short_mps:.0} m/s short"
+        ));
     }
+    text
+}
+
+/// Below this the stages are taken to cover the node (rounding in the stage readout).
+pub const SHORT_MPS: f64 = 0.5;
+
+/// A burn's length: seconds under two minutes, then minutes and seconds.
+pub fn fmt_burn(s: f64) -> String {
+    let s = s.max(0.0);
+    if s < 120.0 {
+        format!("{s:.0} s")
+    } else {
+        let s = s.round() as u64;
+        format!("{}m {:02}s", s / 60, s % 60)
+    }
+}
+
+/// How a planned burn falls on the stages, as the original's maneuver burn estimate: the time to deliver
+/// it at full throttle and what is missing when the stages run dry first.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BurnEstimate {
+    pub seconds: f64,
+    pub short_mps: f64,
+}
+
+/// Fire the stages in order (the highest stage id first, as staging goes), each at full thrust with its
+/// mass falling as it burns: skip the delta-v the nodes before this one use (`before_mps`), then time
+/// `dv_mps`. A stage delivers the delta-v the readout gives where the vessel is now (vacuum when it has no
+/// figure for here). None when no stage has an engine and propellant.
+pub fn burn_estimate(
+    stages: &[ose_net::StageReadout],
+    before_mps: f64,
+    dv_mps: f64,
+) -> Option<BurnEstimate> {
+    let mut order: Vec<&ose_net::StageReadout> = stages
+        .iter()
+        .filter(|s| stage_dv(s) > 0.0 && s.burn_time_s > 0.0)
+        .collect();
+    if order.is_empty() {
+        return None;
+    }
+    order.sort_by_key(|s| std::cmp::Reverse(s.stage_id));
+    let mut skip = before_mps.max(0.0);
+    let mut want = dv_mps.max(0.0);
+    let mut seconds = 0.0;
+    for s in order {
+        let total = stage_dv(s);
+        let used = skip.min(total);
+        skip -= used;
+        let take = want.min(total - used);
+        if take <= 0.0 {
+            continue;
+        }
+        seconds += stage_time(s, used + take) - stage_time(s, used);
+        want -= take;
+        if want <= 0.0 {
+            break;
+        }
+    }
+    Some(BurnEstimate {
+        seconds,
+        short_mps: want,
+    })
+}
+
+fn stage_dv(s: &ose_net::StageReadout) -> f64 {
+    if s.delta_v_now_mps > 0.0 {
+        s.delta_v_now_mps
+    } else {
+        s.delta_v_vacuum_mps
+    }
+}
+
+/// Seconds at full thrust for a stage to deliver its first `dv` m/s: mass flow is steady, so the mass left
+/// falls as exp(-dv / exhaust speed) (the rocket equation), linear when the readout has no mass change.
+fn stage_time(s: &ose_net::StageReadout, dv: f64) -> f64 {
+    let total = stage_dv(s);
+    let (m0, m1) = (s.start_mass_t, s.end_mass_t);
+    if m0 <= m1 || m1 <= 0.0 || total <= 0.0 {
+        return s.burn_time_s * (dv / total.max(1e-9)).min(1.0);
+    }
+    let ve = total / (m0 / m1).ln();
+    let flow = (m0 - m1) / s.burn_time_s;
+    (m0 - m0 * (-dv.min(total) / ve).exp()) / flow
 }
 
 /// The part window in flight (right click a part, the original's PAM): name, temperature, crew, parachute
@@ -2410,6 +2500,58 @@ mod tests {
         assert!(t.starts_with("Burn T-1:10"), "{t}");
         assert!(t.contains("20 s"));
         assert!(burn_text(70.0, 100.0, 10.0, 0.0).starts_with("Node T-1:10"));
+    }
+
+    fn stage(id: u32, m0: f64, m1: f64, dv: f64, t: f64) -> ose_net::StageReadout {
+        ose_net::StageReadout {
+            stage_id: id,
+            start_mass_t: m0,
+            end_mass_t: m1,
+            delta_v_vacuum_mps: dv,
+            burn_time_s: t,
+            thrust_kn: 0.0,
+            thrust_asl_kn: 0.0,
+            twr_asl: 0.0,
+            thrust_now_kn: 0.0,
+            twr_now: 0.0,
+            delta_v_now_mps: 0.0,
+        }
+    }
+
+    #[test]
+    fn burn_estimate_follows_the_rocket_equation_across_stages() {
+        // 10 t to 5 t over 100 s with ve 1000 m/s: dv = 1000 ln 2 = 693 m/s
+        let dv = 1000.0 * 2f64.ln();
+        let upper = stage(0, 10.0, 5.0, dv, 100.0);
+        // half the delta-v leaves m0 / sqrt 2: (10 - 7.07) / 0.05 t/s = 58.6 s, not half the burn
+        let e = burn_estimate(std::slice::from_ref(&upper), 0.0, dv / 2.0).unwrap();
+        assert!((e.seconds - 58.58).abs() < 0.05, "{e:?}");
+        assert_eq!(e.short_mps, 0.0);
+        // the same half after another node took the first half: the rest of the burn
+        let e = burn_estimate(std::slice::from_ref(&upper), dv / 2.0, dv / 2.0).unwrap();
+        assert!((e.seconds - 41.42).abs() < 0.05, "{e:?}");
+        // a lower stage fires first (highest id), the upper one finishes the burn
+        let lower = stage(1, 20.0, 12.0, 400.0, 40.0);
+        let e = burn_estimate(&[upper.clone(), lower], 0.0, 400.0 + dv).unwrap();
+        assert!((e.seconds - 140.0).abs() < 1e-6, "{e:?}");
+        // asking for more than both hold: what is missing
+        let lower = stage(1, 20.0, 12.0, 400.0, 40.0);
+        let e = burn_estimate(&[upper, lower], 100.0, 1000.0).unwrap();
+        assert!(
+            (e.short_mps - (100.0 + 1000.0 - 400.0 - dv)).abs() < 1e-6,
+            "{e:?}"
+        );
+        // no engines or propellant: no estimate
+        assert!(burn_estimate(&[stage(0, 1.0, 1.0, 0.0, 0.0)], 0.0, 10.0).is_none());
+    }
+
+    #[test]
+    fn burn_line_warns_when_the_stages_run_dry() {
+        let t = burn_line(70.0, 300.0, Some(150.0), 42.4);
+        assert!(t.starts_with("Burn T-1:10"), "{t}");
+        assert!(t.contains("2m 30s at full throttle"), "{t}");
+        assert!(t.ends_with("not enough \u{394}v: 42 m/s short"), "{t}");
+        assert!(!burn_line(70.0, 300.0, Some(15.0), 0.2).contains("short"));
     }
 
     #[test]

@@ -27,6 +27,21 @@ test('planning modifier arrows preserve the burn, warp can be stopped, and the o
     (el as HTMLInputElement).value = '40.7';
     el.dispatchEvent(new Event('input', { bubbles: true }));
   });
+  // The panel gives the node's delta-v and its burn time on the stages, and warns when they run dry first.
+  const summary = page.locator('[data-ose="node-summary"]');
+  await expect(summary).toHaveText(/^Δv 40\.7 m\/s · burn \d+ s$/);
+  await expect(summary).not.toHaveClass(/short/);
+  await range.evaluate(el => {
+    (el as HTMLInputElement).value = '1500';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await expect(summary).toHaveText(/^Δv 1500\.0 m\/s · burn .+ · not enough Δv: \d+ m\/s short$/);
+  await expect(summary).toHaveClass(/short/);
+  await range.evaluate(el => {
+    (el as HTMLInputElement).value = '40.7';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await expect(summary).not.toHaveClass(/short/);
   const time = page.locator('#node-dt');
   const originalUT = Number(await node.getAttribute('data-ose-ut'));
   await time.focus();
