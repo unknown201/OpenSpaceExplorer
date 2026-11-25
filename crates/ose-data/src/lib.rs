@@ -563,6 +563,51 @@ pub struct Jetpack {
     pub reset_threshold_deg_s: f64,
     pub propellant: String,
     pub isp_curve: Curve,
+    /// `JetpackAlignToCamera*` and `GroundAndSeaHighAltitude`.
+    #[serde(default)]
+    pub align: JetpackAlign,
+}
+
+/// How a flying Kerbal turns to face the camera (`Data_Kerbal.JetpackAlignToCamera*`): an angle off the
+/// camera between `min_angle_deg` and `max_angle_deg` becomes a turn input between `min_input` and
+/// `max_input`; below `min_angle_deg` it stops. Above `high_altitude_m` (`GroundAndSeaHighAltitude`) from
+/// both sea and ground it lines up in pitch and roll too, not only in heading.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct JetpackAlign {
+    pub enabled: bool,
+    pub min_angle_deg: f64,
+    pub max_angle_deg: f64,
+    pub min_input: f64,
+    pub max_input: f64,
+    pub high_altitude_m: f64,
+}
+
+impl Default for JetpackAlign {
+    fn default() -> Self {
+        // the installed eva_kerbal's Data_Kerbal
+        Self {
+            enabled: true,
+            min_angle_deg: 3.0,
+            max_angle_deg: 60.0,
+            min_input: 0.01,
+            max_input: 1.0,
+            high_altitude_m: 3500.0,
+        }
+    }
+}
+
+impl JetpackAlign {
+    /// `ApplyAngleAsRotateInput`: the turn input for an angle off the camera, degrees (signed), or `None`
+    /// within `min_angle_deg`.
+    pub fn input(&self, angle_deg: f64) -> Option<f64> {
+        let a = angle_deg.abs();
+        if a <= self.min_angle_deg {
+            return None;
+        }
+        let span = (self.max_angle_deg - self.min_angle_deg).max(1e-9);
+        let k = ((a - self.min_angle_deg) / span).clamp(0.0, 1.0);
+        Some((self.min_input + (self.max_input - self.min_input) * k) * angle_deg.signum())
+    }
 }
 
 impl Default for Jetpack {
@@ -592,6 +637,7 @@ impl Default for Jetpack {
                 })
                 .collect(),
             },
+            align: JetpackAlign::default(),
         }
     }
 }

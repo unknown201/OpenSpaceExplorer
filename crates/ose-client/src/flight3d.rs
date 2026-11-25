@@ -726,6 +726,9 @@ pub struct FlightView {
     /// The compass heading the camera looks along (degrees, clockwise from north), from the last frame: a
     /// Kerbal on the ground walks relative to it, as the original's.
     pub look_heading_deg: Option<f64>,
+    /// The camera's forward and up from the last frame in the vessel's own axes (right, facing, roll
+    /// reference): a Kerbal's jetpack pushes along the camera and turns to face it (protocol 82).
+    pub look_local: Option<(DVec3, DVec3)>,
     /// Part boxes relative to the camera (craft part index, min, max) and the camera's forward and up from
     /// the last frame, for picking a part under the pointer (the part window on right click).
     pick_boxes: Vec<(usize, DVec3, DVec3)>,
@@ -869,6 +872,7 @@ impl FlightView {
             gimbals: HashMap::new(),
             agl_m: None,
             look_heading_deg: None,
+            look_local: None,
             pick_boxes: Vec::new(),
             pick_poses: Vec::new(),
             hovered: None,
@@ -1329,6 +1333,11 @@ impl FlightView {
             + self.pitch.sin() * b_u;
         self.cam_frame = Some((mode, offs));
         let look = -offs - up * (-offs).dot(up);
+        self.look_local = (z.length() > 0.5).then(|| {
+            let right = dir.cross(z);
+            let local = |v: DVec3| DVec3::new(v.dot(right), v.dot(dir), v.dot(z));
+            (local(-offs), local(cam_up))
+        });
         self.look_heading_deg = (look.length() > 1e-3).then(|| {
             look.dot(east)
                 .atan2(look.dot(north))

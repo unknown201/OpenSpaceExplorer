@@ -600,6 +600,14 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                             reset_threshold_deg_s: f(o, "JetpackRotateResetAngularSpeedThreshold"),
                             propellant: s(&o["JetpackPropellantDefinition"], "mixtureName"),
                             isp_curve: curve(&o["JetpackAtmosphereCurve"]),
+                            align: ose_data::JetpackAlign {
+                                enabled: b(o, "JetpackAlignToCameraEnabled"),
+                                min_angle_deg: f(o, "JetpackAlignToCameraMinAngle"),
+                                max_angle_deg: f(o, "JetpackAlignToCameraMaxAngle"),
+                                min_input: f(o, "JetpackAlignToCameraMinRotateInput"),
+                                max_input: f(o, "JetpackAlignToCameraMaxRotateInput"),
+                                high_altitude_m: f(o, "GroundAndSeaHighAltitude"),
+                            },
                         });
                     }
                     if entry["Name"] == "Data_RCS" {
