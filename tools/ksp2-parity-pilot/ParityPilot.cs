@@ -212,7 +212,7 @@ namespace OpenSpaceExplorer.Validation
                 yield return new WaitForSecondsRealtime(4f);
                 yield return Shot("v1-ksc-night-before-vab");
             }
-            bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking" || scenario == "thrustwarp" || scenario == "warp" || scenario == "burn" || scenario == "jetpack" || scenario == "evaorbit" || scenario.StartsWith("reentryorbit ");
+            bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking" || scenario == "thrustwarp" || scenario == "warp" || scenario == "burn" || scenario == "maneuver" || scenario == "jetpack" || scenario == "evaorbit" || scenario.StartsWith("reentryorbit ");
             var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario.StartsWith("reentryorbit ") ? ReentryOrbit.Craft(scenario.Split(' ')[1]) : scenario == "rcs" ? "craft-rcs.json" : (scenario == "jet" || scenario == "jetfly") ? "craft-jet.json" : scenario == "rover" ? "craft-rover.json" : (scenario == "legs" || scenario == "legsrunway") ? "craft-legs.json" : scenario == "fuelline" ? "craft-fuelline.json" : scenario == "crossfeed" ? "craft-crossfeed.json" : scenario == "asparagus" ? "craft-asparagus.json" : (scenario == "struts" || scenario == "strutslong") ? "craft-struts.json" : scenario == "transfer" ? "craft-crossfeed.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "fairings" ? "craft-fairing.json" : scenario == "docking" ? "craft-docking.json" : scenario == "procparts" ? "craft-drop-pod.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : scenario.StartsWith("sepland ") ? "craft-sepland.json" : (orbital || (scenario.StartsWith("eva") && scenario != "eva")) ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
@@ -266,6 +266,7 @@ namespace OpenSpaceExplorer.Validation
             if (scenario.StartsWith("reentryorbit ")) { yield return ReentryOrbit.Run(vessel, dir, Mark, (v, f) => Begin(v, f), Stop, scenario.EndsWith(" free")); yield return Finish("reentryorbit"); yield break; }
             if (scenario == "warp") { yield return OrbitScenarios.Warp(vessel, dir, Mark); yield return Finish("warp"); yield break; }
             if (scenario == "burn") { yield return OrbitScenarios.Burn(vessel, dir, Mark); yield return Finish("burn"); yield break; }
+            if (scenario == "maneuver") { yield return ManeuverScenario.Run(vessel, dir, Mark, Shot); yield return Finish("maneuver"); yield break; }
             if (scenario == "jetpack") { yield return OrbitScenarios.Jetpack(vessel, dir, Mark, (v, f) => Begin(v, f), Stop); yield return Finish("jetpack"); yield break; }
             // before the orbital catch-all below, which would fly the rotation run instead
             if (scenario.StartsWith("eva") && scenario.Length > 3 && scenario != "eva") { yield return EvaCompare.Run(vessel, dir, scenario.Substring(3), Mark); yield return Finish(scenario); yield break; }
