@@ -591,6 +591,21 @@ impl Universe {
 
     /// RCS translation input in craft axes (x right, y fore, z top; -1..1 each, held until changed); false
     /// without a powered vessel.
+    /// The player's camera for a Kerbal's jetpack: forward and up in the vessel's inertial frame, or `None`.
+    pub fn set_eva_camera(&mut self, e: Entity, camera: Option<(DVec3, DVec3)>) -> bool {
+        match self.world.get_mut::<flight::Powered>(e) {
+            Some(mut p) if p.walker => {
+                p.eva_camera = camera.filter(|(f, _)| f.length() > 0.5).and_then(|(f, u)| {
+                    let f = f.normalized();
+                    let u = u - f * u.dot(f);
+                    (u.length() > 1e-3).then(|| (f, u.normalized()))
+                });
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn set_translate(&mut self, e: Entity, t: DVec3) -> bool {
         match self.world.get_mut::<flight::Powered>(e) {
             Some(mut p) => {
