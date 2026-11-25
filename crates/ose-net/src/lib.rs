@@ -934,6 +934,10 @@ pub struct FlightReadout {
     pub flex: Vec<PartFlex>,
     /// Kerbals aboard: (craft part index, name).
     pub crew: Vec<(u16, String)>,
+    /// Crewed parts whose hatch something blocks (KSP2 `IVAPortraitEVAObstacleDetector`): their Kerbals'
+    /// EVA buttons are disabled with "EVA is disabled due to an obstacle.".
+    #[serde(default)]
+    pub eva_blocked: Vec<u16>,
     /// This vessel is a Kerbal on EVA.
     pub eva: bool,
     /// Free docking ports (craft part indices) and docked joints (part docked to, part that docked).

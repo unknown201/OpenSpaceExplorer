@@ -541,6 +541,10 @@ impl Universe {
 
     /// Attach a saved powered-flight state to an existing vessel (restore).
     pub fn set_powered(&mut self, e: Entity, p: flight::Powered) {
+        // a pose set from outside: what its parts touched before is no contact now
+        if let Some(mut st) = self.world.get_mut::<structure::Structure>(e) {
+            st.on_ground.fill(false);
+        }
         self.world.entity_mut(e).insert(p);
     }
 

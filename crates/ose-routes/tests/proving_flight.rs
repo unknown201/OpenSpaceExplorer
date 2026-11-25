@@ -210,6 +210,13 @@ fn records_a_one_way_fuel_run_to_a_depot_and_runs_it_as_a_route() {
     let route = book
         .create_route(1, proving, "")
         .expect("a one-way recording");
+    // Each run flies its own rendezvous, and what its approach burns varies by a few percent of the
+    // monopropellant aboard (0.16 to 0.28 units of about 4 between runs that differ only by a fraction of a
+    // millimetre in how they first stand on the pad). A run that falls short pumps its tank dry and cannot back
+    // away from the station again, so the runs here carry 95% of what the proving flight delivered: their
+    // outcome and what they do next stay the same whichever way that spread falls.
+    let cargo = 0.95 * mono;
+    book.routes[0].cargo.insert("MonoPropellant".into(), cargo);
     let craft = w.u.current_craft(joined).unwrap();
     let index = |guid: &str| craft.parts.iter().position(|p| p.guid == guid).unwrap();
     w.u.transfer_resource(
@@ -294,7 +301,7 @@ fn records_a_one_way_fuel_run_to_a_depot_and_runs_it_as_a_route() {
         .get("MonoPropellant")
         .copied()
         .unwrap_or(0.0);
-    assert!((got - mono).abs() < 0.02 * mono, "{got} vs {mono}");
+    assert!((got - cargo).abs() < 0.02 * cargo, "{got} vs {cargo}");
     // Stay: the run stays docked on the recorded port, so the next one waits for it
     book.set_when_delivered(route, WhenDelivered::Stay).unwrap();
     book.tick(&mut w.u);

@@ -1551,6 +1551,11 @@ fn flight_readout(
             })
             .unwrap_or_default(),
         crew: u.crew(e).into_iter().map(|(i, n)| (i as u16, n)).collect(),
+        eva_blocked: u
+            .eva_blocked_seats(e)
+            .into_iter()
+            .map(|i| i as u16)
+            .collect(),
         eva: u.eva_kerbal(e).is_some(),
         docking_ports: u
             .current_craft(e)

@@ -1,0 +1,401 @@
+{
+  "cabin_1v_m1_crew": {
+    "position": {
+      "x": 0.001852,
+      "y": 1.161,
+      "z": -0.328605
+    },
+    "up": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": -1.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": -1.0,
+      "z": 0.0
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "cabin_2v_crew_hitchhiker": {
+    "position": {
+      "x": 0.001852,
+      "y": 1.325187,
+      "z": 1.507
+    },
+    "up": {
+      "x": 0.0,
+      "y": 1.0,
+      "z": 0.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": -1.0
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "cabin_2v_m2_crew": {
+    "position": {
+      "x": -0.001852,
+      "y": 0.939353,
+      "z": -0.932
+    },
+    "up": {
+      "x": 0.0,
+      "y": 1.0,
+      "z": 0.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 1.0
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "cabin_3v_crew": {
+    "position": {
+      "x": 0.001852,
+      "y": 2.352,
+      "z": 2.086
+    },
+    "up": {
+      "x": 0.0,
+      "y": 1.0,
+      "z": 0.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": -1.0
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "cabin_3v_m3_crew": {
+    "position": {
+      "x": -0.001852,
+      "y": -0.27697,
+      "z": -2.067
+    },
+    "up": {
+      "x": 0.0,
+      "y": 1.0,
+      "z": 0.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 1.0
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "cockpit_1v_m1_crew": {
+    "position": {
+      "x": -0.840168,
+      "y": -0.26735,
+      "z": 0.196306
+    },
+    "up": {
+      "x": -0.541555,
+      "y": -0.0,
+      "z": -0.840665
+    },
+    "forward": {
+      "x": 0.84026,
+      "y": -0.031046,
+      "z": -0.541294
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "cockpit_1v_m1_inline_crew": {
+    "position": {
+      "x": -0.564195,
+      "y": 0.098,
+      "z": -0.584505
+    },
+    "up": {
+      "x": 0.478692,
+      "y": 0.0,
+      "z": -0.877983
+    },
+    "forward": {
+      "x": 0.877983,
+      "y": 0.0,
+      "z": 0.478692
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "cockpit_2v_m2_crew": {
+    "position": {
+      "x": 0.934689,
+      "y": -0.855726,
+      "z": -0.550678
+    },
+    "up": {
+      "x": -0.865993,
+      "y": -0.008625,
+      "z": -0.499981
+    },
+    "forward": {
+      "x": -0.5,
+      "y": -0.0,
+      "z": 0.866025
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "cockpit_2v_m2_inline_crew": {
+    "position": {
+      "x": 0.948188,
+      "y": -0.951661,
+      "z": -0.533926
+    },
+    "up": {
+      "x": -0.865993,
+      "y": -0.008625,
+      "z": -0.499981
+    },
+    "forward": {
+      "x": -0.5,
+      "y": -0.0,
+      "z": 0.866025
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "cockpit_3v_m3_crew": {
+    "position": {
+      "x": -1.826,
+      "y": -0.701,
+      "z": -0.43875
+    },
+    "up": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": -1.0
+    },
+    "forward": {
+      "x": 1.0,
+      "y": 0.0,
+      "z": 0.0
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "cockpit_3v_truck_crew": {
+    "position": {
+      "x": 1.436,
+      "y": -0.414,
+      "z": -0.596151
+    },
+    "up": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": -1.0
+    },
+    "forward": {
+      "x": -1.0,
+      "y": 0.0,
+      "z": 0.0
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "lab_2v_science_marine": {
+    "position": {
+      "x": 0.026157,
+      "y": 0.414976,
+      "z": -1.126071
+    },
+    "up": {
+      "x": -0.001411,
+      "y": 0.995379,
+      "z": 0.096013
+    },
+    "forward": {
+      "x": -0.014673,
+      "y": 0.058001,
+      "z": 0.998209
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "lab_2v_science_orbital": {
+    "position": {
+      "x": -0.001069,
+      "y": 1.161427,
+      "z": 1.825218
+    },
+    "up": {
+      "x": -0.001041,
+      "y": 0.995379,
+      "z": -0.096018
+    },
+    "forward": {
+      "x": -0.01082,
+      "y": 0.058001,
+      "z": -0.998258
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "pod_1v_conical_crew": {
+    "position": {
+      "x": 0.382895,
+      "y": 0.431968,
+      "z": -0.385723
+    },
+    "up": {
+      "x": -0.270598,
+      "y": 0.92388,
+      "z": 0.270598
+    },
+    "forward": {
+      "x": -0.653281,
+      "y": -0.382683,
+      "z": 0.653282
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "pod_1v_lander_crew": {
+    "position": {
+      "x": 0.001852,
+      "y": 0.4715,
+      "z": 1.061
+    },
+    "up": {
+      "x": 0.0,
+      "y": 1.0,
+      "z": 0.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": -1.0
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "pod_2v_conical_crew": {
+    "position": {
+      "x": 0.002,
+      "y": 1.309693,
+      "z": 0.790429
+    },
+    "up": {
+      "x": 0.0,
+      "y": 0.927259,
+      "z": -0.37442
+    },
+    "forward": {
+      "x": 0.0,
+      "y": -0.37442,
+      "z": -0.927259
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "pod_2v_cupola_crew": {
+    "position": {
+      "x": 0.001852,
+      "y": 0.425647,
+      "z": 1.533
+    },
+    "up": {
+      "x": 0.0,
+      "y": 1.0,
+      "z": 0.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": -1.0
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "pod_2v_lander_crew": {
+    "position": {
+      "x": 0.0,
+      "y": 0.742023,
+      "z": 1.557994
+    },
+    "up": {
+      "x": 0.0,
+      "y": 1.0,
+      "z": 0.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": -1.0
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "pod_3v_conical_crew": {
+    "position": {
+      "x": -0.001852,
+      "y": -0.667511,
+      "z": -1.930346
+    },
+    "up": {
+      "x": 0.0,
+      "y": 0.988362,
+      "z": 0.152123
+    },
+    "forward": {
+      "x": 0.0,
+      "y": -0.152123,
+      "z": 0.988362
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "pod_3v_lander_crew": {
+    "position": {
+      "x": -0.001852,
+      "y": 0.277301,
+      "z": -2.199
+    },
+    "up": {
+      "x": 0.0,
+      "y": 1.0,
+      "z": 0.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 1.0
+    },
+    "type": "Ladder",
+    "node": "trigger_ladder_climb"
+  },
+  "seat_0v_external_crew": {
+    "position": {
+      "x": 0.0,
+      "y": 0.768,
+      "z": -0.68123
+    },
+    "up": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": -1.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": 1.0,
+      "z": 0.0
+    },
+    "type": "Airlock",
+    "node": "trigger_airlock_climb"
+  }
+}

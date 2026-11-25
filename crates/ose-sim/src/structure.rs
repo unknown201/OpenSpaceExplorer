@@ -118,6 +118,8 @@ impl FaceCover {
 #[derive(Component)]
 pub struct Structure {
     pub eva_hatches: Vec<Option<crate::crew::HatchFrame>>,
+    /// Each crewed part's EVA clearance point (`crew::obstacle_frames`), craft frame.
+    pub eva_obstacles: Vec<Option<crate::crew::HatchFrame>>,
     pub rigid: RigidVessel,
     occupied_mass_t: Vec<f64>,
     mirrored: Vec<bool>,
@@ -218,6 +220,8 @@ pub struct Structure {
     /// Parts under the sea surface after the last surface step, and those that struck the water this
     /// step faster than they can take: (part, speed m/s).
     pub(crate) in_water: Vec<bool>,
+    /// Parts that met the ground in the last surface step (`surface::resolve_surface`).
+    pub(crate) on_ground: Vec<bool>,
     pub(crate) water_strikes: Vec<(usize, f64)>,
     /// Each part's `buoyancy` scale and the water it displaces fully under, m^3 (`water::displacement_m3`).
     pub buoyancy: Vec<f64>,
@@ -623,6 +627,7 @@ impl Structure {
             self.wheel_queued_torque[j] = old.wheel_queued_torque[i];
             self.wheel_accepted_power[j] = old.wheel_accepted_power[i];
             self.in_water[j] = old.in_water[i];
+            self.on_ground[j] = old.on_ground[i];
             self.solar_angle_deg[j] = old.solar_angle_deg[i];
             self.water_drag[j] = old.water_drag[i];
             self.rcs_retained_delivery[j] = old.rcs_retained_delivery[i];
@@ -736,6 +741,13 @@ impl Structure {
             })
             .collect();
         let def_of = |i: usize| effective[i].as_ref();
+        // a procedural wing as shaped: its baked meshes (`ose_data::procedural`)
+        let shaped = |i: usize| {
+            let part = &craft.parts[i];
+            let shape = part.shape.as_ref().filter(|s| s.valid_for(&part.part_id))?;
+            let mirrored = part.flight.as_ref().is_some_and(|f| f.mirrored);
+            ose_data::procedural::evaluate_cached(&part.part_id, shape, mirrored)
+        };
         let mut faces: Vec<Option<Faces>> = (0..craft.parts.len())
             .map(|i| {
                 def_of(i)
@@ -883,23 +895,8 @@ impl Structure {
             })
             .collect();
         let mut s = Structure {
-            eva_hatches: craft
-                .parts
-                .iter()
-                .map(|part| {
-                    let frame = *crate::crew::hatch_frames().get(&part.part_id)?;
-                    let q = part.local_rotation;
-                    let rotate = |v| crate::aero::rotate([q.x, q.y, q.z, q.w], v);
-                    Some(crate::crew::HatchFrame {
-                        position: crate::rigid::to_vessel(
-                            part.local_position + rotate(frame.position),
-                        ),
-                        up: crate::rigid::to_vessel(rotate(frame.up)),
-                        forward: crate::rigid::to_vessel(rotate(frame.forward)),
-                    })
-                })
-                .collect(),
-
+            eva_hatches: crate::crew::frames_in_craft(craft, crate::crew::hatch_frames()),
+            eva_obstacles: crate::crew::frames_in_craft(craft, crate::crew::obstacle_frames()),
             rigid,
             root,
             stage_parts,
@@ -973,6 +970,7 @@ impl Structure {
             last_rcs_pressure_atm: 0.0,
             surface_loads: Vec::new(),
             in_water: vec![false; n],
+            on_ground: vec![false; n],
             water_strikes: Vec::new(),
             water_pending: vec![crate::water::PendingWater::default(); n],
             buoyancy: (0..n)
@@ -1223,6 +1221,17 @@ impl Structure {
                     // deployables fold and unfold: they keep their boxes
                     if def.landing_gear.is_some() {
                         return None;
+                    }
+                    if let Some(r) = shaped(i) {
+                        let pts: Vec<[f64; 3]> = r
+                            .meshes
+                            .iter()
+                            .flat_map(|m| m.positions.iter().copied())
+                            .collect();
+                        return crate::collide::model_hull_from_points(
+                            &pts,
+                            craft.parts[i].local_rotation,
+                        );
                     }
                     crate::collide::model_hull(&def.id, craft.parts[i].local_rotation)
                 })
@@ -2713,6 +2722,34 @@ impl Structure {
     /// Part `i`'s model hull, when it has one and is not folded out.
     pub(crate) fn model_hull(&self, i: usize) -> Option<&crate::collide::ModelHull> {
         self.model_hulls.get(i)?.as_ref()
+    }
+
+    /// Every part as its box (tests built on boxes of their own size).
+    #[cfg(test)]
+    pub(crate) fn drop_model_hulls(&mut self) {
+        self.model_hulls.iter_mut().for_each(|h| *h = None);
+    }
+
+    /// Where part `i` meets the ground, in the vessel frame: the points of its model hull (KSP2's parts meet
+    /// the terrain on their colliders, so a rolled fuselage touches down on its round side and a bell on its rim,
+    /// not on the corners of their boxes), or its box's corners for a part without one and for landing gear,
+    /// whose wheel or foot and suspension stand on the box (`gear_defs`).
+    pub fn ground_points(&self, i: usize) -> Vec<DVec3> {
+        if self.gear_defs[i].is_none() {
+            if let Some(h) = self.model_hull(i) {
+                return h.points_at(self.rigid.rest_position(i));
+            }
+        }
+        let (c, h) = self.part_box(i);
+        (0..8)
+            .map(|k| {
+                c + DVec3::new(
+                    if k & 1 == 0 { -h.x } else { h.x },
+                    if k & 2 == 0 { -h.y } else { h.y },
+                    if k & 4 == 0 { -h.z } else { h.z },
+                )
+            })
+            .collect()
     }
 
     /// A stack part's hull between its stack nodes (`None`: the part is its box).
