@@ -287,6 +287,16 @@ Colonies, cargo inventory, a funds economy, crew rotation, landed depots (decisi
    stations in the same orbit, restarts while it undocks, and checks the second delivery. Still to do:
    warp rules and the client panel.*
 3. **Client**: launch checkbox, routes panel, depot toggle, map tags, toasts.
+   *Step 3a is in: a **Routes** tab in the tracking station (`crates/ose-client/src/routes_ui.rs`) lists the
+   routes (KSC, colony and shuttle), the proving flights and the depots. A route's card shows where it goes,
+   its status, the next launch, the cargo, the shuttle's leg and the last eight runs, with Pause / Resume,
+   Delete, Take control of the run in flight, what its runs do after delivering, and Send home / Let go /
+   Keep for a run left docked. A proving flight's card stops the player's own recording, names and creates
+   the route, or forgets it. The vessel card gains Mark as depot / Unmark depot and Record route, which
+   stands in for the launch checkbox: it works on the pad and next to a depot in orbit. New runs toast their
+   outcome. The browser test `e2e/tests/delivery_routes.spec.ts` marks a depot and records, stops and
+   forgets a proving flight. Still to do: map tags and the depot badge, a header button in flight, and the
+   warp rules.*
 4. **Browser e2e** against a local server, never prod: record a run with the bot, create the route,
    and watch two runs. Plus a collision test: two routes into one port at the same window.
 
