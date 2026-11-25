@@ -739,6 +739,13 @@ impl Structure {
             })
             .collect();
         let def_of = |i: usize| effective[i].as_ref();
+        // a procedural wing as shaped: its baked meshes (`ose_data::procedural`)
+        let shaped = |i: usize| {
+            let part = &craft.parts[i];
+            let shape = part.shape.as_ref().filter(|s| s.valid_for(&part.part_id))?;
+            let mirrored = part.flight.as_ref().is_some_and(|f| f.mirrored);
+            ose_data::procedural::evaluate_cached(&part.part_id, shape, mirrored)
+        };
         let mut faces: Vec<Option<Faces>> = (0..craft.parts.len())
             .map(|i| {
                 def_of(i)
@@ -1227,6 +1234,17 @@ impl Structure {
                     // deployables fold and unfold: they keep their boxes
                     if def.landing_gear.is_some() {
                         return None;
+                    }
+                    if let Some(r) = shaped(i) {
+                        let pts: Vec<[f64; 3]> = r
+                            .meshes
+                            .iter()
+                            .flat_map(|m| m.positions.iter().copied())
+                            .collect();
+                        return crate::collide::model_hull_from_points(
+                            &pts,
+                            craft.parts[i].local_rotation,
+                        );
                     }
                     crate::collide::model_hull(&def.id, craft.parts[i].local_rotation)
                 })

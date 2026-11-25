@@ -569,9 +569,14 @@ impl Structure {
                 .unwrap_or(body.radius_m),
         );
         for i in (0..self.rigid.len()).filter(|&i| self.rigid.present[i]) {
-            let (centre, half) = self.part_box(i);
-            // a part whose whole box stays clear of the ground through the step cannot touch it
-            let reach_m = half.length() + 0.05;
+            let (centre, _) = self.part_box(i);
+            let points = self.ground_points(i);
+            // a part whose every point stays clear of the ground through the step cannot touch it
+            let reach_m = points
+                .iter()
+                .map(|q| (*q - centre).length())
+                .fold(0.0, f64::max)
+                + 0.05;
             let from_c = before.r + world(old_frame, centre - mass.centre_m);
             let to_c = p.r + world(frame, centre - mass.centre_m);
             let step_m = (to_c - from_c).length();
@@ -586,7 +591,7 @@ impl Structure {
             } else {
                 0.0
             };
-            for point in self.ground_points(i) {
+            for point in points {
                 let offset = point - mass.centre_m;
                 let from = before.r + world(old_frame, offset);
                 let to = p.r + world(frame, offset);
