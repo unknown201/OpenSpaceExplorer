@@ -14,7 +14,9 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 82;
+/// A camera's forward and up, unit vectors (x, y, z).
+pub type CameraAxes = ((f32, f32, f32), (f32, f32, f32));
+pub const PROTOCOL_VERSION: u16 = 83;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -519,6 +521,15 @@ pub enum ClientMessage {
     RouteStayed {
         id: u64,
         what: StayedRun,
+    },
+    /// Kept last so the other variants keep their postcard discriminants (tests match on them).
+    /// The player's camera while flying a Kerbal on EVA (protocol 82): its forward and up, unit vectors in
+    /// the reference body's inertial frame (the same frame as `FlightReadout::facing`), `None` when it is
+    /// not to be used. The jetpack pushes along the camera's axes and the Kerbal turns to face along it, as
+    /// KSP2's `JetpackKerbalCharacterStateHandler.UpdateInputCameraFeatures`. No reply.
+    EvaCamera {
+        vessel: u64,
+        camera: Option<CameraAxes>,
     },
 }
 
@@ -1511,7 +1522,7 @@ pub struct ColonyInfo {
     pub arrivals: u32,
     #[serde(default)]
     pub next_arrival_in_s: Option<f64>,
-    /// Protocol 82: an orbital colony, wherever its anchor vessel (the first of `vessels`) is; its site
+    /// Protocol 83: an orbital colony, wherever its anchor vessel (the first of `vessels`) is; its site
     /// (`lat_deg`, `lon_deg`) means nothing, and its pad is a dock in space behind the anchor.
     #[serde(default)]
     pub orbital: bool,

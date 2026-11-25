@@ -75,6 +75,7 @@ pub use ose_guidance::plan as rendezvous_plan;
 pub mod colonies_ui;
 mod rendezvous_ui;
 pub mod rnd;
+pub mod routes_ui;
 pub mod scene;
 pub mod settings;
 #[cfg(target_arch = "wasm32")]
@@ -101,9 +102,9 @@ use web_sys::{
 };
 
 use ose_net::{
-    Agency, CampaignMember, ClientMessage, DifficultyDefinition, DifficultyOption,
-    DifficultyPreset, DifficultyValue, PatchEnd, ServerMessage, SessionInfo, SessionMode,
-    PROTOCOL_VERSION, WS_PATH,
+    Agency, CampaignMember, ClientMessage, DepotInfo, DifficultyDefinition, DifficultyOption,
+    DifficultyPreset, DifficultyValue, PatchEnd, RecordingInfo, RouteEnd, RouteInfo, ServerMessage,
+    SessionInfo, SessionMode, StayedRun, PROTOCOL_VERSION, WS_PATH,
 };
 
 /// The hint shown while a Kerbal holds a ladder; taken down when it lets go or boards.
@@ -385,6 +386,15 @@ struct App {
     ts_colonies: bool,
     ts_colony: Option<u64>,
     colonies_asked_ms: f64,
+    /// Delivery routes (protocol 71+): the Routes tab, what is picked there, and the campaign's routes, proving
+    /// flights and depots as the server last sent them.
+    ts_routes: bool,
+    ts_route_pick: Option<routes_ui::Pick>,
+    routes_asked_ms: f64,
+    routes_known: bool,
+    routes: Vec<RouteInfo>,
+    route_recordings: Vec<RecordingInfo>,
+    depots: Vec<DepotInfo>,
     ts_rendered_ms: f64,
     /// Whether the KSC camera is on the launch pad (glides there while the pad dialog is open).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -511,6 +521,9 @@ struct App {
     /// turning and throttling.
     lin_mode: bool,
     translate_sent: (f32, f32, f32),
+    /// The camera last sent for a Kerbal's jetpack (protocol 82) and when (ms).
+    eva_camera_sent: Option<EvaCamera>,
+    eva_camera_at: f64,
     /// EVA: run as last sent, and a Space press not yet sent as a jump.
     eva_run_sent: bool,
     /// EVA ladders (protocol 45): F asked to grab (a refusal then boards instead), the climb sent last,
@@ -813,6 +826,9 @@ fn set_input_value(doc: &Document, id: &str, v: f64) {
     }
 }
 
+/// A camera's forward and up, unit vectors (`ClientMessage::EvaCamera`).
+type EvaCamera = ose_net::CameraAxes;
+
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -1099,6 +1115,13 @@ pub fn start() -> Result<(), JsValue> {
         ts_colonies: false,
         ts_colony: None,
         colonies_asked_ms: 0.0,
+        ts_routes: false,
+        ts_route_pick: None,
+        routes_asked_ms: 0.0,
+        routes_known: false,
+        routes: Vec::new(),
+        route_recordings: Vec::new(),
+        depots: Vec::new(),
         ts_rendered_ms: 0.0,
         ksc_on_pad: false,
         throttle: 0.0,
@@ -1182,6 +1205,8 @@ pub fn start() -> Result<(), JsValue> {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
         translate_sent: (0.0, 0.0, 0.0),
+        eva_camera_sent: None,
+        eva_camera_at: 0.0,
         eva_run_sent: false,
         eva_grab: false,
         eva_climb_sent: 0.0,
@@ -2885,6 +2910,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 let mut app = a.borrow_mut();
                 app.ts_mine_only = mine;
                 app.ts_colonies = false;
+                app.ts_routes = false;
                 app.render_tracking();
             }),
         )?;
@@ -2894,7 +2920,19 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         Box::new(|a| {
             let mut app = a.borrow_mut();
             app.ts_colonies = true;
+            app.ts_routes = false;
             app.ask_colonies(now_ms());
+            app.render_tracking();
+        }),
+    )?;
+    wire(
+        "ts-tab-routes",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.ts_routes = true;
+            app.ts_colonies = false;
+            app.routes_asked_ms = 0.0;
+            app.ask_routes(now_ms());
             app.render_tracking();
         }),
     )?;
@@ -2949,6 +2987,9 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                     }
                     app.ts_colony = None;
                 }
+                return;
+            }
+            if app.route_click(&el) {
                 return;
             }
             if let Some(id) = num("data-ose-colony") {
@@ -7052,6 +7093,38 @@ impl App {
                     self.render_tracking();
                 }
             }
+            ServerMessage::Routes {
+                depots,
+                recordings,
+                routes,
+                reason,
+            } => {
+                if let Some(why) = reason {
+                    hud::push(&self.doc, &format!("Routes: {why}"), "warning");
+                }
+                if self.routes_known {
+                    // a run of a route came home, delivered, or was lost since the last answer
+                    for r in &routes {
+                        let before = self
+                            .routes
+                            .iter()
+                            .find(|o| o.id == r.id)
+                            .map_or(0, |o| o.runs.len());
+                        if r.runs.len() > before {
+                            if let Some((text, tier)) = routes_ui::run_toast(r) {
+                                hud::push(&self.doc, &text, tier);
+                            }
+                        }
+                    }
+                }
+                self.routes_known = true;
+                self.routes = routes;
+                self.route_recordings = recordings;
+                self.depots = depots;
+                if self.tracking_open {
+                    self.render_tracking();
+                }
+            }
             ServerMessage::AgencyNews { by, event } => {
                 let tech = |id: &str| {
                     let key = self
@@ -11000,6 +11073,161 @@ impl App {
         }
     }
 
+    /// Ask the server for the routes, proving flights and depots, at most every 3 s.
+    fn ask_routes(&mut self, now: f64) {
+        if now - self.routes_asked_ms < 3000.0 {
+            return;
+        }
+        self.routes_asked_ms = now;
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::RoutesInfo);
+        }
+    }
+
+    /// The Routes tab: routes, proving flights and depots, and the picked route's or recording's card.
+    fn render_routes_tab(&mut self) {
+        let gone = match self.ts_route_pick {
+            Some(routes_ui::Pick::Route(id)) => !self.routes.iter().any(|r| r.id == id),
+            Some(routes_ui::Pick::Recording(id)) => {
+                !self.route_recordings.iter().any(|p| p.id == id)
+            }
+            None => false,
+        };
+        if gone {
+            self.ts_route_pick = None;
+        }
+        let list = routes_ui::render_list(
+            &self.routes,
+            &self.route_recordings,
+            &self.depots,
+            self.ts_route_pick,
+        );
+        let info = match self.ts_route_pick {
+            Some(routes_ui::Pick::Route(id)) => self
+                .routes
+                .iter()
+                .find(|r| r.id == id)
+                .map(|r| routes_ui::render_route(r, &self.depots, self.time.ut_at(now_ms()))),
+            Some(routes_ui::Pick::Recording(id)) => {
+                self.route_recordings.iter().find(|p| p.id == id).map(|p| {
+                    let made = self.routes.iter().any(|r| r.recording == id);
+                    routes_ui::render_recording(p, self.player_id, made)
+                })
+            }
+            None => None,
+        }
+        .unwrap_or_else(|| {
+            "<div class=\"ts-hint\">Select a route or a proving flight</div>".into()
+        });
+        for (id, html) in [
+            ("ts-list", list),
+            ("ts-info", info),
+            ("ts-filters", String::new()),
+        ] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                let key = format!("{}:{}", html.len(), hud::fnv(&html));
+                if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+                    el.set_inner_html(&html);
+                    el.set_attribute("data-ose-key", &key).ok();
+                }
+            }
+        }
+        for (id, on) in [
+            ("ts-tab-all", false),
+            ("ts-tab-mine", false),
+            ("ts-tab-colonies", false),
+            ("ts-tab-routes", true),
+        ] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                el.class_list().toggle_with_force("on", on).ok();
+            }
+        }
+    }
+
+    /// A click on one of the routes controls in the tracking station; false when it was not one.
+    fn route_click(&mut self, el: &Element) -> bool {
+        let attr = |name: &str| {
+            el.closest(&format!("[{name}]"))
+                .ok()
+                .flatten()
+                .and_then(|e| e.get_attribute(name))
+        };
+        let num = |name: &str| attr(name).and_then(|s| s.parse::<u64>().ok());
+        let msg = if let Some(id) = num("data-ose-route-pause") {
+            let paused = attr("data-ose-paused").as_deref() == Some("true");
+            Some(ClientMessage::PauseRoute {
+                id,
+                paused: !paused,
+            })
+        } else if let Some(id) = num("data-ose-route-delete") {
+            let name = self
+                .routes
+                .iter()
+                .find(|r| r.id == id)
+                .map(|r| r.name.clone())
+                .unwrap_or_default();
+            let sure = web_sys::window()
+                .and_then(|w| {
+                    w.confirm_with_message(&format!(
+                        "Delete the route {name}? A run on its way is left where it is."
+                    ))
+                    .ok()
+                })
+                .unwrap_or(false);
+            sure.then_some(ClientMessage::DeleteRoute { id })
+        } else if let Some(id) = num("data-ose-route-end") {
+            let when = match attr("data-ose-end").as_deref() {
+                Some("Stay") => RouteEnd::Stay,
+                Some("Return") => RouteEnd::Return,
+                Some("LetGo") => RouteEnd::LetGo,
+                _ => RouteEnd::Rotate,
+            };
+            Some(ClientMessage::SetRouteEnd { id, when })
+        } else if let Some(id) = num("data-ose-route-stayed") {
+            let what = match attr("data-ose-what").as_deref() {
+                Some("SendHome") => StayedRun::SendHome,
+                Some("LetGo") => StayedRun::LetGo,
+                _ => StayedRun::Keep,
+            };
+            Some(ClientMessage::RouteStayed { id, what })
+        } else if let Some(id) = num("data-ose-rec-route") {
+            let name = self
+                .doc
+                .get_element_by_id("rt-name")
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                .map(|i| i.value().trim().to_string())
+                .unwrap_or_default();
+            Some(ClientMessage::CreateRoute {
+                recording: id,
+                name,
+            })
+        } else if let Some(id) = num("data-ose-rec-forget") {
+            Some(ClientMessage::ForgetRecording { id })
+        } else if num("data-ose-rec-stop").is_some() {
+            Some(ClientMessage::StopRecording)
+        } else if let Some(vessel) = num("data-ose-rec-start") {
+            Some(ClientMessage::RecordRoute { vessel })
+        } else if let Some(vessel) = num("data-ose-depot") {
+            let depot = attr("data-ose-depot-on").as_deref() == Some("true");
+            Some(ClientMessage::SetDepot { vessel, depot })
+        } else if let Some(id) = num("data-ose-route") {
+            self.ts_route_pick = Some(routes_ui::Pick::Route(id));
+            self.render_tracking();
+            return true;
+        } else if let Some(id) = num("data-ose-recording") {
+            self.ts_route_pick = Some(routes_ui::Pick::Recording(id));
+            self.render_tracking();
+            return true;
+        } else {
+            // typing a route name is not a click on the list behind it
+            return el.closest("#rt-name").ok().flatten().is_some();
+        };
+        if let (Some(msg), Some(ws)) = (msg, &self.ws) {
+            send(ws, &msg);
+        }
+        true
+    }
+
     /// The Colonies tab: the list and the picked colony's card.
     fn render_colonies_tab(&mut self) {
         if self
@@ -11042,6 +11270,13 @@ impl App {
 
     fn render_tracking(&mut self) {
         self.ts_rendered_ms = now_ms();
+        if self.ts_routes {
+            self.render_routes_tab();
+            return;
+        }
+        if let Some(el) = self.doc.get_element_by_id("ts-tab-routes") {
+            el.class_list().toggle_with_force("on", false).ok();
+        }
         if self.ts_colonies {
             self.render_colonies_tab();
             return;
@@ -11081,7 +11316,16 @@ impl App {
                     .and_then(|id| rows.iter().find(|r| r.id == id)),
                 self.ts_body.and_then(|i| self.body_card(i)),
             ) {
-                (Some(r), _) => tracking::render_info(r),
+                (Some(r), _) => {
+                    let mut html = tracking::render_info(r);
+                    let recording = self
+                        .route_recordings
+                        .iter()
+                        .any(|p| Some(p.player) == self.player_id && p.state == "Recording");
+                    let depot = self.depots.iter().any(|d| d.vessel == Some(r.id));
+                    html.push_str(&routes_ui::vessel_actions(r.id, depot, r.mine, recording));
+                    html
+                }
                 (None, Some(card)) => tracking::render_body_info(&card, self.ts_body.unwrap_or(0)),
                 _ => "<div class=\"ts-hint\">Select a vessel or a celestial body</div>".to_string(),
             };
@@ -11115,6 +11359,8 @@ impl App {
             if self.ts_colonies {
                 self.ask_colonies(now);
             }
+            // the routes (for the vessel card's depot button too), every 3 s while the station is open
+            self.ask_routes(now);
             self.render_tracking();
         }
     }
@@ -12205,6 +12451,51 @@ impl App {
         self.send_controls();
     }
 
+    /// The camera's forward and up in the flown vessel's inertial frame (the frame of its readout's
+    /// `facing`), from the last rendered frame.
+    fn eva_camera_now(&self) -> Option<EvaCamera> {
+        #[cfg(target_arch = "wasm32")]
+        let local = self.flight3d.look_local;
+        #[cfg(not(target_arch = "wasm32"))]
+        let local: Option<(glam::DVec3, glam::DVec3)> = None;
+        let (forward, up) = local?;
+        let f = self.scene.as_ref()?.vessel(self.flying?)?.flight.as_ref()?;
+        let g = |d: ose_math::DVec3| glam::DVec3::new(d.x, d.y, d.z);
+        let (facing, roll) = (g(f.facing), g(f.roll_ref));
+        if facing.length() < 0.5 || roll.length() < 0.5 {
+            return None;
+        }
+        let right = facing.cross(roll);
+        let world = |l: glam::DVec3| {
+            let w = (right * l.x + facing * l.y + roll * l.z).normalize_or_zero();
+            (w.x as f32, w.y as f32, w.z as f32)
+        };
+        Some((world(forward), world(up)))
+    }
+
+    /// Send the jetpack camera when it has turned more than half a degree since the last one sent (at most
+    /// ten a second), or `None` once it is not to be used.
+    fn send_eva_camera(&mut self, vessel: u64, now: f64, camera: Option<EvaCamera>) {
+        let dot = |a: (f32, f32, f32), b: (f32, f32, f32)| a.0 * b.0 + a.1 * b.1 + a.2 * b.2;
+        let turned = match (self.eva_camera_sent, camera) {
+            (None, None) => false,
+            (Some(a), Some(b)) => {
+                let still = 0.5_f32.to_radians().cos();
+                (dot(a.0, b.0) < still || dot(a.1, b.1) < still)
+                    && now - self.eva_camera_at >= 100.0
+            }
+            _ => true,
+        };
+        if !turned {
+            return;
+        }
+        self.eva_camera_sent = camera;
+        self.eva_camera_at = now;
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::EvaCamera { vessel, camera });
+        }
+    }
+
     /// Where the vessel points now as pitch above the horizon and compass heading, from the flight view's
     /// navball frame (None before the first flight frame).
     /// The compass heading the flight camera looks along, once it has drawn (degrees).
@@ -12405,7 +12696,8 @@ impl App {
     /// A Kerbal on EVA, as the original's EVA keys (protocol 33). On the ground W/S/A/D (and Q/E) walk away
     /// from, toward, left and right of the camera and the Kerbal turns to face where it walks, as the
     /// original's `MoveGroundKerbalCharacterStateHandler`; Shift runs and Space jumps. In the air the
-    /// jetpack: Shift or Space up, Ctrl down, W/S and Q/E push ahead, back and sideways, A/D turn. The server
+    /// jetpack: Shift or Space up, Ctrl down, W/S push ahead and back, A/D and Q/E sideways, all along the
+    /// camera, and the Kerbal turns to face the way the camera looks (protocol 82). The server
     /// walks a Kerbal with throttle and a level heading; the pack takes `Translate` (y up along the Kerbal,
     /// z its front, x its right).
     fn eva_keys_tick(&mut self, now: f64, dt: f64) {
@@ -12487,15 +12779,23 @@ impl App {
                 );
             }
         }
+        if (on_ladder || landed) && self.eva_camera_sent.is_some() {
+            self.send_eva_camera(vessel, now, None);
+        }
         if on_ladder {
             return;
         }
         if !landed {
-            let translate = (
-                strafe as f32,
-                f32::from(shift) - f32::from(ctrl),
-                walk as f32,
-            );
+            // KSP2's jetpack reads the keys against the camera and turns the Kerbal to face along it
+            // (protocol 82): A/D (and Q/E) push sideways (`MoveLeftRight`) rather than turn
+            let camera = self.eva_camera_now();
+            self.send_eva_camera(vessel, now, camera);
+            let (side, turn) = if camera.is_some() {
+                (side, 0.0)
+            } else {
+                (strafe, turn)
+            };
+            let translate = (side as f32, f32::from(shift) - f32::from(ctrl), walk as f32);
             if translate != self.translate_sent {
                 self.translate_sent = translate;
                 if let Some(ws) = &self.ws {

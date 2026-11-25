@@ -97,7 +97,7 @@ Code: `crates/ose-colonies` (rules, tested on the Mun in `tests/found_and_launch
    its founding or the last arrival): the next Kerbal the campaign has not hired is hired and sits in the
    first empty seat (`Colonies::settle`, run by the server once a second). Without room or residents the wait
    starts over. The colony card shows the empty seats, how many moved in, and when the next one is due.
-7. ~~**Orbital colonies**~~ (built, protocol 82): see section 8.
+7. ~~**Orbital colonies**~~ (built, protocol 83): see section 8.
 
 ## 5. Decisions (Josh, 2026-11-21)
 
@@ -165,7 +165,7 @@ the expected rate, also at x1000 warp until its hold is full; one on barren grou
 dig nothing; the refinery's rates and mass yield) and
 `ose_data::abundance` (patchy, smooth, the same for everyone, poor at home).
 
-## 8. Orbital colonies (built, protocol 82)
+## 8. Orbital colonies (built, protocol 83)
 
 KSP2 planned an orbital editor environment for building in space. OSE's orbital colony is the surface colony's
 model moved into orbit, with nothing abstracted:
