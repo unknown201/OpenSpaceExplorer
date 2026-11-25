@@ -38,6 +38,40 @@ pub(crate) fn hatch_frames() -> &'static std::collections::HashMap<String, Hatch
     &FRAMES
 }
 
+/// KSP2 `EVAUtils.GetFirstLadderOrAirlockPhysicsSpacePosRot(part, applySpawnOffset: false)` per crewed part,
+/// in the part's own frame: the top of the trigger box of the part's first ladder (else airlock) climb, with
+/// that trigger's axes. Read from the part prefabs (`assets/own/eva-obstacle-frames.json`, 2026-11-25:
+/// `GetColliderTopPos` is the collider's origin plus its turned centre and half its height times its scale).
+pub(crate) fn obstacle_frames() -> &'static std::collections::HashMap<String, HatchFrame> {
+    static FRAMES: std::sync::LazyLock<std::collections::HashMap<String, HatchFrame>> =
+        std::sync::LazyLock::new(|| {
+            serde_json::from_str(include_str!("../../../assets/own/eva-obstacle-frames.json"))
+                .expect("EVA obstacle frames")
+        });
+    &FRAMES
+}
+
+/// Part-frame `frames` placed on each part of `craft`, in the vessel frame (`rigid::to_vessel`).
+pub(crate) fn frames_in_craft(
+    craft: &ose_data::craft::Craft,
+    frames: &std::collections::HashMap<String, HatchFrame>,
+) -> Vec<Option<HatchFrame>> {
+    craft
+        .parts
+        .iter()
+        .map(|part| {
+            let frame = *frames.get(&part.part_id)?;
+            let q = part.local_rotation;
+            let rotate = |v| crate::aero::rotate([q.x, q.y, q.z, q.w], v);
+            Some(HatchFrame {
+                position: crate::rigid::to_vessel(part.local_position + rotate(frame.position)),
+                up: crate::rigid::to_vessel(rotate(frame.up)),
+                forward: crate::rigid::to_vessel(rotate(frame.forward)),
+            })
+        })
+        .collect()
+}
+
 /// The crew aboard a vessel: (part index, name) per seat taken.
 #[derive(Component, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Crew {
@@ -96,6 +130,15 @@ pub const LADDER_STANDOFF_M: f64 = 0.4;
 /// hangs the Kerbal 0.43 m above the Mk1 pod's origin, three quarters of the way up its hull.
 pub const HATCH_ALONG: f64 = 0.75;
 pub const BOARDING_S: f64 = 1.0 / crate::TICKS_PER_SECOND as f64;
+
+/// KSP2 `IVAPortraitEVAObstacleDetector`: a capsule of this radius hangs below a seat's hatch, from
+/// `EVA_OBSTACLE_NEAR_M` to `EVA_OBSTACLE_FAR_M` down the hatch's up axis; anything in it but the seat's own
+/// part keeps that Kerbal in.
+pub const EVA_OBSTACLE_RADIUS_M: f64 = 0.25;
+pub const EVA_OBSTACLE_NEAR_M: f64 = 0.25;
+pub const EVA_OBSTACLE_FAR_M: f64 = 0.55;
+/// KSP2's `#autoLOC_6100027` ("EVA is disabled due to an obstacle.").
+pub const EVA_OBSTACLE_MESSAGE: &str = "EVA is disabled due to an obstacle.";
 
 /// A resource transfer running on a vessel (the Resource Manager): the tanks it was started with, and how
 /// many units each still has to give (positive) or take (negative).
@@ -480,6 +523,110 @@ impl Universe {
         members
     }
 
+    /// KSP2 `IVAPortraitEVAObstacleDetector.IsEVADisabledByObstacle`: whether something stands in the way of
+    /// the hatch of the crewed part `seat`. The original casts a 0.25 m capsule 0.25 to 0.55 m down the
+    /// hatch's up axis (from `EVAUtils.GetFirstLadderOrAirlockPhysicsSpacePosRot`) against the Kerbal cast
+    /// layers and lets the Kerbal out only when every collider it hits belongs to the seat's own part. Here the
+    /// capsule is tested against the hulls of the vessel's other parts, of the vessels nearby and the ground.
+    /// A part with no authored hatch is never blocked.
+    pub fn eva_blocked(&self, e: Entity, seat: usize) -> bool {
+        let (Some(st), Some(p)) = (
+            self.world.get::<structure::Structure>(e),
+            self.world.get::<flight::Powered>(e),
+        ) else {
+            return false;
+        };
+        if !st.rigid.present.get(seat).copied().unwrap_or(false) {
+            return false;
+        }
+        let Some(h) = st.eva_obstacles.get(seat).copied().flatten() else {
+            return false;
+        };
+        let c = st.rigid.rest_centre();
+        let hatch = st.offset_inertial(p.facing, h.position - c);
+        let up = st.offset_inertial(p.facing, h.up).normalized();
+        let near = hatch - up * EVA_OBSTACLE_NEAR_M;
+        let far = hatch - up * EVA_OBSTACLE_FAR_M;
+        // the vessel's other parts, as their models
+        if crate::collide::capsule_hits_vessel(
+            st,
+            p,
+            DVec3::ZERO,
+            (near, far),
+            EVA_OBSTACLE_RADIUS_M,
+            Some(seat),
+        ) {
+            return true;
+        }
+        // the ground: the capsule's axis, sampled finely against its radius
+        let samples: Vec<DVec3> = (0..=6)
+            .map(|k| near + (far - near) * (k as f64 / 6.0))
+            .collect();
+        let Some(body) = self.world.get::<bodies::ReferenceBody>(e).map(|b| b.0) else {
+            return false;
+        };
+        // the ground under it: terrain and sea floor, not the water (KSP2's Kerbal cast layers, 0, 15, 17, 19
+        // and 28, leave out Unity's water layer 4)
+        if let Some(b) = self.world.get::<bodies::Body>(body) {
+            let terrain = self
+                .world
+                .get::<flight::Terrain>(body)
+                .map(|t| t.0.as_ref());
+            let ut = self.ut();
+            let solid = |r: DVec3| {
+                let (lat, lon) = flight::lat_lon(b, r, ut);
+                let site = b
+                    .site
+                    .as_ref()
+                    .and_then(|s| s.ground_radius(b.radius_m, crate::campus::direction(lat, lon)));
+                site.unwrap_or_else(|| {
+                    b.radius_m + terrain.map(|t| t.height_m(lat, lon)).unwrap_or(0.0)
+                })
+            };
+            let reach = EVA_OBSTACLE_FAR_M + EVA_OBSTACLE_RADIUS_M + hatch.length();
+            if p.r.length() - solid(p.r) < reach + 1.0
+                && samples.iter().any(|s| {
+                    let r = p.r + *s;
+                    r.length() - solid(r) < EVA_OBSTACLE_RADIUS_M
+                })
+            {
+                return true;
+            }
+        }
+        // other vessels close by
+        self.world.iter_entities().any(|other| {
+            if other.id() == e || other.get::<bodies::ReferenceBody>().map(|b| b.0) != Some(body) {
+                return false;
+            }
+            let (Some(q), Some(ost)) = (
+                other.get::<flight::Powered>(),
+                other.get::<structure::Structure>(),
+            ) else {
+                return false;
+            };
+            if q.crashed || (q.r - p.r).length() > 100.0 {
+                return false;
+            }
+            crate::collide::capsule_hits_vessel(
+                ost,
+                q,
+                q.r - p.r,
+                (near, far),
+                EVA_OBSTACLE_RADIUS_M,
+                None,
+            )
+        })
+    }
+
+    /// The crewed parts of `e` whose hatch is blocked (`eva_blocked`), for the portraits' EVA buttons.
+    pub fn eva_blocked_seats(&self, e: Entity) -> Vec<usize> {
+        let mut seats: Vec<usize> = self.crew(e).into_iter().map(|(s, _)| s).collect();
+        seats.sort_unstable();
+        seats.dedup();
+        seats.retain(|&s| self.eva_blocked(e, s));
+        seats
+    }
+
     /// A Kerbal steps out of `e`. On the ground they stand beside it; in flight they float a couple of metres
     /// off it with its velocity. Returns the Kerbal's vessel.
     pub fn go_eva(&mut self, e: Entity, name: Option<&str>) -> Result<Entity, String> {
@@ -489,6 +636,9 @@ impl Universe {
             None => (!crew.is_empty()).then_some(0),
         }
         .ok_or_else(|| "nobody of that name aboard".to_string())?;
+        if self.eva_blocked(e, crew[idx].0) {
+            return Err(EVA_OBSTACLE_MESSAGE.to_string());
+        }
         let body = self
             .world
             .get::<bodies::ReferenceBody>(e)
@@ -1228,6 +1378,77 @@ mod tests {
         let b = u.world.get::<bodies::Body>(body).unwrap();
         let r = u.powered(k).unwrap().r;
         r.length() - flight::ground_radius(b, None, r, u.ut())
+    }
+
+    #[test]
+    fn every_stock_crafts_crew_can_step_out_on_the_pad() {
+        // KSP2 lets every crewed stock craft EVA standing on the pad: the clearance capsule below the top of
+        // each pod's ladder trigger misses the parts under it and the ground
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let mut crewed = 0;
+        for c in &crafts {
+            let (u, v) = craft_on_pad(&c.name);
+            if u.crew(v).is_empty() {
+                continue;
+            }
+            crewed += 1;
+            assert!(
+                u.eva_blocked_seats(v).is_empty(),
+                "{}: EVA blocked at {:?}",
+                c.name,
+                u.eva_blocked_seats(v)
+            );
+        }
+        assert!(crewed > 10, "{crewed} crewed stock craft");
+    }
+
+    #[test]
+    fn a_craft_parked_against_the_ladder_keeps_the_kerbal_in_as_in_ksp2() {
+        let (mut u, pod) = k1_on_pad();
+        assert!(u.eva_blocked_seats(pod).is_empty());
+        let seat = u.crew(pod)[0].0;
+        let (r, facing, below_ladder) = {
+            let st = u.structure(pod).unwrap();
+            let p = u.powered(pod).unwrap();
+            let h = st.eva_obstacles[seat].expect("the Mk1 pod's ladder");
+            let c = st.rigid.rest_centre();
+            // the middle of the clearance capsule, 0.4 m down the ladder from its trigger's top
+            let mid = st.offset_inertial(p.facing, h.position - h.up * 0.4 - c);
+            (p.r, p.facing, mid)
+        };
+        // a second K1 whose pod stands right there
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let report = ose_data::staging::delta_v_by_stage(k1, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let st = structure::Structure::build(k1, &defs, &res);
+        let pod_from_centre =
+            st.offset_inertial(facing, st.rigid.rest_position(0) - st.rigid.rest_centre());
+        let mut p = u.powered(pod).unwrap().clone();
+        p.r = r + below_ladder - pod_from_centre;
+        let body = u.body_entity("Kerbin").unwrap();
+        let other = u.spawn_powered_on_surface("Blocker", body, spec, -0.6836, -74.8198);
+        u.set_structure(other, st);
+        u.set_powered(other, p.clone());
+        assert_eq!(u.eva_blocked_seats(pod), vec![seat]);
+        assert_eq!(u.go_eva(pod, None), Err(EVA_OBSTACLE_MESSAGE.to_string()));
+        assert_eq!(u.crew(pod).len(), 1, "nobody left");
+        // moved off, the way is clear again
+        p.r = p.r
+            + p.r
+                .normalized()
+                .cross(DVec3::new(0.0, 0.0, 1.0))
+                .normalized()
+                * 30.0;
+        u.set_powered(other, p);
+        assert!(u.eva_blocked_seats(pod).is_empty());
+        assert!(u.go_eva(pod, None).is_ok());
     }
 
     fn orbital_eva_fixture() -> (Universe, Entity, Entity) {

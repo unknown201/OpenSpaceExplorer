@@ -10,7 +10,7 @@ use std::sync::{Arc, OnceLock};
 use bevy_ecs::prelude::*;
 use ose_math::DVec3;
 use rapier3d_f64::math::{Pose, Rotation, Vector};
-use rapier3d_f64::parry::shape::{ConvexPolyhedron, Cuboid, Shape};
+use rapier3d_f64::parry::shape::{Capsule, ConvexPolyhedron, Cuboid, Shape};
 
 use crate::{bodies, flight, structure, Universe};
 
@@ -255,6 +255,46 @@ fn part_shape<'a>(st: &'a structure::Structure, vessel: &Pose, i: usize) -> (Par
             )
         }
     }
+}
+
+/// Whether a capsule from `a` to `b` (inertial, relative to the vessel's centre of mass) of `radius` m
+/// overlaps any part of the vessel but `skip`, each part as its model (or box). `offset` is where this
+/// vessel's centre of mass sits relative to the capsule's origin.
+pub(crate) fn capsule_hits_vessel(
+    st: &structure::Structure,
+    p: &flight::Powered,
+    offset: DVec3,
+    (a, b): (DVec3, DVec3),
+    radius: f64,
+    skip: Option<usize>,
+) -> bool {
+    capsule_hit_parts(st, p, offset, (a, b), radius)
+        .into_iter()
+        .any(|i| Some(i) != skip)
+}
+
+/// The parts `capsule_hits_vessel` finds in the capsule.
+pub(crate) fn capsule_hit_parts(
+    st: &structure::Structure,
+    p: &flight::Powered,
+    offset: DVec3,
+    (a, b): (DVec3, DVec3),
+    radius: f64,
+) -> Vec<usize> {
+    let pose = vessel_pose(st, p, p.r - offset);
+    let capsule = Capsule::new(
+        Vector::new(a.x, a.y, a.z),
+        Vector::new(b.x, b.y, b.z),
+        radius,
+    );
+    (0..st.rigid.len())
+        .filter(|&i| st.rigid.present[i])
+        .filter(|&i| {
+            let (g, pose_i) = part_shape(st, &pose, i);
+            rapier3d_f64::parry::query::distance(&pose_i, g.shape(), &Pose::IDENTITY, &capsule)
+                .is_ok_and(|d| d.distance <= 0.0)
+        })
+        .collect()
 }
 
 /// Two parts as their models: (depth, normal from b to a, contact point), both relative to the origin of

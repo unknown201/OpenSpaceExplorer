@@ -12498,7 +12498,7 @@ impl App {
                     .find(|k| k.name == name)
                     .map(|k| training::face(k, "fh-face"))
             };
-            let html = hud::crew_html(&f.crew, !f.eva, &face);
+            let html = hud::crew_html(&f.crew, !f.eva, &f.eva_blocked, &face);
             let key = format!("{}:{}", html.len(), hud::fnv(&html));
             if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
                 el.set_inner_html(&html);
