@@ -102,17 +102,26 @@ namespace OpenSpaceExplorer.Validation
             yield return Attach("decoupler-on-mount-floating", mount, "dynamic_floating", created, "top");
             csv.Close();
 
-            using (var w = new StreamWriter(Path.Combine(dir, "out", "procparts-parts.csv"), false))
+            // run 1 (0b5c556) stopped here: a row threw and the coroutine died, so each row is guarded
+            try
             {
-                w.WriteLine("part,x,y,z,qx,qy,qz,qw,parent,parent_node,own_node");
-                foreach (var p in made)
+                using (var w = new StreamWriter(Path.Combine(dir, "out", "procparts-parts.csv"), false))
                 {
-                    var rel = pod.PartTransform.InverseTransformPoint(p.WorldPosition);
-                    var q = Quaternion.Inverse(pod.WorldRotation) * p.WorldRotation;
-                    w.WriteLine(string.Join(",", new[] { p.AvailablePart?.Name, F(rel.x), F(rel.y), F(rel.z), F(q.x), F(q.y), F(q.z), F(q.w),
-                        p.ParentPart?.AvailablePart?.Name ?? "", p.ParentNodeConnectedToMe?.NodeTag ?? "", p.MyNodeConnectedToParent?.NodeTag ?? "" }));
+                    w.WriteLine("part,x,y,z,qx,qy,qz,qw,parent,parent_node,own_node");
+                    foreach (var p in made)
+                    {
+                        try
+                        {
+                            var rel = pod.PartTransform.InverseTransformPoint(p.PartTransform.position);
+                            var q = Quaternion.Inverse(pod.PartTransform.rotation) * p.PartTransform.rotation;
+                            w.WriteLine(string.Join(",", new[] { p.AvailablePart?.Name, F(rel.x), F(rel.y), F(rel.z), F(q.x), F(q.y), F(q.z), F(q.w),
+                                p.ParentPart?.AvailablePart?.Name ?? "", p.ParentNodeConnectedToMe?.NodeTag ?? "", p.MyNodeConnectedToParent?.NodeTag ?? "" }));
+                        }
+                        catch (Exception e) { mark("procparts: pose of " + (p?.AvailablePart?.Name ?? "?") + " failed: " + e.GetType().Name + " " + e.Message); }
+                    }
                 }
             }
+            catch (Exception e) { mark("procparts: parts dump failed: " + e.GetType().Name + " " + e.Message); }
             try
             {
                 IOProvider.ToJsonFile(Path.Combine(dir, "out", "procparts-workspace.json"), oab.UtilFileIO.GenerateSnapshot(tracker));

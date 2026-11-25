@@ -295,6 +295,45 @@ pub fn resource(v: &Value, cov: &mut Coverage) -> ResourceDef {
     }
 }
 
+/// The floating stack node KSP2 gives a part whose procedural wall ends in one (procedural tubes and engine
+/// mounts: `Data_Fairing` with a floating node, not a shroud). `Module_Fairing` adds it in the VAB as a dynamic
+/// node at `FloatingNodePosition + FloatingNodeDirection * Length`, the default length to start with (a KSP2
+/// VAB capture, reference/ksp2-procparts: tube_1v_procedural's node at y +1.25, enginemount_1v_procedural's at
+/// y -1.25).
+pub fn floating_node(d: &Value) -> Option<AttachNode> {
+    let o = d["serializedPartModules"]
+        .as_array()?
+        .iter()
+        .flat_map(|m| m["ModuleData"].as_array().into_iter().flatten())
+        .find(|e| e["Name"] == "Data_Fairing")
+        .map(|e| &e["DataObject"])?;
+    let stored = |k: &str| o[k].get("storedValue").unwrap_or(&o[k]).clone();
+    let tag = s(o, "FloatingAttachNodeTag");
+    if b(o, "IsShroud")
+        || !stored("FairingEnabled").as_bool().unwrap_or(false)
+        || !b(o, "DefaultFloatingNodeState")
+        || tag.is_empty()
+        || d["attachNodes"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|n| n["nodeID"] == tag.as_str()))
+    {
+        return None;
+    }
+    let dir = vec3(&o["FloatingNodeDirection"]);
+    Some(AttachNode {
+        id: tag,
+        node_type: "Stack".into(),
+        attach_method: "FIXED_JOINT".into(),
+        position: vec3(&o["FloatingNodePosition"]) + dir * f(o, "LengthEditDefault"),
+        orientation: dir,
+        size: f(o, "FloatingNodeSize").round() as i32,
+        is_resource_crossfeed: true,
+        is_rigid: false,
+        angular_strength_multiplier: 1.0,
+        full_break_strength: false,
+    })
+}
+
 fn module_data(m: &Value) -> &Value {
     &m["ModuleData"][0]["DataObject"]
 }
@@ -954,6 +993,9 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         d.antenna = electric.comm_range_m > 0.0;
     }
     let bounds = part_bounds(&drag_cubes, &attach_nodes);
+    // after the bounds, which KSP2 takes from the prefab's own nodes
+    let mut attach_nodes = attach_nodes;
+    attach_nodes.extend(floating_node(d));
     // Data_Deployable is shared by legs, antennae and bays too. Its settings describe solar
     // behavior only when this part actually contains a solar producer.
     if electric.solar_output <= 0.0 {

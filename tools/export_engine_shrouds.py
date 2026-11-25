@@ -14,6 +14,11 @@ the model origin at y 0.802, radius 0.625).
 Some prefabs still carry an old static "fairing" mesh (the Swivel's hangs 0.87 m too low); the client hides
 those and draws this shroud instead.
 
+Procedural tubes and engine mounts carry a wall too (`floating_walls`): not a shroud, but a wall from
+`FairingStartHeight` out along `LocalUpAxis` to the floating node `Length` away, which the importer adds to the
+parts catalog at the default length. KSP2 builds it once a part sits on that node, flaring to the part's size
+(reference/ksp2-procparts: tube_1v_procedural's sections 0.1:0.625 and 1.25:1.25 under a 2.5 m tank).
+
 The file also lists every part's stack node sizes, which the target diameter is read from.
 
     .venv/Scripts/python tools/export_engine_shrouds.py [--parts-dir assets/ksp2/data/parts]
@@ -55,19 +60,46 @@ def shroud_of(part_json: dict) -> dict | None:
     }
 
 
+def wall_of(part_json: dict) -> dict | None:
+    data = part_json["data"]
+    f = next(
+        (md["DataObject"] for m in data["serializedPartModules"] for md in m["ModuleData"] if md["Name"] == "Data_Fairing"),
+        None,
+    )
+    if f is None or not stored(f["FairingEnabled"]) or f.get("IsShroud") or not f.get("DefaultFloatingNodeState"):
+        return None
+    return {
+        "node": f["FloatingAttachNodeTag"],
+        "node_size": int(round(f["FloatingNodeSize"])),
+        "up": f["LocalUpAxis"]["y"],
+        "start_height": f["FairingStartHeight"],
+        "length": f["LengthEditDefault"],
+        "base_radius": f["BaseRadius"],
+        "side_count": int(f["FairingSideCount"]),
+        "min_target": int(f["MinAutoFairingTargetRadius"]),
+        "max_target": int(f["MaxAutoFairingTargetRadius"]),
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--parts-dir", type=Path, default=ROOT / "assets/ksp2/data/parts")
     args = ap.parse_args()
     catalog = json.loads((ROOT / "assets/own/parts-catalog.json").read_text(encoding="utf-8"))
     shrouds = {}
+    walls = {}
     nodes = {}
     for p in catalog:
         stack = {n["id"]: n["size"] for n in p["attach_nodes"] if n["node_type"] == "Stack"}
         if stack:
             nodes[p["id"]] = stack
-        # the procedural fairings, tubes and engine mounts are shaped by the player, not shrouds
-        if "PartComponentModule_Fairing" not in p["module_names"] or p["id"].endswith("_procedural"):
+        if "PartComponentModule_Fairing" not in p["module_names"] or p["id"].startswith("fairing_"):
+            continue
+        if p["id"].endswith("_procedural"):
+            # tubes and engine mounts: a wall out to their floating node
+            w = wall_of(json.loads((args.parts_dir / f"{p['id']}.json").read_text(encoding="utf-8-sig")))
+            if w is not None:
+                walls[p["id"]] = w
             continue
         part = json.loads((args.parts_dir / f"{p['id']}.json").read_text(encoding="utf-8-sig"))
         s = shroud_of(part)
@@ -81,10 +113,10 @@ def main() -> None:
             print(f"skipped {p['id']}: shroud ends {s['start_height'] - s['height']:.3f}, node at {node_y:.3f}")
             continue
         shrouds[p["id"]] = s
-    out = {"shrouds": shrouds, "stack_node_sizes": nodes}
+    out = {"shrouds": shrouds, "floating_walls": walls, "stack_node_sizes": nodes}
     path = ROOT / "assets/own/engine-shrouds.json"
     path.write_text(json.dumps(out, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-    print(f"wrote {path} ({len(shrouds)} shrouds, {len(nodes)} parts with stack nodes)")
+    print(f"wrote {path} ({len(shrouds)} shrouds, {len(walls)} walls, {len(nodes)} parts with stack nodes)")
 
 
 if __name__ == "__main__":
