@@ -651,6 +651,11 @@ struct Node {
     radial_mps: f64,
 }
 
+/// A node's delta-v, m/s.
+fn node_dv(n: &Node) -> f64 {
+    (n.prograde_mps.powi(2) + n.normal_mps.powi(2) + n.radial_mps.powi(2)).sqrt()
+}
+
 /// Where vessel `vessel` will be at `t` on its planned path (the patch the time falls in, so a node after
 /// another sits on the orbit the first one leaves): (body, position from the body, velocity).
 fn path_state(
@@ -13662,7 +13667,23 @@ impl App {
         let ut = self.time.ut_at(now_ms());
         // Burn timer for a node planned on the flown vessel.
         if let Some(el) = self.doc.get_element_by_id("fh-burn") {
-            match self.node.filter(|n| n.vessel == id) {
+            // the next node on the vessel's plan, as the original's timer (not the one being edited)
+            let next = self
+                .node
+                .iter()
+                .chain(self.nodes.iter())
+                .filter(|n| n.vessel == id)
+                .min_by(|a, b| {
+                    // while a burn is flown, its node (the earliest); otherwise a node already passed comes
+                    // last unless it is the only one
+                    let burning = f.burn_left_mps.is_some();
+                    let key = |n: &Node| (!burning && n.ut < ut - 1.0, n.ut);
+                    key(a)
+                        .partial_cmp(&key(b))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .copied();
+            match next {
                 Some(n) => {
                     let dv = (n.prograde_mps.powi(2) + n.normal_mps.powi(2) + n.radial_mps.powi(2))
                         .sqrt();
@@ -13688,8 +13709,17 @@ impl App {
                             dv
                         ),
                         (None, Some(why)) => format!("Burn stopped: {why}"),
-                        _ => hud::burn_text(n.ut - ut, dv, f.mass_t, full),
+                        _ => match self.node_burn(&n) {
+                            Some(e) => hud::burn_line(n.ut - ut, dv, Some(e.seconds), e.short_mps),
+                            None => hud::burn_text(n.ut - ut, dv, f.mass_t, full),
+                        },
                     };
+                    let short = f.burn_left_mps.is_none()
+                        && f.burn_stopped.is_none()
+                        && self
+                            .node_burn(&n)
+                            .is_some_and(|e| e.short_mps >= hud::SHORT_MPS);
+                    el.class_list().toggle_with_force("short", short).ok();
                     el.set_text_content(Some(&text));
                     el.class_list().add_1("on").ok();
                     el.class_list()
@@ -15583,6 +15613,28 @@ impl App {
         };
         if let Some(node) = self.node {
             set("node-dt-text", &hud::fmt_dt(node.ut - ut));
+            // The node's delta-v, its burn time and whether the stages hold it (the original's maneuver
+            // panel and its not-enough-delta-v warning).
+            let dv = node_dv(&node);
+            let est = self.node_burn(&node);
+            let mut text = format!("\u{394}v {dv:.1} m/s");
+            if let Some(e) = est {
+                text.push_str(&format!(" \u{b7} burn {}", hud::fmt_burn(e.seconds)));
+            }
+            let short = est.map(|e| e.short_mps).unwrap_or(0.0);
+            if short >= hud::SHORT_MPS {
+                text.push_str(&format!(
+                    " \u{b7} not enough \u{394}v: {short:.0} m/s short"
+                ));
+            }
+            set("node-summary", &text);
+            if let Some(el) = self.doc.get_element_by_id("node-summary") {
+                el.class_list()
+                    .toggle_with_force("short", short >= hud::SHORT_MPS)
+                    .ok();
+                el.set_attribute("data-ose-short", &format!("{short:.1}"))
+                    .ok();
+            }
         }
         // The orbit point's popup counts down too, and goes with the map or once the point is passed.
         if let Some(t) = self.orbit_popup {
@@ -15592,6 +15644,20 @@ impl App {
                 set("orbit-popup-t", &hud::fmt_dt(t - ut));
             }
         }
+    }
+
+    /// How node `n` falls on its vessel's stages, after the delta-v of the nodes planned before it: the
+    /// burn time at full throttle and what the stages lack. None without a stage readout (the vessel is not
+    /// flown here) or with no engine and propellant left.
+    fn node_burn(&self, n: &Node) -> Option<hud::BurnEstimate> {
+        let f = self.scene.as_ref()?.vessel(n.vessel)?.flight.as_ref()?;
+        let before: f64 = self
+            .nodes
+            .iter()
+            .filter(|m| m.vessel == n.vessel && m.ut < n.ut)
+            .map(node_dv)
+            .sum();
+        hud::burn_estimate(&f.stage_list, before, node_dv(n))
     }
 
     /// Place the node marker on the vessel's current orbit at the burn time.
