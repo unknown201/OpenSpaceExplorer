@@ -97,8 +97,7 @@ Code: `crates/ose-colonies` (rules, tested on the Mun in `tests/found_and_launch
    its founding or the last arrival): the next Kerbal the campaign has not hired is hired and sits in the
    first empty seat (`Colonies::settle`, run by the server once a second). Without room or residents the wait
    starts over. The colony card shows the empty seats, how many moved in, and when the next one is due.
-7. **Orbital colonies**: KSP2 planned an orbital editor environment. Depots already cover stations for
-   routes; an orbital colony would add building in orbit.
+7. ~~**Orbital colonies**~~ (built, protocol 83): see section 8.
 
 ## 5. Decisions (Josh, 2026-11-21)
 
@@ -165,3 +164,32 @@ Tested in `crates/ose-sim/tests/mining.rs` (a reactor-powered drill on the Mun's
 the expected rate, also at x1000 warp until its hold is full; one on barren ground and one without charge
 dig nothing; the refinery's rates and mass yield) and
 `ose_data::abundance` (patchy, smooth, the same for everyone, poor at home).
+
+## 8. Orbital colonies (built, protocol 83)
+
+KSP2 planned an orbital editor environment for building in space. OSE's orbital colony is the surface colony's
+model moved into orbit, with nothing abstracted:
+
+- **Founding**: the same **Found colony here** on a crewed vessel with a colony trunk, while it is in a
+  stable orbit: closed, with its lowest point over the body's air (or 1 km over its highest mountains on an
+  airless body). The trunk that founded it is its **anchor** (`Colony::anchor`, the part's guid): the colony
+  is wherever the vessel carrying that part is, so it moves with the station, through other spheres of
+  influence too (`Colonies::track` keeps its body). The KSC's 5 km clearance applies to landed vessels only.
+- **Members**: the anchor first, then every vessel in space round the same body within 300 m of it. Their
+  tanks are the stock and their crews the residents, so a tanker parked alongside or docked to the station
+  stocks it. Population, CommNet (the station is a relay source), the card and the stock work as on the
+  ground.
+- **Dock**: the colony's launch site is a dock in space, 400 m behind the anchor on its path and moving with
+  it (`ose_colonies::dock`). A craft launched there starts out in flight, nose forward, paid for and crewed
+  from the colony as on a surface pad. A vessel within 100 m of the dock occupies it.
+- **The same craft twice**: a second copy of the station carries the same part guids, so the colony keeps
+  where its anchor was last seen (`Colony::anchor_seen`) and follows the copy nearest where it would be now.
+- **Client**: the card says it is in orbit and names its dock; the map marks it at its station; the flight
+  view's ground markers leave it out (the station is drawn there itself).
+- Not yet: delivery routes end at a colony only on the ground. A depot route to the station already
+  delivers to an orbital colony's stock.
+
+Tested in `crates/ose-colonies/tests/orbital.rs` (refused in the air; founded at 100 km; a tanker 100 m off
+belongs and one 12 km off does not; stock and residents; the dock's place and speed; a neighbour and a second
+colony on the trunk refused; still together after time warp; a twin of the station launched elsewhere is not
+taken for the anchor; no members or dock once the station is gone).

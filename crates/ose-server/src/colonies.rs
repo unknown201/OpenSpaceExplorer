@@ -22,10 +22,20 @@ pub fn sites(s: &Shared, u: &Universe) -> Vec<LaunchSite> {
         .colonies
         .iter()
         .filter_map(|col| {
-            let (lat, lon) = ose_colonies::pad(u, col)?;
+            // an orbital colony's dock moves with it: where it is now is worked out at the launch
+            let (lat, lon) = if col.orbital() {
+                (0.0, 0.0)
+            } else {
+                ose_colonies::pad(u, col)?
+            };
+            let name = if col.orbital() {
+                format!("{} dock ({} orbit)", col.name, col.body)
+            } else {
+                format!("{} pad ({})", col.name, col.body)
+            };
             Some(LaunchSite {
                 id: site_id(col.id),
-                name: format!("{} pad ({})", col.name, col.body),
+                name,
                 occupied_by: None,
                 occupant: None,
                 occupant_name: None,
@@ -89,6 +99,7 @@ pub fn info(s: &Shared, reason: Option<String>) -> ServerMessage {
                 vacancies,
                 arrivals: c.arrivals,
                 next_arrival_in_s: next,
+                orbital: c.orbital(),
             },
         )
         .collect();
@@ -144,6 +155,10 @@ fn near_home(u: &Universe, e: Entity, ksc: &[LaunchSite]) -> bool {
     let Some(p) = u.powered(e).or_else(|| u.dormant(e)) else {
         return false;
     };
+    // in orbit over the KSC is far enough
+    if !p.landed && !p.splashed {
+        return false;
+    }
     let Some(b) = u
         .world
         .get::<ose_sim::bodies::ReferenceBody>(e)
@@ -171,13 +186,12 @@ pub fn after_step(s: &Shared, step: u64) {
         return;
     }
     let mut u = s.universe.lock().expect("sim lock");
-    let colonies = s
-        .campaign
-        .lock()
-        .expect("campaign lock")
-        .colonies
-        .colonies
-        .clone();
+    let colonies = {
+        let mut c = s.campaign.lock().expect("campaign lock");
+        // an orbital colony is round whatever body its anchor is round now
+        c.colonies.track(&mut u);
+        c.colonies.colonies.clone()
+    };
     let mut sources: Vec<Entity> = colonies
         .iter()
         .flat_map(|c| ose_colonies::members(&mut u, c))
