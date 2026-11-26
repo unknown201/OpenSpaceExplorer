@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 /// A camera's forward and up, unit vectors (x, y, z).
 pub type CameraAxes = ((f32, f32, f32), (f32, f32, f32));
-pub const PROTOCOL_VERSION: u16 = 86;
+pub const PROTOCOL_VERSION: u16 = 87;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.

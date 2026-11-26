@@ -91,8 +91,8 @@ pub struct CraftPart {
     pub fairing: Option<crate::fairing::FairingShape>,
     /// An engine shroud's `AerodynamicallyShieldContents` as the craft was saved: a sealed shroud set to
     /// shield takes its engine out of the airflow (KSP2's older saves leave it out, which reads as on). `None`:
-    /// the part's own setting.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// the part's own setting. (Protocol 87.)
+    #[serde(default)]
     pub shroud_shields: Option<bool>,
     /// A parachute's deploy settings when changed from the part's own (`Data_Parachute` `DeploymentMode`,
     /// `minAirPressureToOpen`, `deployAltitude`); `None` keeps the part's defaults.
