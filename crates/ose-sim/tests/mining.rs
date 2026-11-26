@@ -28,6 +28,7 @@ fn craft(defs: &[PartDef], parts: &[&str]) -> Craft {
             .map(|(i, id)| {
                 let d = defs.iter().find(|d| d.id == *id).unwrap();
                 CraftPart {
+                    shroud_shields: None,
                     guid: format!("miner-{i}"),
                     part_id: (*id).into(),
                     parent: i.checked_sub(1),

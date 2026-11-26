@@ -468,6 +468,7 @@ mod tests {
         res: &[(&str, f64)],
     ) -> CraftPart {
         CraftPart {
+            shroud_shields: None,
             shape: None,
             fairing: None,
             chute: None,

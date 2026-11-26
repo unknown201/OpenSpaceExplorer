@@ -9,6 +9,7 @@ mod tests {
 
     fn part(id: &str, parent: Option<usize>, y: f64, x: f64) -> CraftPart {
         CraftPart {
+            shroud_shields: None,
             guid: format!("g{y}{x}"),
             part_id: id.into(),
             parent,
