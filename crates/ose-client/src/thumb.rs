@@ -142,6 +142,7 @@ mod tests {
 
     fn part(part_id: &str, parent: Option<usize>, pos: DVec3, stage: i32) -> CraftPart {
         CraftPart {
+            shroud_shields: None,
             shape: None,
             fairing: None,
             chute: None,

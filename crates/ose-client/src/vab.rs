@@ -300,6 +300,7 @@ impl Editor {
         };
         if self.craft.parts.is_empty() {
             self.craft.parts.push(CraftPart {
+                shroud_shields: None,
                 chute: None,
                 control: None,
                 shape: None,
@@ -397,6 +398,7 @@ impl Editor {
         let idx = self.craft.parts.len();
         let guid = self.next_guid();
         self.craft.parts.push(CraftPart {
+            shroud_shields: None,
             chute: None,
             control: None,
             shape: None,
@@ -926,6 +928,7 @@ impl Editor {
             0
         };
         let mut p = CraftPart {
+            shroud_shields: None,
             chute: None,
             control: None,
             shape: None,
@@ -1832,6 +1835,7 @@ impl Editor {
             let mirrored = mirrored_pair && out.len() == 1;
             out.push(self.craft.parts.len());
             self.craft.parts.push(CraftPart {
+                shroud_shields: None,
                 chute: None,
                 control: None,
                 shape: None,

@@ -28,6 +28,7 @@ fn fixture() -> (Structure, Powered) {
         .map(|(i, id)| {
             let def = defs.iter().find(|d| d.id == *id).unwrap();
             CraftPart {
+                shroud_shields: None,
                 guid: format!("control-{i}"),
                 part_id: (*id).into(),
                 parent: (i > 0).then_some(0),

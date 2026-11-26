@@ -28,8 +28,8 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $pilotDir = Join-Path $Ksp2 "BepInEx\ose-parity"
 $plugin = Join-Path $Ksp2 "BepInEx\plugins\OSE.ParityPilot.dll"
 $campaign = Join-Path $env:USERPROFILE "AppData\LocalLow\Intercept Games\Kerbal Space Program 2\Saves\SinglePlayer\OSE Parity"
-$outNames = @{ reentry = "ksp2-reentryorbit-reentry"; pod = "ksp2-reentryorbit-pod"; stack = "ksp2-reentryorbit-stack"; k1 = "ksp2-reentryorbit-k1"; k2 = "ksp2-reentryorbit-k2"; jet = "ksp2-reentryorbit-jet"; fairing = "ksp2-reentryorbit-fairing"; "pod free" = "ksp2-reentryorbit-podfree"; settings = "ksp2-thermal-settings"; atmosphere = "ksp2-atmosphere"; jetfly = "ksp2-jetfly" }
-$crafts = @("craft-reentry.json", "craft-drop-pod.json", "craft-stack.json", "craft-jet.json", "craft-k1.json", "craft-k2.json", "craft-fairing-nose.json")
+$outNames = @{ reentry = "ksp2-reentryorbit-reentry"; pod = "ksp2-reentryorbit-pod"; stack = "ksp2-reentryorbit-stack"; k1 = "ksp2-reentryorbit-k1"; k2 = "ksp2-reentryorbit-k2"; jet = "ksp2-reentryorbit-jet"; fairing = "ksp2-reentryorbit-fairing"; asparagus = "ksp2-reentryorbit-asparagus"; asym = "ksp2-reentryorbit-asym"; sparrow = "ksp2-reentryorbit-sparrow"; "pod free" = "ksp2-reentryorbit-podfree"; settings = "ksp2-thermal-settings"; atmosphere = "ksp2-atmosphere"; jetfly = "ksp2-jetfly" }
+$crafts = @("craft-reentry.json", "craft-drop-pod.json", "craft-stack.json", "craft-jet.json", "craft-k1.json", "craft-k2.json", "craft-fairing-nose.json", "craft-asparagus.json", "craft-asym.json", "craft-sparrow.json")
 
 if (-not (Test-Path $pilotDir)) { throw "No ${pilotDir}: the parity pilot (BepInEx) is not installed in KSP2." }
 if (Get-Process -Name "KSP2_x64" -ErrorAction SilentlyContinue) { throw "KSP2 is running; close it first." }

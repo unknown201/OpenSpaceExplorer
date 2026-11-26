@@ -853,6 +853,7 @@ mod tests {
     #[test]
     fn a_craft_edited_after_its_launch_no_longer_covers_the_vessel() {
         let part = |guid: &str| ose_data::craft::CraftPart {
+            shroud_shields: None,
             shape: None,
             fairing: None,
             chute: None,

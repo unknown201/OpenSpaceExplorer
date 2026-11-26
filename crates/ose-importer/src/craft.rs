@@ -78,6 +78,33 @@ fn part_shape(v: &Value) -> Option<ose_data::procedural::WingShape> {
     })
 }
 
+/// An engine shroud's `AerodynamicallyShieldContents` as saved (`Data_Fairing` with `IsShroud`). KSP2's older
+/// saves leave the field out, and it then reads as its class default, on (the stock K1's Terrier).
+fn part_shroud_shields(v: &Value) -> Option<bool> {
+    fn find(v: &Value) -> Option<&Value> {
+        match v {
+            Value::Object(m) => {
+                if m.get("Name").and_then(|n| n.as_str()) == Some("Data_Fairing") {
+                    return m.get("DataObject");
+                }
+                m.values().find_map(find)
+            }
+            Value::Array(a) => a.iter().find_map(find),
+            _ => None,
+        }
+    }
+    let d = find(v)?;
+    d["IsShroud"].as_bool().filter(|s| *s)?;
+    let shield = &d["AerodynamicallyShieldContents"];
+    Some(
+        shield
+            .get("storedValue")
+            .unwrap_or(shield)
+            .as_bool()
+            .unwrap_or(true),
+    )
+}
+
 /// A custom fairing's wall (`Data_Fairing.CrossSections` of a CUSTOM construction).
 fn part_fairing(v: &Value) -> Option<ose_data::fairing::FairingShape> {
     fn find(v: &Value) -> Option<&Value> {
@@ -361,6 +388,7 @@ pub fn craft_from_value(v: &Value) -> anyhow::Result<Craft> {
         parts.push(CraftPart {
             shape: part_shape(p).filter(|sh| sh.valid_for(&s(p, "partName"))),
             fairing: part_fairing(p).filter(|f| f.valid_for(&s(p, "partName"))),
+            shroud_shields: part_shroud_shields(p),
             control: part_control(p),
             chute: None,
             symmetry: 0,

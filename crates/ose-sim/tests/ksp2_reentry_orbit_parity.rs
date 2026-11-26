@@ -99,50 +99,153 @@ struct Flight {
     destroyed: bool,
 }
 
+/// KSP2's part order for a craft (`PartOwner.Parts`): depth first from the root, each part's surface-attached
+/// children first (in craft order), then what hangs on its bottom node, then the rest.
+fn ksp2_part_order(c: &ose_data::craft::Craft) -> Vec<usize> {
+    fn visit(c: &ose_data::craft::Craft, i: usize, order: &mut Vec<usize>) {
+        order.push(i);
+        let rank = |j: usize| match c.parts[j].parent_node.as_deref() {
+            None | Some("") => 0,
+            Some(n) if n.starts_with("bottom") => 1,
+            _ => 2,
+        };
+        let mut children: Vec<usize> = (0..c.parts.len())
+            .filter(|&j| c.parts[j].parent == Some(i))
+            .collect();
+        children.sort_by_key(|&j| rank(j));
+        for j in children {
+            visit(c, j, order);
+        }
+    }
+    let mut order = Vec::new();
+    if let Some(root) = c.parts.iter().position(|p| p.parent.is_none()) {
+        visit(c, root, &mut order);
+    }
+    order
+}
+
+/// Every way to keep, from `alive` (KSP2's order), parts named `left` in that order (at most 64).
+fn keep_ways(
+    alive: &[usize],
+    names: &[&str],
+    left: &[&str],
+    from: usize,
+    kept: &mut Vec<usize>,
+    ways: &mut Vec<Vec<usize>>,
+) {
+    if ways.len() >= 64 {
+        return;
+    }
+    if kept.len() == left.len() {
+        ways.push(kept.clone());
+        return;
+    }
+    let need = left[kept.len()];
+    for k in from..alive.len() {
+        if alive.len() - k < left.len() - kept.len() {
+            break;
+        }
+        if names[alive[k]] == need {
+            kept.push(alive[k]);
+            keep_ways(alive, names, left, k + 1, kept, ways);
+            kept.pop();
+        }
+    }
+}
+
 /// KSP2's run as a `Flight`, times from the start row.
-fn ksp2_flight(run: &Run, limits: &[f64]) -> Flight {
+fn ksp2_flight(run: &Run, c: &ose_data::craft::Craft) -> Flight {
+    let limits = &limits(c);
     let n = limits.len();
     let t0 = num(&run.start, "t");
     let names: Vec<&str> = run.events[0]["names"].split(' ').collect();
     assert_eq!(names.len(), n, "KSP2's craft has the craft file's parts");
-    // KSP2 logs the parts still there in craft order: `alive` maps its index to the craft's
-    let mut alive: Vec<usize> = (0..n).collect();
+    // KSP2 logs the parts still there in its own order (`PartOwner.Parts`): from the root, depth first,
+    // each part's children latest attached first. `alive` maps its index to the craft's.
+    let mut alive: Vec<usize> = ksp2_part_order(c);
+    assert_eq!(
+        alive
+            .iter()
+            .map(|&i| c.parts[i].part_id.as_str())
+            .collect::<Vec<_>>(),
+        names,
+        "KSP2's part order"
+    );
+    let names: Vec<&str> = c.parts.iter().map(|p| p.part_id.as_str()).collect();
     let mut lost = Vec::new();
     let mut pending = run.events[1..]
         .iter()
-        .filter(|e| !e["gone"].is_empty() && e["gone"] != "vessel");
-    let mut next_event = pending.next();
-    let mut samples: Vec<Sample> = Vec::new();
-    let mut peak = vec![0.0f64; n];
+        .filter(|e| !e["gone"].is_empty() && e["gone"] != "vessel")
+        .peekable();
+    // the rows of each logged moment
+    let mut moments: Vec<(f64, Vec<&Row>)> = Vec::new();
     for r in &run.parts {
         let t = num(r, "t") - t0;
-        while let Some(e) = next_event.filter(|e| num(e, "t") - t0 <= t) {
-            for name in e["gone"].split(' ') {
-                if let Some(k) = alive.iter().position(|&i| names[i] == name) {
-                    lost.push((num(e, "t") - t0, num(e, "alt_m"), alive.remove(k)));
-                }
+        match moments.last_mut() {
+            Some((last, rows)) if *last == t => rows.push(r),
+            _ => moments.push((t, vec![r])),
+        }
+    }
+    let mut samples: Vec<Sample> = Vec::new();
+    let mut peak = vec![0.0f64; n];
+    for (t, rows) in &moments {
+        let t = *t;
+        while let Some(e) = pending.next_if(|e| num(e, "t") - t0 <= t) {
+            // KSP2 names what went and what is left (in its order), not which of two alike it was: of the
+            // ways to take the parts named out that leave that list, the one whose parts keep their
+            // temperatures from the moment before to the moment after
+            let left: Vec<&str> = e["names"].split(' ').filter(|s| !s.is_empty()).collect();
+            let before = samples.last().map(|s| s.temps.clone());
+            let now: HashMap<usize, f64> = rows
+                .iter()
+                .map(|r| (r["index"].parse().unwrap(), num(r, "temp_k")))
+                .collect();
+            let mut ways = Vec::new();
+            keep_ways(&alive, &names, &left, 0, &mut Vec::new(), &mut ways);
+            // (and what is left still hangs together: no part kept whose parent went)
+            let score = |kept: &Vec<usize>| -> f64 {
+                let orphans = kept
+                    .iter()
+                    .filter(|&&i| c.parts[i].parent.is_some_and(|p| !kept.contains(&p)))
+                    .count();
+                1e6 * orphans as f64
+                    + kept
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(k, &i)| {
+                            let was = before.as_ref()?[i]?;
+                            Some((now.get(&k)? - was).abs())
+                        })
+                        .sum::<f64>()
+            };
+            let kept = ways
+                .into_iter()
+                .min_by(|a, b| score(a).total_cmp(&score(b)))
+                .unwrap_or_else(|| panic!("KSP2 left {left:?} out of {alive:?}"));
+            for &i in alive.iter().filter(|i| !kept.contains(i)) {
+                lost.push((num(e, "t") - t0, num(e, "alt_m"), i));
             }
-            next_event = pending.next();
+            alive = kept;
         }
-        if samples.last().map(|s| s.t) != Some(t) {
-            samples.push(Sample {
-                t,
-                alt: num(r, "alt_m"),
-                speed: num(r, "srf_speed"),
-                temps: vec![None; n],
-                exposed: vec![None; n],
-                flux: vec![None; n],
-            });
-        }
-        let idx: usize = r["index"].parse().unwrap();
-        if let Some(&i) = alive.get(idx) {
-            let temp = num(r, "temp_k");
-            let s = samples.last_mut().unwrap();
-            s.temps[i] = Some(temp);
-            s.exposed[i] = r.get("exposed").map(|_| num(r, "exposed"));
-            s.flux[i] = r.get("reentry_flux").map(|_| num(r, "reentry_flux"));
-            if t >= 0.0 {
-                peak[i] = peak[i].max(temp);
+        samples.push(Sample {
+            t,
+            alt: num(rows[0], "alt_m"),
+            speed: num(rows[0], "srf_speed"),
+            temps: vec![None; n],
+            exposed: vec![None; n],
+            flux: vec![None; n],
+        });
+        for r in rows {
+            let idx: usize = r["index"].parse().unwrap();
+            if let Some(&i) = alive.get(idx) {
+                let temp = num(r, "temp_k");
+                let s = samples.last_mut().unwrap();
+                s.temps[i] = Some(temp);
+                s.exposed[i] = r.get("exposed").map(|_| num(r, "exposed"));
+                s.flux[i] = r.get("reentry_flux").map(|_| num(r, "reentry_flux"));
+                if t >= 0.0 {
+                    peak[i] = peak[i].max(temp);
+                }
             }
         }
     }
@@ -189,7 +292,7 @@ fn ose_flight(c: &ose_data::craft::Craft, run: &Run, seconds: f64, replay: bool)
     let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
     let v: Entity = u.spawn_powered_on_surface(&c.name, body, spec, 0.0, 0.0);
     let n = c.parts.len();
-    let ksp2 = ksp2_flight(run, &limits(c));
+    let ksp2 = ksp2_flight(run, c);
     let mut st = Structure::build(c, &defs, &res);
     for (i, t) in ksp2.samples[0].temps.iter().enumerate() {
         st.temperature_k[i] = t.unwrap();
@@ -240,7 +343,9 @@ fn ose_flight(c: &ose_data::craft::Craft, run: &Run, seconds: f64, replay: bool)
 
     // KSP2's nose as components along the orbital velocity, the vertical square to it, and the side
     let t0 = num(start, "t");
-    let attitude: Vec<(f64, DVec3, Option<DVec3>)> = run
+    // and the pitch, yaw and roll its SAS commanded (the control surfaces move with them)
+    type Attitude = (f64, DVec3, Option<DVec3>, Option<DVec3>);
+    let attitude: Vec<Attitude> = run
         .attitude
         .iter()
         .map(|r| {
@@ -249,6 +354,8 @@ fn ose_flight(c: &ose_data::craft::Craft, run: &Run, seconds: f64, replay: bool)
                 DVec3::new(num(r, "along"), num(r, "up"), num(r, "side")),
                 r.contains_key("x_along")
                     .then(|| DVec3::new(num(r, "x_along"), num(r, "x_up"), num(r, "x_side"))),
+                r.contains_key("pitch")
+                    .then(|| DVec3::new(num(r, "pitch"), num(r, "yaw"), num(r, "roll"))),
             )
         })
         .collect();
@@ -262,7 +369,7 @@ fn ose_flight(c: &ose_data::craft::Craft, run: &Run, seconds: f64, replay: bool)
     for k in 1..=(seconds / DT) as usize {
         if replay {
             let t = (k - 1) as f64 * DT;
-            let (_, a, x) = attitude[attitude
+            let (_, a, x, controls) = attitude[attitude
                 .partition_point(|x| x.0 < t - 1e-6)
                 .min(attitude.len() - 1)];
             let mut p = u.powered(v).unwrap().clone();
@@ -289,6 +396,9 @@ fn ose_flight(c: &ose_data::craft::Craft, run: &Run, seconds: f64, replay: bool)
             }
             p.angvel = DVec3::ZERO;
             u.set_powered(v, p);
+            if let Some(c) = controls {
+                u.set_rotation(v, c.x, c.y, c.z);
+            }
         }
         u.step();
         let t = k as f64 * DT;
@@ -390,7 +500,7 @@ fn at(f: &Flight, t: f64) -> Option<&Sample> {
 /// `flight::rotating_frame_error`), every part's temperature (within 4% + 8 K), and the
 /// same parts lost at about the same time.
 fn compare(name: &str, c: &ose_data::craft::Craft, run: &Run) {
-    compare_until(name, c, run, f64::INFINITY);
+    compare_until(name, c, run, f64::INFINITY, true);
 }
 
 /// When KSP2's craft first swings more than 5 degrees off retrograde, s from the start row: SAS lost it and it
@@ -404,16 +514,23 @@ fn tumbles_at(run: &Run) -> f64 {
         .map_or(f64::INFINITY, |(t, _)| t)
 }
 
-/// `compare` up to `until` s: the parts' heat and the fall are held while the craft holds retrograde. Past that
-/// it tumbles, which the replay (attitude only, every 0.1 s) does not carry well enough to hold a part's
-/// temperature or the speed to these tolerances (`docs/ksp2-side-by-side-gaps.md` T13), so peaks and losses
-/// are not held.
-fn compare_until(name: &str, c: &ose_data::craft::Craft, run: &Run, until: f64) {
+/// `compare` for a craft that swings off retrograde at `until` s and tumbles: the whole fall, its speed,
+/// height, part temperatures and losses, but each part's share of the airflow and its heat only while it holds
+/// retrograde. Once it tumbles those change from tick to tick, and a sample a fraction of a second off reads
+/// another moment of the swing; what they add up to is held by the temperatures. Around a part coming off the
+/// temperatures are left a few seconds too (the two games lose it up to a few tenths of a second apart).
+fn compare_until(
+    name: &str,
+    c: &ose_data::craft::Craft,
+    run: &Run,
+    until: f64,
+    heat_through_swing: bool,
+) {
     let n = c.parts.len();
-    let ksp2 = ksp2_flight(run, &limits(c));
-    let end = ksp2.samples.last().unwrap().t.min(until);
+    let ksp2 = ksp2_flight(run, c);
+    let end = ksp2.samples.last().unwrap().t;
     // a craft KSP2 burned up may go a few seconds later here (the losses are held to 5 s below)
-    let whole = until.is_infinite();
+    let whole = true;
     let ose = ose_flight(
         c,
         run,
@@ -425,8 +542,15 @@ fn compare_until(name: &str, c: &ose_data::craft::Craft, run: &Run, until: f64) 
         true,
     );
     println!("== {name}");
+    // once a part comes off the craft that is left is another shape, and the logged attitude may follow
+    // another piece of it: the fall is held to its first break-up, the losses to the end
+    let broke = ksp2.lost.first().map_or(f64::INFINITY, |l| l.0);
+    let thermal_mass = {
+        let (defs, res) = catalog();
+        Structure::build(c, &defs, &res).thermal_mass
+    };
     let mut t = 10.0;
-    while t <= end {
+    while t <= end.min(broke) {
         let (Some(k), Some(o)) = (at(&ksp2, t), at(&ose, t)) else {
             break;
         };
@@ -461,17 +585,80 @@ fn compare_until(name: &str, c: &ose_data::craft::Craft, run: &Run, until: f64) 
             k.alt,
             k.speed
         );
+        // Two of the same part side by side meet the air level with each other: which one KSP2 counts as
+        // ahead, and so shadows the other, flips from tick to tick (two Swivels side by side swap 1.0 and 0.85).
+        // Their exposure and heat are held as a set: each part's paired with the one of its kind that ranks
+        // the same.
+        // (KSP2 logs the heat a tick behind the exposure, so each is paired on its own.)
+        let pairing = |ours: &Vec<Option<f64>>, theirs: &Vec<Option<f64>>, step: f64| {
+            let mut pair: Vec<usize> = (0..n).collect();
+            for i in 0..n {
+                let kind: Vec<usize> = (0..n)
+                    .filter(|&j| c.parts[j].part_id == c.parts[i].part_id)
+                    .filter(|&j| ours[j].is_some() && theirs[j].is_some())
+                    .collect();
+                if kind.len() < 2 || kind[0] != i {
+                    continue;
+                }
+                // ranked by value, a near tie kept in craft order
+                let rank = |e: &Vec<Option<f64>>| {
+                    let mut r = kind.clone();
+                    r.sort_by_key(|&a| ((e[a].unwrap() / step).round() as i64, a));
+                    r
+                };
+                for (o, k) in rank(ours).into_iter().zip(rank(theirs)) {
+                    pair[o] = k;
+                }
+            }
+            pair
+        };
+        let pair = pairing(&o.exposed, &k.exposed, 0.03);
+        // tumbling, which of those twins took more of the heat is that tick-to-tick swap too
+        let pair_temp = if t >= until {
+            pairing(&o.temps, &k.temps, 1.0)
+        } else {
+            (0..n).collect()
+        };
+        let pair_flux = pairing(&o.flux, &k.flux, 5.0);
+        let breaking = ksp2
+            .lost
+            .iter()
+            .chain(&ose.lost)
+            .any(|l| t - l.0 > -1.0 && t - l.0 < 5.0);
         for i in 0..n {
-            if let (Some(a), Some(b)) = (k.temps[i], o.temps[i]) {
+            // Tumbling, parts level with each other swap which shadows which from tick to tick (KSP2 sorts its
+            // shadow pass by how far forward each reaches, unstably, and the Sparrow's gear and wings are within
+            // 2 cm): what each part takes is held looser there, and the smallest (a battery's 2.5 kJ/K follows
+            // each swing within a second) not at all.
+            let tumbling = t >= until;
+            let tolerance = |a: f64| {
+                if tumbling {
+                    0.15 * a + 10.0
+                } else {
+                    0.04 * a + 8.0
+                }
+            };
+            let small = tumbling && (thermal_mass[i] < 10.0 || !heat_through_swing);
+            if let (Some(a), Some(b), false, false) =
+                (k.temps[pair_temp[i]], o.temps[i], breaking, small)
+            {
                 assert!(
-                    (a - b).abs() < 0.04 * a + 8.0,
+                    (a - b).abs() < tolerance(a),
                     "{name} t {t}: part {i} {} at {b:.0} K, KSP2 {a:.0} K",
                     c.parts[i].part_id
                 );
             }
             // where the run logged them: how much of the part the airflow reaches (its shadowing by the parts
             // ahead) and the re-entry heat it takes
-            if let (Some(a), Some(b)) = (k.exposed[i], o.exposed[i]) {
+            // (not a fuel line or strut: its outline is the line stretched between its anchors, which OSE does
+            // not draw; it takes no heat either way)
+            let compound = ["fuelline_", "strut_"]
+                .iter()
+                .any(|k| c.parts[i].part_id.starts_with(k));
+            if t >= until {
+                continue;
+            }
+            if let (Some(a), Some(b), false) = (k.exposed[pair[i]], o.exposed[i], compound) {
                 assert!(
                     (a - b).abs() < 0.03,
                     "{name} t {t}: part {i} {} {b:.3} exposed, KSP2 {a:.3}",
@@ -480,9 +667,12 @@ fn compare_until(name: &str, c: &ose_data::craft::Craft, run: &Run, until: f64) 
             }
             // for a part well out in the air (one at the edge of a shadow is held by its exposure above): the runs
             // logged with it hold steady attitudes, the older swinging ones are held to their temperatures
-            if let (Some(a), Some(b), Some(ka), Some(oa)) =
-                (k.flux[i], o.flux[i], k.exposed[i], o.exposed[i])
-            {
+            if let (Some(a), Some(b), Some(ka), Some(oa)) = (
+                k.flux[pair_flux[i]],
+                o.flux[i],
+                k.exposed[pair[i]],
+                o.exposed[i],
+            ) {
                 if ka.min(oa) < 0.1 {
                     continue;
                 }
@@ -495,32 +685,75 @@ fn compare_until(name: &str, c: &ose_data::craft::Craft, run: &Run, until: f64) 
         }
         t += 10.0;
     }
-    if !whole {
-        println!("{name}: tumbles at {until:.0} s; held to there");
-        return;
+    if until.is_finite() {
+        println!("{name}: swings off retrograde at {until:.0} s");
     }
+    // the hottest each part got before the break-up (all of it when the craft stays whole or burns up as one)
+    let peak_until = if heat_through_swing {
+        broke - 1.0
+    } else {
+        until.min(broke - 1.0)
+    };
+    let peak = |f: &Flight, i: usize| {
+        if peak_until.is_infinite()
+            || ksp2.lost.iter().all(|l| l.0 - broke < 1.0) && heat_through_swing
+        {
+            return f.peak[i];
+        }
+        f.samples
+            .iter()
+            .filter(|s| s.t < peak_until)
+            .filter_map(|s| s.temps[i])
+            .fold(0.0, f64::max)
+    };
+    // (twins side by side compared as a set: the hottest with the hottest)
+    let ranked = |f: &Flight, i: usize| {
+        let kind: Vec<usize> = (0..n)
+            .filter(|&j| c.parts[j].part_id == c.parts[i].part_id)
+            .collect();
+        let mut peaks: Vec<f64> = kind.iter().map(|&j| peak(f, j)).collect();
+        peaks.sort_by(f64::total_cmp);
+        let mut ours: Vec<(f64, usize)> = kind.iter().map(|&j| (peak(&ose, j), j)).collect();
+        ours.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let rank = ours.iter().position(|&(_, j)| j == i).unwrap();
+        peaks[rank]
+    };
     for (i, p) in c.parts.iter().enumerate() {
+        let (ours, theirs) = (peak(&ose, i), ranked(&ksp2, i));
         println!(
-            "part {i} {}: peak {:.0} K (KSP2 {:.0} K)",
-            p.part_id, ose.peak[i], ksp2.peak[i]
+            "part {i} {}: peak {ours:.0} K (KSP2 {theirs:.0} K)",
+            p.part_id
         );
         assert!(
-            (ose.peak[i] - ksp2.peak[i]).abs() < 0.04 * ksp2.peak[i] + 8.0,
-            "{name}: {} peak {:.0} vs KSP2 {:.0} K",
+            (ours - theirs).abs() < 0.04 * theirs + 8.0,
+            "{name}: {} peak {ours:.0} vs KSP2 {theirs:.0} K",
             p.part_id,
-            ose.peak[i],
-            ksp2.peak[i]
         );
     }
-    println!("lost: OSE {:?}\n      KSP2 {:?}", ose.lost, ksp2.lost);
-    assert_eq!(ose.destroyed, ksp2.destroyed, "{name}: craft destroyed");
-    let set = |f: &Flight| {
-        let mut v: Vec<usize> = f.lost.iter().map(|l| l.2).collect();
+    println!(
+        "lost: OSE {:?}
+      KSP2 {:?}",
+        ose.lost, ksp2.lost
+    );
+    if broke.is_infinite() || ksp2.lost.iter().all(|l| l.0 - broke < 1.0) {
+        assert_eq!(ose.destroyed, ksp2.destroyed, "{name}: craft destroyed");
+    }
+    // the parts lost in the break-up (its first 10 s; what the pieces left hit later is another fall)
+    let in_breakup = |f: &Flight| -> Vec<(f64, f64, usize)> {
+        f.lost
+            .iter()
+            .copied()
+            .filter(|l| l.0 <= broke + 10.0)
+            .collect()
+    };
+    let (ose_lost, ksp2_lost) = (in_breakup(&ose), in_breakup(&ksp2));
+    let set = |lost: &Vec<(f64, f64, usize)>| {
+        let mut v: Vec<usize> = lost.iter().map(|l| l.2).collect();
         v.sort();
         v
     };
-    assert_eq!(set(&ose), set(&ksp2), "{name}: parts lost");
-    for (o, k) in ose.lost.iter().zip(&ksp2.lost) {
+    assert_eq!(set(&ose_lost), set(&ksp2_lost), "{name}: parts lost");
+    for (o, k) in ose_lost.iter().zip(&ksp2_lost) {
         assert!(
             (o.0 - k.0).abs() < 5.0,
             "{name}: part {} lost at {:.1} s, KSP2 at {:.1} s",
@@ -571,7 +804,7 @@ fn ksp2_free_tumbling_pod_keeps_tumbling_and_burns_up() {
         "../../../tools/ksp2-parity-pilot/craft-drop-pod.json"
     ));
     let run = run!("ksp2-reentryorbit-podfree");
-    let ksp2 = ksp2_flight(&run, &limits(&c));
+    let ksp2 = ksp2_flight(&run, &c);
     let ose = ose_flight(&c, &run, ksp2.samples.last().unwrap().t + 120.0, false);
     for s in ksp2.samples.iter().step_by(20) {
         let o = speed_at_height(&ose, s.alt, s.t);
@@ -612,7 +845,7 @@ fn ksp2_k1_reentry_part_by_part() {
         "../../../tools/ksp2-parity-pilot/craft-k1.json"
     ));
     let run = run!("ksp2-reentryorbit-k1");
-    compare_until("K1", &c, &run, tumbles_at(&run));
+    compare_until("K1", &c, &run, tumbles_at(&run), false);
 }
 
 #[test]
@@ -621,7 +854,7 @@ fn ksp2_k2_reentry_part_by_part() {
         "../../../tools/ksp2-parity-pilot/craft-k2.json"
     ));
     let run = run!("ksp2-reentryorbit-k2");
-    compare_until("K2", &c, &run, tumbles_at(&run));
+    compare_until("K2", &c, &run, tumbles_at(&run), true);
 }
 
 #[test]
@@ -630,7 +863,7 @@ fn ksp2_jet_reentry_part_by_part() {
         "../../../tools/ksp2-parity-pilot/craft-jet.json"
     ));
     let run = run!("ksp2-reentryorbit-jet");
-    compare_until("jet", &c, &run, tumbles_at(&run));
+    compare_until("jet", &c, &run, tumbles_at(&run), true);
 }
 
 #[test]
@@ -639,4 +872,35 @@ fn ksp2_fairing_nose_reentry_part_by_part() {
         "../../../tools/ksp2-parity-pilot/craft-fairing-nose.json"
     ));
     compare("fairing nose", &c, &run!("ksp2-reentryorbit-fairing"));
+}
+
+/// Three Swivels clustered side by side (craft-asparagus.json: a core and two radial boosters with fuel lines),
+/// engines first: the three bells take the heat side by side and shadow what is over them.
+#[test]
+fn ksp2_clustered_engines_reentry_part_by_part() {
+    let c = craft(include_str!(
+        "../../../tools/ksp2-parity-pilot/craft-asparagus.json"
+    ));
+    let run = run!("ksp2-reentryorbit-asparagus");
+    compare_until("clustered", &c, &run, tumbles_at(&run), true);
+}
+
+/// The same core with one booster on one side only (craft-asym.json): lopsided drag and shadows.
+#[test]
+fn ksp2_asymmetric_craft_reentry_part_by_part() {
+    let c = craft(include_str!(
+        "../../../tools/ksp2-parity-pilot/craft-asym.json"
+    ));
+    let run = run!("ksp2-reentryorbit-asym");
+    compare_until("asymmetric", &c, &run, tumbles_at(&run), true);
+}
+
+/// KSP2's stock RC-Sparrow drone plane, tail first: fixed gear, a jet intake and shaped wings.
+#[test]
+fn ksp2_sparrow_plane_reentry_part_by_part() {
+    let c = craft(include_str!(
+        "../../../tools/ksp2-parity-pilot/craft-sparrow.json"
+    ));
+    let run = run!("ksp2-reentryorbit-sparrow");
+    compare_until("sparrow", &c, &run, tumbles_at(&run), false);
 }

@@ -562,6 +562,7 @@ mod tests {
             name: "x".into(),
             description: String::new(),
             parts: vec![ose_data::craft::CraftPart {
+                shroud_shields: None,
                 shape: None,
                 fairing: None,
                 chute: None,

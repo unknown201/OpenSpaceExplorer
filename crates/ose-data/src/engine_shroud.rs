@@ -71,6 +71,54 @@ pub struct Wall {
     pub side_count: u32,
 }
 
+impl Wall {
+    /// The drag cube of the part wearing this wall (`Module_Fairing.SetDragCubes`, the procedural cube weighted
+    /// 1 while the wall is on: KSP2 renders the part's whole model). The part is its own default cube taken as a
+    /// drum, with the wall's lathe round it; part frame.
+    pub fn drag_cube(&self, own: Option<&crate::DragCube>) -> crate::DragCube {
+        let sides = (self.side_count as usize).max(12);
+        let w = sides as u32;
+        let mut points: Vec<[f64; 3]> = Vec::new();
+        let mut tris: Vec<[u32; 3]> = Vec::new();
+        let ring = |points: &mut Vec<[f64; 3]>, y: f64, r: f64| {
+            let row = (points.len() / sides) as u32;
+            for k in 0..sides {
+                let a = k as f64 / sides as f64 * std::f64::consts::TAU;
+                points.push([r * a.cos(), y, r * a.sin()]);
+            }
+            row
+        };
+        let band = |tris: &mut Vec<[u32; 3]>, lo: u32, hi: u32| {
+            let up = (hi - lo) * w;
+            for k in 0..w {
+                let (a, b) = (lo * w + k, lo * w + (k + 1) % w);
+                tris.push([a, b + up, b]);
+                tris.push([a, a + up, b + up]);
+            }
+        };
+        let [lo, hi] = self.rings;
+        let (a, b) = (ring(&mut points, lo.0, lo.1), ring(&mut points, hi.0, hi.1));
+        band(&mut tris, a, b);
+        let mut caps = vec![(a, lo.0), (b, hi.0)];
+        if let Some(c) = own.filter(|c| c.size.y > 0.0) {
+            let r = 0.5 * c.size.x.max(c.size.z);
+            let (y0, y1) = (c.center.y - 0.5 * c.size.y, c.center.y + 0.5 * c.size.y);
+            let (a, b) = (ring(&mut points, y0, r), ring(&mut points, y1, r));
+            band(&mut tris, a, b);
+            caps.extend([(a, y0), (b, y1)]);
+        }
+        // the flat ends, so each end on view sees a disc
+        let first = points.len() as u32;
+        for (k, (row, y)) in caps.iter().enumerate() {
+            points.push([0.0, *y, 0.0]);
+            for j in 0..w {
+                tris.push([first + k as u32, row * w + j, row * w + (j + 1) % w]);
+            }
+        }
+        crate::procedural::render_drag_cube("Shroud", &points, &tris)
+    }
+}
+
 #[derive(Deserialize)]
 struct File {
     shrouds: BTreeMap<String, ShroudDef>,
@@ -148,6 +196,24 @@ fn on_node(craft: &Craft, i: usize, node: &str) -> Option<Option<i32>> {
             .iter()
             .find(|q| q.parent == Some(i) && q.parent_node.as_deref() == Some(node))
             .map(|q| q.own_node.as_deref().and_then(|n| node_size(&q.part_id, n)))
+    }
+}
+
+/// The part that holds part `i`'s wall up: the one on its shroud's or wall's node (a child on that node, or
+/// the parent it hangs from by it). The wall goes when that part does.
+pub fn node_part(craft: &Craft, i: usize) -> Option<usize> {
+    let part_id = &craft.parts.get(i)?.part_id;
+    let node = def(part_id)
+        .map(|d| d.node.as_str())
+        .or_else(|| wall_def(part_id).map(|d| d.node.as_str()))?;
+    let p = &craft.parts[i];
+    if p.own_node.as_deref() == Some(node) {
+        p.parent
+    } else {
+        craft
+            .parts
+            .iter()
+            .position(|q| q.parent == Some(i) && q.parent_node.as_deref() == Some(node))
     }
 }
 
