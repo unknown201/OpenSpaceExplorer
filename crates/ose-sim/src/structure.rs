@@ -348,6 +348,9 @@ pub struct Structure {
     /// (`ose_data::engine_shroud`): the part's drag cube with the wall, its corners turned with the part
     /// (vessel frame, from its position), and the part holding it up.
     wall_cube: Vec<Option<WallCube>>,
+    /// Whether an engine's shroud, sealed by the part under it, takes the engine out of the airflow
+    /// (`CraftPart::shroud_shields`).
+    shroud_shields: Vec<bool>,
     pub cargo_bay: Vec<bool>,
     /// Parts whose crossfeed the pilot can switch (`PartDef::crossfeed_toggle`).
     pub crossfeed_toggle: Vec<bool>,
@@ -595,7 +598,10 @@ fn vessel_box(q: ose_data::craft::Quat, b: ose_data::PartBounds) -> (DVec3, DVec
 /// its rendered cube 1 and means to weigh the part's default cube 0 (`Module_Fairing.SetDragCubes`), but it
 /// asks for that cube by the name "Default" and most parts' default cube has none. Those keep their weight of 1,
 /// so the part counts as the mean of the two (KSP2's K2 Poodle takes the heat of half its shroud, side on).
-fn with_base_cube(rendered: ose_data::DragCube, base: Option<&ose_data::DragCube>) -> ose_data::DragCube {
+fn with_base_cube(
+    rendered: ose_data::DragCube,
+    base: Option<&ose_data::DragCube>,
+) -> ose_data::DragCube {
     let Some(b) = base.filter(|b| b.name != "Default") else {
         return rendered;
     };
@@ -1458,6 +1464,11 @@ impl Structure {
                             .and_then(|d| d.drag_cubes.first()),
                     ))
                 })
+                .collect(),
+            shroud_shields: craft
+                .parts
+                .iter()
+                .map(|p| p.shroud_shields == Some(true))
                 .collect(),
             wall_cube: (0..n)
                 .map(|i| {
@@ -5023,6 +5034,10 @@ impl Structure {
                         shielded[j] = true;
                     }
                 }
+            }
+            // a sealed shroud set to shield covers its own engine (`FindEnclosedParts` adds the shroud's part)
+            if self.shroud_shields[f] && self.rigid.present[f] && self.wall_on(f).is_some() {
+                shielded[f] = true;
             }
             if self.cargo_bay[f] && self.rigid.present[f] && !self.bay_open[f] {
                 let (bc, bh) = self.part_box(f);

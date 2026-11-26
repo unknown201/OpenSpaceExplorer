@@ -43,6 +43,7 @@ fn fixture(size: f64) -> (Universe, bevy_ecs::entity::Entity) {
             .map(|(i, id)| {
                 let d = defs.iter().find(|d| d.id == *id).unwrap();
                 CraftPart {
+                    shroud_shields: None,
                     guid: format!("service-{i}"),
                     part_id: (*id).into(),
                     parent: (i > 0).then_some(0),

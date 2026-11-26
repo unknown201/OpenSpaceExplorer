@@ -81,6 +81,7 @@ async fn main() -> anyhow::Result<()> {
                 _ => [0., -1.5, 0.],
             };
             ose_data::craft::CraftPart {
+                shroud_shields: None,
                 guid: format!("control-{i}"),
                 part_id: (*id).into(),
                 parent: (i > 0).then_some(if i == 1 { 0 } else { 1 }),

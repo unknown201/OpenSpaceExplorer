@@ -59,6 +59,7 @@ fn main() {
             .map(|(i, id)| {
                 let d = defs.iter().find(|d| d.id == *id).unwrap();
                 CraftPart {
+                    shroud_shields: None,
                     guid: format!("services-{i}"),
                     part_id: (*id).into(),
                     parent: (i > 0).then_some(if i == 1 { 0 } else { 1 }),
