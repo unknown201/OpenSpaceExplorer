@@ -4,7 +4,7 @@ reads (crates/ose-sim/tests/data/ksp2-reentryorbit-*):
   start.csv     the trace row where the craft first passes 71 km on the way down (where OSE starts)
   attitude.csv  from there on, every `every` ticks: KSP2's nose and its x axis (the roll) as components
                 along the orbital velocity, the local vertical square to it, and the side (the attitude OSE
-                replays)
+                replays), and the pitch, yaw and roll SAS commanded (its control surfaces move with them)
   parts.csv     each part's temperature every second (by craft index; the names are in events.csv) (and every tick in the 2 s before a part is lost)
   events.csv    the part list changes, as logged
 
@@ -61,9 +61,10 @@ def main(run, out, every=5, start_alt=START_ALT_M):
         w.writerow([trace[k0][k] for k in keep])
     with open(os.path.join(out, "attitude.csv"), "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["t", "along", "up", "side", "x_along", "x_up", "x_side"])
+        w.writerow(["t", "along", "up", "side", "x_along", "x_up", "x_side", "pitch", "yaw", "roll"])
         for r in trace[max(0, k0 - 5)::every]:
-            w.writerow([f"{float(r['t']):.2f}"] + [f"{c:.4f}" for c in nose_components(r)])
+            controls = [f"{float(r[k]):.4f}" for k in ("pitch", "yaw", "roll")]
+            w.writerow([f"{float(r['t']):.2f}"] + [f"{c:.4f}" for c in nose_components(r)] + controls)
     with open(os.path.join(run, "reentryorbit-events.csv"), newline="") as f:
         events = f.read()
     with open(os.path.join(out, "events.csv"), "w", newline="") as f:

@@ -124,6 +124,35 @@ fn ksp2_part_order(c: &ose_data::craft::Craft) -> Vec<usize> {
     order
 }
 
+/// Every way to keep, from `alive` (KSP2's order), parts named `left` in that order (at most 64).
+fn keep_ways(
+    alive: &[usize],
+    names: &[&str],
+    left: &[&str],
+    from: usize,
+    kept: &mut Vec<usize>,
+    ways: &mut Vec<Vec<usize>>,
+) {
+    if ways.len() >= 64 {
+        return;
+    }
+    if kept.len() == left.len() {
+        ways.push(kept.clone());
+        return;
+    }
+    let need = left[kept.len()];
+    for k in from..alive.len() {
+        if alive.len() - k < left.len() - kept.len() {
+            break;
+        }
+        if names[alive[k]] == need {
+            kept.push(alive[k]);
+            keep_ways(alive, names, left, k + 1, kept, ways);
+            kept.pop();
+        }
+    }
+}
+
 /// KSP2's run as a `Flight`, times from the start row.
 fn ksp2_flight(run: &Run, c: &ose_data::craft::Craft) -> Flight {
     let limits = &limits(c);
@@ -146,39 +175,77 @@ fn ksp2_flight(run: &Run, c: &ose_data::craft::Craft) -> Flight {
     let mut lost = Vec::new();
     let mut pending = run.events[1..]
         .iter()
-        .filter(|e| !e["gone"].is_empty() && e["gone"] != "vessel");
-    let mut next_event = pending.next();
-    let mut samples: Vec<Sample> = Vec::new();
-    let mut peak = vec![0.0f64; n];
+        .filter(|e| !e["gone"].is_empty() && e["gone"] != "vessel")
+        .peekable();
+    // the rows of each logged moment
+    let mut moments: Vec<(f64, Vec<&Row>)> = Vec::new();
     for r in &run.parts {
         let t = num(r, "t") - t0;
-        while let Some(e) = next_event.filter(|e| num(e, "t") - t0 <= t) {
-            for name in e["gone"].split(' ') {
-                if let Some(k) = alive.iter().position(|&i| names[i] == name) {
-                    lost.push((num(e, "t") - t0, num(e, "alt_m"), alive.remove(k)));
-                }
+        match moments.last_mut() {
+            Some((last, rows)) if *last == t => rows.push(r),
+            _ => moments.push((t, vec![r])),
+        }
+    }
+    let mut samples: Vec<Sample> = Vec::new();
+    let mut peak = vec![0.0f64; n];
+    for (t, rows) in &moments {
+        let t = *t;
+        while let Some(e) = pending.next_if(|e| num(e, "t") - t0 <= t) {
+            // KSP2 names what went and what is left (in its order), not which of two alike it was: of the
+            // ways to take the parts named out that leave that list, the one whose parts keep their
+            // temperatures from the moment before to the moment after
+            let left: Vec<&str> = e["names"].split(' ').filter(|s| !s.is_empty()).collect();
+            let before = samples.last().map(|s| s.temps.clone());
+            let now: HashMap<usize, f64> = rows
+                .iter()
+                .map(|r| (r["index"].parse().unwrap(), num(r, "temp_k")))
+                .collect();
+            let mut ways = Vec::new();
+            keep_ways(&alive, &names, &left, 0, &mut Vec::new(), &mut ways);
+            // (and what is left still hangs together: no part kept whose parent went)
+            let score = |kept: &Vec<usize>| -> f64 {
+                let orphans = kept
+                    .iter()
+                    .filter(|&&i| c.parts[i].parent.is_some_and(|p| !kept.contains(&p)))
+                    .count();
+                1e6 * orphans as f64
+                    + kept
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(k, &i)| {
+                            let was = before.as_ref()?[i]?;
+                            Some((now.get(&k)? - was).abs())
+                        })
+                        .sum::<f64>()
+            };
+            let kept = ways
+                .into_iter()
+                .min_by(|a, b| score(a).total_cmp(&score(b)))
+                .unwrap_or_else(|| panic!("KSP2 left {left:?} out of {alive:?}"));
+            for &i in alive.iter().filter(|i| !kept.contains(i)) {
+                lost.push((num(e, "t") - t0, num(e, "alt_m"), i));
             }
-            next_event = pending.next();
+            alive = kept;
         }
-        if samples.last().map(|s| s.t) != Some(t) {
-            samples.push(Sample {
-                t,
-                alt: num(r, "alt_m"),
-                speed: num(r, "srf_speed"),
-                temps: vec![None; n],
-                exposed: vec![None; n],
-                flux: vec![None; n],
-            });
-        }
-        let idx: usize = r["index"].parse().unwrap();
-        if let Some(&i) = alive.get(idx) {
-            let temp = num(r, "temp_k");
-            let s = samples.last_mut().unwrap();
-            s.temps[i] = Some(temp);
-            s.exposed[i] = r.get("exposed").map(|_| num(r, "exposed"));
-            s.flux[i] = r.get("reentry_flux").map(|_| num(r, "reentry_flux"));
-            if t >= 0.0 {
-                peak[i] = peak[i].max(temp);
+        samples.push(Sample {
+            t,
+            alt: num(rows[0], "alt_m"),
+            speed: num(rows[0], "srf_speed"),
+            temps: vec![None; n],
+            exposed: vec![None; n],
+            flux: vec![None; n],
+        });
+        for r in rows {
+            let idx: usize = r["index"].parse().unwrap();
+            if let Some(&i) = alive.get(idx) {
+                let temp = num(r, "temp_k");
+                let s = samples.last_mut().unwrap();
+                s.temps[i] = Some(temp);
+                s.exposed[i] = r.get("exposed").map(|_| num(r, "exposed"));
+                s.flux[i] = r.get("reentry_flux").map(|_| num(r, "reentry_flux"));
+                if t >= 0.0 {
+                    peak[i] = peak[i].max(temp);
+                }
             }
         }
     }
@@ -276,7 +343,9 @@ fn ose_flight(c: &ose_data::craft::Craft, run: &Run, seconds: f64, replay: bool)
 
     // KSP2's nose as components along the orbital velocity, the vertical square to it, and the side
     let t0 = num(start, "t");
-    let attitude: Vec<(f64, DVec3, Option<DVec3>)> = run
+    // and the pitch, yaw and roll its SAS commanded (the control surfaces move with them)
+    type Attitude = (f64, DVec3, Option<DVec3>, Option<DVec3>);
+    let attitude: Vec<Attitude> = run
         .attitude
         .iter()
         .map(|r| {
@@ -285,6 +354,8 @@ fn ose_flight(c: &ose_data::craft::Craft, run: &Run, seconds: f64, replay: bool)
                 DVec3::new(num(r, "along"), num(r, "up"), num(r, "side")),
                 r.contains_key("x_along")
                     .then(|| DVec3::new(num(r, "x_along"), num(r, "x_up"), num(r, "x_side"))),
+                r.contains_key("pitch")
+                    .then(|| DVec3::new(num(r, "pitch"), num(r, "yaw"), num(r, "roll"))),
             )
         })
         .collect();
@@ -298,7 +369,7 @@ fn ose_flight(c: &ose_data::craft::Craft, run: &Run, seconds: f64, replay: bool)
     for k in 1..=(seconds / DT) as usize {
         if replay {
             let t = (k - 1) as f64 * DT;
-            let (_, a, x) = attitude[attitude
+            let (_, a, x, controls) = attitude[attitude
                 .partition_point(|x| x.0 < t - 1e-6)
                 .min(attitude.len() - 1)];
             let mut p = u.powered(v).unwrap().clone();
@@ -325,6 +396,9 @@ fn ose_flight(c: &ose_data::craft::Craft, run: &Run, seconds: f64, replay: bool)
             }
             p.angvel = DVec3::ZERO;
             u.set_powered(v, p);
+            if let Some(c) = controls {
+                u.set_rotation(v, c.x, c.y, c.z);
+            }
         }
         u.step();
         let t = k as f64 * DT;
@@ -357,6 +431,13 @@ fn ose_flight(c: &ose_data::craft::Craft, run: &Run, seconds: f64, replay: bool)
         }
         if k % TICKS_PER_SECOND as usize == 0 {
             let srf = p.v - DVec3::new(0.0, 0.0, spin).cross(p.r);
+            if std::env::var("OSE_FORCES").is_ok() {
+                let mut sum = vec![DVec3::ZERO; n];
+                for f in st.aero_forces() {
+                    sum[f.part] = sum[f.part] + f.force_kn;
+                }
+                println!("F {t:.0} {:?}", sum.iter().map(|c| (c.length() * 100.0).round() / 100.0).collect::<Vec<_>>());
+            }
             let here = |x: &[f64]| (0..n).map(|i| temps[i].map(|_| x[i])).collect();
             samples.push(Sample {
                 t,
@@ -440,16 +521,17 @@ fn tumbles_at(run: &Run) -> f64 {
         .map_or(f64::INFINITY, |(t, _)| t)
 }
 
-/// `compare` up to `until` s: the parts' heat and the fall are held while the craft holds retrograde. Past that
-/// it tumbles, which the replay (attitude only, every 0.1 s) does not carry well enough to hold a part's
-/// temperature or the speed to these tolerances (`docs/ksp2-side-by-side-gaps.md` T13), so peaks and losses
-/// are not held.
+/// `compare` for a craft that swings off retrograde at `until` s and tumbles: the whole fall, its speed,
+/// height, part temperatures and losses, but each part's share of the airflow and its heat only while it holds
+/// retrograde. Once it tumbles those change from tick to tick, and a sample a fraction of a second off reads
+/// another moment of the swing; what they add up to is held by the temperatures. Around a part coming off the
+/// temperatures are left a few seconds too (the two games lose it up to a few tenths of a second apart).
 fn compare_until(name: &str, c: &ose_data::craft::Craft, run: &Run, until: f64) {
     let n = c.parts.len();
     let ksp2 = ksp2_flight(run, c);
-    let end = ksp2.samples.last().unwrap().t.min(until);
+    let end = ksp2.samples.last().unwrap().t;
     // a craft KSP2 burned up may go a few seconds later here (the losses are held to 5 s below)
-    let whole = until.is_infinite();
+    let whole = true;
     let ose = ose_flight(
         c,
         run,
@@ -461,8 +543,11 @@ fn compare_until(name: &str, c: &ose_data::craft::Craft, run: &Run, until: f64) 
         true,
     );
     println!("== {name}");
+    // once a part comes off the craft that is left is another shape, and the logged attitude may follow
+    // another piece of it: the fall is held to its first break-up, the losses to the end
+    let broke = ksp2.lost.first().map_or(f64::INFINITY, |l| l.0);
     let mut t = 10.0;
-    while t <= end {
+    while t <= end.min(broke) {
         let (Some(k), Some(o)) = (at(&ksp2, t), at(&ose, t)) else {
             break;
         };
@@ -473,6 +558,20 @@ fn compare_until(name: &str, c: &ose_data::craft::Craft, run: &Run, until: f64) 
                 .collect::<Vec<_>>()
                 .join(" ")
         };
+        if std::env::var("OSE_TUMBLE").is_ok() {
+            let mut line = format!("T {t:4.0} alt {:6.0} spd {:6.1}/{:6.1}:", k.alt, k.speed, o.speed);
+            for i in 0..n {
+                if let (Some(a), Some(b)) = (k.temps[i], o.temps[i]) {
+                    let (ke, oe) = (k.exposed[i].unwrap_or(-1.0), o.exposed[i].unwrap_or(-1.0));
+                    if (a - b).abs() > 0.04 * a + 8.0 || (ke >= 0.0 && (ke - oe).abs() > 0.05) {
+                        line += &format!(" {i}:{}K {b:.0}/{a:.0} e {oe:.2}/{ke:.2} f {:.0}/{:.0};", &c.parts[i].part_id[..c.parts[i].part_id.len().min(14)], o.flux[i].unwrap_or(0.0), k.flux[i].unwrap_or(0.0));
+                    }
+                }
+            }
+            println!("{line}");
+            t += 10.0;
+            continue;
+        }
         println!(
             "t {:4.0}: alt {:6.0} vs {:6.0}  speed {:6.1} vs {:6.1}  K [{}] vs [{}]",
             t,
@@ -526,8 +625,13 @@ fn compare_until(name: &str, c: &ose_data::craft::Craft, run: &Run, until: f64) 
         };
         let pair = pairing(&o.exposed, &k.exposed, 0.03);
         let pair_flux = pairing(&o.flux, &k.flux, 5.0);
+        let breaking = ksp2
+            .lost
+            .iter()
+            .chain(&ose.lost)
+            .any(|l| t - l.0 > -1.0 && t - l.0 < 5.0);
         for i in 0..n {
-            if let (Some(a), Some(b)) = (k.temps[i], o.temps[i]) {
+            if let (Some(a), Some(b), false) = (k.temps[i], o.temps[i], breaking) {
                 assert!(
                     (a - b).abs() < 0.04 * a + 8.0,
                     "{name} t {t}: part {i} {} at {b:.0} K, KSP2 {a:.0} K",
@@ -541,6 +645,9 @@ fn compare_until(name: &str, c: &ose_data::craft::Craft, run: &Run, until: f64) 
             let compound = ["fuelline_", "strut_"]
                 .iter()
                 .any(|k| c.parts[i].part_id.starts_with(k));
+            if t >= until {
+                continue;
+            }
             if let (Some(a), Some(b), false) = (k.exposed[pair[i]], o.exposed[i], compound) {
                 assert!(
                     (a - b).abs() < 0.03,
@@ -568,32 +675,55 @@ fn compare_until(name: &str, c: &ose_data::craft::Craft, run: &Run, until: f64) 
         }
         t += 10.0;
     }
-    if !whole {
-        println!("{name}: tumbles at {until:.0} s; held to there");
+    if until.is_finite() {
+        println!("{name}: swings off retrograde at {until:.0} s");
+    }
+    if std::env::var("OSE_TUMBLE").is_ok() {
+        println!("lost: OSE {:?}
+      KSP2 {:?}", ose.lost, ksp2.lost);
         return;
     }
+    // the hottest each part got before the break-up (all of it when the craft stays whole or burns up as one)
+    let peak = |f: &Flight, i: usize| {
+        if broke.is_infinite() || ksp2.lost.iter().all(|l| l.0 - broke < 1.0) {
+            return f.peak[i];
+        }
+        f.samples
+            .iter()
+            .filter(|s| s.t < broke - 1.0)
+            .filter_map(|s| s.temps[i])
+            .fold(0.0, f64::max)
+    };
     for (i, p) in c.parts.iter().enumerate() {
-        println!(
-            "part {i} {}: peak {:.0} K (KSP2 {:.0} K)",
-            p.part_id, ose.peak[i], ksp2.peak[i]
-        );
+        let (ours, theirs) = (peak(&ose, i), peak(&ksp2, i));
+        println!("part {i} {}: peak {ours:.0} K (KSP2 {theirs:.0} K)", p.part_id);
         assert!(
-            (ose.peak[i] - ksp2.peak[i]).abs() < 0.04 * ksp2.peak[i] + 8.0,
-            "{name}: {} peak {:.0} vs KSP2 {:.0} K",
+            (ours - theirs).abs() < 0.04 * theirs + 8.0,
+            "{name}: {} peak {ours:.0} vs KSP2 {theirs:.0} K",
             p.part_id,
-            ose.peak[i],
-            ksp2.peak[i]
         );
     }
-    println!("lost: OSE {:?}\n      KSP2 {:?}", ose.lost, ksp2.lost);
-    assert_eq!(ose.destroyed, ksp2.destroyed, "{name}: craft destroyed");
-    let set = |f: &Flight| {
-        let mut v: Vec<usize> = f.lost.iter().map(|l| l.2).collect();
+    println!("lost: OSE {:?}
+      KSP2 {:?}", ose.lost, ksp2.lost);
+    if broke.is_infinite() || ksp2.lost.iter().all(|l| l.0 - broke < 1.0) {
+        assert_eq!(ose.destroyed, ksp2.destroyed, "{name}: craft destroyed");
+    }
+    // the parts lost in the break-up (its first 10 s; what the pieces left hit later is another fall)
+    let in_breakup = |f: &Flight| -> Vec<(f64, f64, usize)> {
+        f.lost
+            .iter()
+            .copied()
+            .filter(|l| l.0 <= broke + 10.0)
+            .collect()
+    };
+    let (ose_lost, ksp2_lost) = (in_breakup(&ose), in_breakup(&ksp2));
+    let set = |lost: &Vec<(f64, f64, usize)>| {
+        let mut v: Vec<usize> = lost.iter().map(|l| l.2).collect();
         v.sort();
         v
     };
-    assert_eq!(set(&ose), set(&ksp2), "{name}: parts lost");
-    for (o, k) in ose.lost.iter().zip(&ksp2.lost) {
+    assert_eq!(set(&ose_lost), set(&ksp2_lost), "{name}: parts lost");
+    for (o, k) in ose_lost.iter().zip(&ksp2_lost) {
         assert!(
             (o.0 - k.0).abs() < 5.0,
             "{name}: part {} lost at {:.1} s, KSP2 at {:.1} s",

@@ -591,6 +591,26 @@ fn vessel_box(q: ose_data::craft::Quat, b: ose_data::PartBounds) -> (DVec3, DVec
     (to_vessel(b.center_m), half)
 }
 
+/// The cube a procedurally built part drags and is outlined with (`Data_Drag.SetDragWeightsList`): KSP2 weighs
+/// its rendered cube 1 and means to weigh the part's default cube 0 (`Module_Fairing.SetDragCubes`), but it
+/// asks for that cube by the name "Default" and most parts' default cube has none. Those keep their weight of 1,
+/// so the part counts as the mean of the two (KSP2's K2 Poodle takes the heat of half its shroud, side on).
+fn with_base_cube(rendered: ose_data::DragCube, base: Option<&ose_data::DragCube>) -> ose_data::DragCube {
+    let Some(b) = base.filter(|b| b.name != "Default") else {
+        return rendered;
+    };
+    let mean = |x: [f64; 6], y: [f64; 6]| std::array::from_fn(|k| 0.5 * (x[k] + y[k]));
+    ose_data::DragCube {
+        name: rendered.name.clone(),
+        area: mean(rendered.area, b.area),
+        drag: mean(rendered.drag, b.drag),
+        depth: mean(rendered.depth, b.depth),
+        drag_multiplier: mean(rendered.drag_multiplier, b.drag_multiplier),
+        center: (rendered.center + b.center) * 0.5,
+        size: (rendered.size + b.size) * 0.5,
+    }
+}
+
 /// The eight corners of a part's bounds turned with it, in the vessel frame from the part's position.
 fn vessel_corners(q: ose_data::craft::Quat, b: ose_data::PartBounds) -> [DVec3; 8] {
     let q = q.normalized();
@@ -1431,13 +1451,19 @@ impl Structure {
                 .iter()
                 .map(|p| {
                     let f = p.fairing.as_ref().filter(|f| f.valid_for(&p.part_id))?;
-                    Some(f.drag_cube(ose_data::fairing::def(&p.part_id)?))
+                    Some(with_base_cube(
+                        f.drag_cube(ose_data::fairing::def(&p.part_id)?),
+                        defs.iter()
+                            .find(|d| d.id == p.part_id)
+                            .and_then(|d| d.drag_cubes.first()),
+                    ))
                 })
                 .collect(),
             wall_cube: (0..n)
                 .map(|i| {
                     let w = ose_data::engine_shroud::wall_for(craft, i)?;
-                    let cube = w.drag_cube(def_of(i).and_then(|d| d.drag_cubes.first()));
+                    let base = def_of(i).and_then(|d| d.drag_cubes.first());
+                    let cube = with_base_cube(w.drag_cube(base), base);
                     let corners = vessel_corners(
                         craft.parts[i].local_rotation,
                         ose_data::PartBounds {
