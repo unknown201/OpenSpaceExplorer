@@ -3065,13 +3065,16 @@ impl Structure {
             .enumerate()
             .map(|(k, &i)| {
                 let g = self.gear_defs[i].as_ref().expect("gear");
+                let cfg = p.part_control(i);
                 crate::flight::DriveWheel {
                     radius_m: g.radius_m,
                     torque_knm: g.motor.as_ref().map(|m| m.torque_curve.clone()),
                     ec_per_s: g.motor.as_ref().map(|m| m.ec_per_s).unwrap_or(0.0),
                     brake_knm: g.brake_torque_knm,
-                    steers: g.steerable,
-                    at_m: place(self.rigid.rest_position(i) - mass.centre_m),
+                    steers: g.steerable && cfg.wheel_steering,
+                    steer_invert: cfg.wheel_steer_invert,
+                    steer_manual: cfg.wheel_steer_manual,
+                    at_m: place(self.wheel_position(i) - mass.centre_m),
                     dynamics: g.dynamics.clone(),
                     state: if carry {
                         previous[k].state.clone()
@@ -3094,7 +3097,7 @@ impl Structure {
         let heights: Vec<f64> = wheels
             .iter()
             .map(|&i| {
-                let r = self.rigid.rest_position(i) - mass.centre_m;
+                let r = self.wheel_position(i) - mass.centre_m;
                 let below = if level { r.z } else { r.y };
                 below.abs() + self.gear_defs[i].as_ref().map_or(0.0, |g| g.radius_m)
             })
@@ -3104,6 +3107,16 @@ impl Structure {
         } else {
             heights.iter().sum::<f64>() / heights.len() as f64
         };
+        if level {
+            let (rest, top) = self.level_pitch_limits(&wheels, mass.centre_m);
+            if !carry {
+                // set down where it rests
+                p.drive.pitch_rad = rest;
+                p.drive.pitch_rate_rad_s = 0.0;
+            }
+            p.drive.rest_pitch_rad = rest;
+            p.drive.max_pitch_rad = top;
+        }
         let along: Vec<f64> = p.drive.wheels.iter().map(|w| w.at_m[0]).collect();
         let spread = along.iter().cloned().fold(f64::MIN, f64::max)
             - along.iter().cloned().fold(f64::MAX, f64::min);
@@ -3112,6 +3125,105 @@ impl Structure {
         } else {
             1.0
         };
+    }
+
+    /// Where part `i`'s wheel rolls, vessel frame: its model's `wheelCol` (`assets/own/wheel-colliders.json`,
+    /// `tools/export_wheel_colliders.py`), the transform KSP2's WheelCollider sits on, or the part's origin for a
+    /// part without one. The Mk1 main gear holds its wheel 0.52 m forward of where it is attached, which puts
+    /// KSP2's jet on its mains with 11.3 kN on the nose wheel (strike taxi -geo).
+    pub fn wheel_position(&self, i: usize) -> DVec3 {
+        static WHEELS: std::sync::OnceLock<std::collections::HashMap<String, [f64; 3]>> =
+            std::sync::OnceLock::new();
+        let wheels = WHEELS.get_or_init(|| {
+            serde_json::from_str(include_str!("../../../assets/own/wheel-colliders.json"))
+                .expect("wheel colliders")
+        });
+        let origin = self.rigid.rest_position(i);
+        match wheels.get(&self.part_ids[i]) {
+            Some(&[x, y, z]) => {
+                origin
+                    + crate::rigid::to_vessel(aero::rotate(self.part_rot[i], DVec3::new(x, y, z)))
+            }
+            None => origin,
+        }
+    }
+
+    /// A level craft's (nose +Y, belly +Z) pitch where it rests on its gear and the most it can rotate nose up
+    /// on its main gear, rad (`flight::Drive`). It rests where its centre of mass sits lowest over its
+    /// ground points (every wheel at its resting sag), as KSP2's craft settles onto its nose and main legs;
+    /// it rotates until a part that is not gear comes down to the gear behind its centre of mass with
+    /// those legs fully compressed (KSP2 strike tail run 6: Stock04_Jet's engine scraped at 18.0°).
+    fn level_pitch_limits(&self, wheels: &[usize], centre: DVec3) -> (f64, f64) {
+        let present: Vec<usize> = (0..self.rigid.len())
+            .filter(|&i| self.rigid.present[i])
+            .collect();
+        if wheels.is_empty() {
+            return (0.0, crate::flight::MAX_ROTATE_RAD);
+        }
+        let points: Vec<(usize, Vec<DVec3>)> = present
+            .iter()
+            .map(|&i| {
+                (
+                    i,
+                    self.ground_points(i)
+                        .into_iter()
+                        .map(|q| q - centre)
+                        .collect(),
+                )
+            })
+            .collect();
+        // nose up by `t`, how far below the centre of mass point `q` lies
+        let below = |q: DVec3, t: f64| q.z * t.cos() - q.y * t.sin();
+        let deepest = |qs: &[DVec3], t: f64, lift: f64| {
+            qs.iter()
+                .map(|&q| below(q, t))
+                .fold(f64::NEG_INFINITY, f64::max)
+                - lift
+        };
+        let step = 0.0005;
+        let angle = |k: i32| k as f64 * step;
+        let rest = (-700..=700)
+            .map(angle)
+            .map(|t| {
+                let h = points
+                    .iter()
+                    .map(|(i, qs)| deepest(qs, t, self.rest_sag_m(*i)))
+                    .fold(f64::NEG_INFINITY, f64::max);
+                (t, h)
+            })
+            .fold(
+                (0.0, f64::INFINITY),
+                |a, b| if b.1 < a.1 - 1e-9 { b } else { a },
+            )
+            .0;
+        // the gear it rotates on: behind the centre of mass
+        let mains: Vec<&(usize, Vec<DVec3>)> = points
+            .iter()
+            .filter(|(i, _)| wheels.contains(i) && self.rigid.rest_position(*i).y < centre.y)
+            .collect();
+        if mains.is_empty() {
+            return (rest, crate::flight::MAX_ROTATE_RAD.max(rest));
+        }
+        let top = (0..=2400)
+            .map(angle)
+            .filter(|&t| t > rest)
+            .find(|&t| {
+                let gear = mains
+                    .iter()
+                    .map(|(i, qs)| {
+                        let travel = self.gear_defs[*i]
+                            .as_ref()
+                            .map_or(0.0, |g| g.suspension_m.max(0.0));
+                        deepest(qs, t, travel)
+                    })
+                    .fold(f64::NEG_INFINITY, f64::max);
+                points
+                    .iter()
+                    .filter(|(i, _)| self.gear_defs[*i].is_none())
+                    .any(|(_, qs)| deepest(qs, t, 0.0) >= gear)
+            })
+            .unwrap_or(1.2);
+        (rest, top)
     }
 
     /// Whether it carries a drill (a converter that `harvests`).

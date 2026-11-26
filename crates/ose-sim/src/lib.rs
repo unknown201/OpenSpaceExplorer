@@ -1086,6 +1086,18 @@ impl Universe {
             st.level = true;
             st.sync(&mut p);
             self.world.entity_mut(e).insert(st);
+            // it stands as its gear holds it (KSP2's jet 2.7° nose down), and its attitude hold keeps that
+            // rather than straining the elevators toward a level it cannot reach on the ground
+            let pitch = p.drive.rest_pitch_rad;
+            p.drive.pitch_rad = pitch;
+            p.drive.pitch_rate_rad_s = 0.0;
+            let up = p.r.normalized();
+            let flat = flight::heading_dir(p.r, p.drive.heading_rad);
+            p.facing = (flat * pitch.cos() + up * pitch.sin()).normalized();
+            p.attitude = flight::Attitude::PitchHeading {
+                pitch_deg: pitch.to_degrees(),
+                heading_deg,
+            };
         }
         // stand on the wheels at the new clearance
         let body = self.world.get::<bodies::ReferenceBody>(e).map(|b| b.0);
