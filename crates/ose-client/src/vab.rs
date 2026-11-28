@@ -1345,17 +1345,24 @@ impl SymMap {
     }
 }
 
-/// The face of a part its mirror image keeps: a wing (surface node along +Z, the way it spans) across its
-/// thickness (+Y); anything else across +Z.
+/// The face of a part its mirror image keeps. The original turns a mirror twin by
+/// `SymmetrySet.ReflectRotation`: the part's forward (+Z) and up (+Y) reflected, +X rebuilt from them, so the
+/// part is taken alike across its +X. A procedural wing's twin also bakes its meshes flipped across +X (its
+/// thickness), which makes it the exact mirror image; landing gear (node along +Y, rolling along +Z) and
+/// parts that stand out along +Z (radial tanks) keep that. A part hung by a node along +X (a booster, a
+/// decoupler, a light) would face away from what it hangs on that way, so its twin is taken alike across +Z.
 pub fn mirror_own(spec: Option<&PartSpec>) -> DVec3 {
+    if spec.is_some_and(|s| ose_data::procedural::is_procedural_wing(&s.id)) {
+        return DVec3::new(1.0, 0.0, 0.0);
+    }
     let d = spec
         .and_then(surface_node)
         .map(|n| n.orientation)
         .unwrap_or_default();
-    if d.z.abs() > d.x.abs().max(d.y.abs()) {
-        DVec3::new(0.0, 1.0, 0.0)
-    } else {
+    if d.x.abs() >= d.y.abs().max(d.z.abs()) {
         DVec3::new(0.0, 0.0, 1.0)
+    } else {
+        DVec3::new(1.0, 0.0, 0.0)
     }
 }
 
@@ -1551,6 +1558,19 @@ fn facing_in(azimuth: f64) -> Quat {
     }
 }
 
+/// Unity's `Quaternion.LookRotation(forward, Vector3.up)`: +Z to `forward`, +Y as near up as it allows.
+/// Looking straight up or down (no up left) it turns about +X alone, as Unity does.
+fn look_rotation(forward: DVec3) -> Quat {
+    let z = forward.normalized();
+    let up = DVec3::new(0.0, 1.0, 0.0);
+    let mut y = up - z * up.dot(z);
+    if y.length() < 1e-6 {
+        y = DVec3::new(0.0, 0.0, -z.y.signum());
+    }
+    let y = y.normalized();
+    quat_from_basis(y.cross(z), y, z)
+}
+
 /// A turn of `angle` radians about +Y, the same way round as an azimuth (from +X towards +Z).
 fn about_y(angle: f64) -> Quat {
     let h = -angle * 0.5;
@@ -1695,19 +1715,17 @@ impl Editor {
             return Vec::new();
         };
         let node = surface_node(spec).map(|n| n.position).unwrap_or_default();
-        // A node that faces along the part's +Z (wings, which span away from it) is first turned to face +X,
-        // the way the placement below turns toward the part hung on.
+        // The original turns a part by the face's frame (its +Z out of the face, +Y along the target's +Y),
+        // then by `LookRotation(node orientation, up)` (`SurfaceAttachmentRotationOffset`): a node along +X (a
+        // booster, a decoupler) puts the part's +X into the face, one along +Z (a wing) sends the part's +Z,
+        // the way it spans, straight out of it, and one along +Y (landing gear) puts the part's +Y into the
+        // face, so the leg hangs from it. The placement below turns the part's +X into the face, a quarter
+        // turn about +Y from the original's face frame, so that turn is taken back first.
         let o = surface_node(spec)
             .map(|n| n.orientation)
             .unwrap_or_default();
-        let align = if o.y.abs() < 0.9 && (o.x.abs() + o.z.abs()) > 1e-9 {
-            let th = o.z.atan2(o.x);
-            Quat {
-                x: 0.0,
-                y: (th * 0.5).sin(),
-                z: 0.0,
-                w: (th * 0.5).cos(),
-            }
+        let align = if o.length() > 1e-9 {
+            quat_mul(about_y(std::f64::consts::FRAC_PI_2), look_rotation(o))
         } else {
             IDENTITY
         };
@@ -1723,16 +1741,7 @@ impl Editor {
                 return one;
             };
             let (centre, normal) = self.mirror_plane();
-            // The part's own face it is alike on both sides of: a wing (its node faces along +Z, the way it
-            // spans) across its thickness (+Y); a booster or decoupler (node along +X, long along +Y) across +Z.
-            let node_dir = surface_node(spec)
-                .map(|n| n.orientation)
-                .unwrap_or_default();
-            let own = if node_dir.z.abs() > node_dir.x.abs().max(node_dir.y.abs()) {
-                DVec3::new(0.0, 1.0, 0.0)
-            } else {
-                DVec3::new(0.0, 0.0, 1.0)
-            };
+            let own = mirror_own(Some(spec));
             return vec![(pos, q), mirror_pose(pos, q, centre, normal, own)];
         }
         (0..symmetry.max(1))
@@ -1760,6 +1769,23 @@ impl Editor {
                 (p.local_position + quat_rotate(pq, local), quat_mul(pq, q))
             })
             .collect()
+    }
+
+    /// Whether `spec` put at craft-frame `pos` on part `target` is drawn mirrored: a procedural wing on a
+    /// plane on the +X side of the part it hangs on (`PerformMirrorSymmetryAdjustment`, in the plane
+    /// orientation only). Other parts are only mirrored as the twin of a mirror pair.
+    pub fn mirrored_on(&self, spec: &PartSpec, target: usize, pos: DVec3) -> bool {
+        if !ose_data::procedural::is_procedural_wing(&spec.id) || !self.is_plane() {
+            return false;
+        }
+        let Some(t) = self.craft.parts.get(target) else {
+            return false;
+        };
+        quat_rotate(
+            quat_conj(unit_or_identity(t.local_rotation)),
+            pos - t.local_position,
+        )
+        .x > 1e-6
     }
 
     /// A plane's middle: a point on it (the root part) and its normal, across both the nose and the craft's up.
@@ -1821,6 +1847,11 @@ impl Editor {
             0
         };
         let mirrored_pair = symmetry == 2 && self.is_plane();
+        // A procedural wing on a plane is baked mirrored when it sits on the +X side of the part it goes on
+        // (`PerformMirrorSymmetryAdjustment`), so its top faces up on both sides; its twin is the other way.
+        let first_mirrored = poses
+            .first()
+            .is_some_and(|&(pos, _)| self.mirrored_on(spec, spot.target, pos));
         let mut out = Vec::new();
         for (guid, (pos, q)) in (self.next_guid()..).zip(poses) {
             let resources = spec
@@ -1832,7 +1863,12 @@ impl Editor {
                     capacity_units: c.capacity_units,
                 })
                 .collect();
-            let mirrored = mirrored_pair && out.len() == 1;
+            let twin = mirrored_pair && out.len() == 1;
+            let mirrored = if ose_data::procedural::is_procedural_wing(&spec.id) {
+                first_mirrored != twin
+            } else {
+                twin
+            };
             out.push(self.craft.parts.len());
             self.craft.parts.push(CraftPart {
                 shroud_shields: None,
@@ -1902,6 +1938,17 @@ impl Editor {
         r.local_position = placed.local_position;
         r.local_rotation = placed.local_rotation;
         r.guid = placed.guid;
+        // A wing moved to the other side of a plane bakes the other way round.
+        if ose_data::procedural::is_procedural_wing(&r.part_id) && self.is_plane() {
+            let m = placed.flight.as_ref().is_some_and(|f| f.mirrored);
+            let id = r.part_id.clone();
+            r.flight
+                .get_or_insert_with(|| ose_data::flight_geometry::PartFlight {
+                    part_id: id,
+                    ..Default::default()
+                })
+                .mirrored = m;
+        }
         self.craft.parts[root] = r;
         let base = self.craft.parts.len();
         let at = |n: usize| if n == 0 { root } else { base + n - 1 };
