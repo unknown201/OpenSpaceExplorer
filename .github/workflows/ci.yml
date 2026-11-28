@@ -16,6 +16,8 @@ jobs:
       # The pilot's flight scenarios (docs/rendezvous-v2-plan.md) take minutes unoptimised, so they are
       # ignored in debug builds and run here optimised.
       - run: cargo test --release -p ose-pilot -p ose-routes
+      # Planes built in the editor taking off (crates/ose-sim/tests/editor_planes.rs), likewise.
+      - run: cargo test --release -p ose-sim --test editor_planes
       - run: python -B -m unittest discover -s tools/tests
       - run: cargo check -p ose-client --target wasm32-unknown-unknown
 
