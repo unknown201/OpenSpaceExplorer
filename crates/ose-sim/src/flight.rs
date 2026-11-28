@@ -680,6 +680,11 @@ pub struct Drive {
     pub pitch_rate_rad_s: f64,
     #[serde(default)]
     pub pitch_inertia_tm2: f64,
+    /// A level craft's centre of mass over where it rests on its springs, m, and how fast it moves, m/s.
+    #[serde(default)]
+    pub heave_m: f64,
+    #[serde(default)]
+    pub heave_rate_mps: f64,
     /// Where a level craft's pitch rests on its gear, rad (KSP2's Stock04_Jet stands 2.7° nose down on its
     /// short nose leg), and how far it can rotate its nose up on its main gear before its tail meets the
     /// runway (18.0° for the jet, its engine scraping): from its parts' shapes (`Structure::sync_drive`).
@@ -710,6 +715,8 @@ impl Default for Drive {
             pitch_rad: 0.0,
             pitch_rate_rad_s: 0.0,
             pitch_inertia_tm2: 0.0,
+            heave_m: 0.0,
+            heave_rate_mps: 0.0,
             rest_pitch_rad: 0.0,
             max_pitch_rad: MAX_ROTATE_RAD,
             powered: 1.0,
@@ -734,6 +741,9 @@ pub struct DriveWheel {
     /// Where it stands from the centre of mass, m (forward along the drive direction, right of it).
     #[serde(default)]
     pub at_m: [f64; 2],
+    /// How far its suspension is pushed in under the craft at rest, m (`static_sag`).
+    #[serde(default)]
+    pub sag_m: f64,
     /// Its tyre and response settings, and what it is doing.
     #[serde(default)]
     pub dynamics: ose_data::WheelDynamics,
@@ -749,15 +759,26 @@ fn max_rotate_rad() -> f64 {
 /// Below this speed a level craft's autopilot leaves its elevators alone on the ground, m/s.
 pub const GROUND_ROTATE_MIN_MPS: f64 = 20.0;
 
-/// A level craft rolling on its gear pitches about its main wheels as the forces on it turn it, as KSP2's
-/// rigid body does on its wheel colliders: the airflow's moment about the centre of mass (the elevators
-/// and wings, deflected by the stick), and lift, weight and the push along the runway acting at the centre
-/// of mass, all taken about where the rearmost wheels touch the runway. The nose comes up only once they
-/// turn it up against the weight ahead of the main gear (the stock jet at about 60 m/s with a full stick, a
-/// craft with its mains far behind its centre of mass not at all). The nose wheel holds it from going lower
-/// than where it rests (`Drive::rest_pitch_rad`), the tail from going past `Drive::max_pitch_rad`.
-/// An autopilot direction (pitch and heading, prograde ...) moves the stick toward its pitch. Returns the
-/// pitch, rad, and the stick (-1 .. 1, nose up) the control surfaces follow.
+/// The share of its travel a wheel's suspension is pushed in under the craft at rest. KSP2's automatic
+/// spring (`Module_WheelSuspension.SuspensionSpringUpdate`) is sized for the load each wheel carries; on the
+/// stock jet (strike taxi -geo) the nose leg stood 0.018 m into its 0.09 and the Mk1 mains 0.065 into
+/// their 0.12.
+pub fn static_sag(part_id: &str) -> f64 {
+    match part_id {
+        "landinggear_0v_steerable" => 0.2,
+        _ => 0.54,
+    }
+}
+
+/// A level craft rolling on its gear pitches and bobs on its wheels' springs as the forces on it turn and
+/// lift it, as KSP2's rigid body does on its wheel colliders: the airflow's moment about the centre of mass
+/// (the elevators and wings, deflected by the stick), lift against weight, the push along the runway at the
+/// height of the centre of mass, and each wheel's spring, critically damped and pushed in by its share of
+/// the weight where the craft rests (`static_sag`). The nose comes up once they turn it up against the
+/// weight ahead of the main gear: the stock jet about a second after a full stick at 60 m/s, a craft with its
+/// mains far behind its centre of mass not at all. A wheel off the ground pushes nothing; the tail stops the
+/// nose at `Drive::max_pitch_rad`. An autopilot direction (pitch and heading, prograde ...) moves the
+/// stick. Returns the pitch, rad, and the stick (-1 .. 1, nose up) the control surfaces follow.
 fn ground_pitch(
     p: &mut Powered,
     body: &Body,
@@ -772,7 +793,6 @@ fn ground_pitch(
         p.drive.rest_pitch_rad,
         p.drive.max_pitch_rad.max(p.drive.rest_pitch_rad),
     );
-    let mut rate = p.drive.pitch_rate_rad_s;
     let steered = !matches!(p.attitude, Attitude::Free | Attitude::Fixed(_));
     let pilot = (p.rotation_input.x + p.trim.x).clamp(-1.0, 1.0);
     let stick = if !p.controlled {
@@ -786,49 +806,67 @@ fn ground_pitch(
             .clamp(-1.0, 1.0)
             .asin()
             .clamp(rest, top);
-        ((want - p.drive.pitch_rad) * 4.0 - rate * 1.0).clamp(-1.0, 1.0)
+        ((want - p.drive.pitch_rad) * 4.0 - p.drive.pitch_rate_rad_s).clamp(-1.0, 1.0)
     };
-    // the pivot: the rearmost wheels' contact, behind and below the centre of mass
-    let mains = p
-        .drive
-        .wheels
-        .iter()
-        .map(|w| w.at_m[0])
-        .fold(f64::INFINITY, f64::min);
-    let behind = if mains.is_finite() {
-        -mains.min(0.0)
-    } else {
-        0.0
-    };
-    let height = p.drive.cg_height_m.max(0.0);
-    // turned by the pitch: the centre of mass ahead of and above the pivot along the runway and up
-    let (s, c) = p.drive.pitch_rad.sin_cos();
-    let ahead = behind * c - height * s;
-    let above = behind * s + height * c;
     let g = body.mu / p.r.length_squared();
     let m = p.mass_t;
+    if p.drive.wheels.is_empty() || m <= 0.0 {
+        return (p.drive.pitch_rad, stick);
+    }
+    // each wheel's share of the weight where the craft rests, and its spring and damper
+    let shares = {
+        let (acc, pitch) = (p.drive.acceleration_mps2, p.drive.pitch_rad);
+        p.drive.acceleration_mps2 = [0.0, 0.0];
+        p.drive.pitch_rad = rest;
+        let s = p.drive.load_shares(m, g);
+        p.drive.acceleration_mps2 = acc;
+        p.drive.pitch_rad = pitch;
+        s
+    };
     let axis = flat.cross(up).normalized();
     let aero = p.aero_torque_knm.dot(axis);
     let air = p.lift_kn + p.aero_drag_kn.unwrap_or(DVec3::ZERO);
-    // vertical: lift against weight, at the centre of mass `ahead` of the pivot; along the runway: the
-    // push that does not go into speeding the craft up (thrust and air less mass times acceleration) at
-    // the centre of mass's height `above` it
-    let vertical = air.dot(up) - m * g;
+    // along the runway: the push that does not go into speeding the craft up (thrust and air less mass
+    // times acceleration) is the tyres', at the runway, the height of the centre of mass below it
     let along = thrust_kn * p.facing.dot(flat) + air.dot(flat) - m * p.drive.acceleration_mps2[0];
-    let moment = aero + ahead * vertical - above * along;
-    let inertia = p.drive.pitch_inertia_tm2.max(1e-3) + m * (ahead * ahead + above * above);
-    rate += moment / inertia * dt;
-    let mut pitch = p.drive.pitch_rad + rate * dt;
-    if pitch <= rest {
-        pitch = rest;
-        rate = rate.max(0.0);
-    } else if pitch >= top {
-        pitch = top;
-        rate = rate.min(0.0);
+    let height = p.drive.cg_height_m.max(0.0);
+    let inertia = p.drive.pitch_inertia_tm2.max(1e-3);
+    // small steps: the springs are stiff
+    let n = 10;
+    let h = dt / n as f64;
+    let (mut z, mut vz) = (p.drive.heave_m, p.drive.heave_rate_mps);
+    let (mut th, mut w) = (p.drive.pitch_rad - rest, p.drive.pitch_rate_rad_s);
+    for _ in 0..n {
+        let mut lift = air.dot(up) - m * g;
+        let mut moment = aero - height * along;
+        for (wheel, share) in p.drive.wheels.iter().zip(&shares) {
+            let x = wheel.at_m[0];
+            let sag = wheel.sag_m.max(0.01);
+            let load = share * g;
+            let pushed = sag - (z + x * th);
+            if pushed <= 0.0 || load <= 0.0 {
+                continue;
+            }
+            let k = load / sag;
+            let c = 2.0 * (k * share).sqrt();
+            let push = (k * pushed - c * (vz + x * w)).max(0.0);
+            lift += push;
+            moment += push * x;
+        }
+        vz += lift / m * h;
+        z += vz * h;
+        w += moment / inertia * h;
+        th += w * h;
+        if th + rest >= top {
+            th = top - rest;
+            w = w.min(0.0);
+        }
     }
-    p.drive.pitch_rad = pitch;
-    p.drive.pitch_rate_rad_s = rate;
-    (pitch, stick)
+    p.drive.heave_m = z;
+    p.drive.heave_rate_mps = vz;
+    p.drive.pitch_rad = rest + th;
+    p.drive.pitch_rate_rad_s = w;
+    (rest + th, stick)
 }
 
 /// The horizontal direction of compass heading `heading_rad` (clockwise from north) at `r`.

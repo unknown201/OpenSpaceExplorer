@@ -3075,6 +3075,7 @@ impl Structure {
                     steer_invert: cfg.wheel_steer_invert,
                     steer_manual: cfg.wheel_steer_manual,
                     at_m: place(self.wheel_position(i) - mass.centre_m),
+                    sag_m: g.suspension_m.max(0.0) * crate::flight::static_sag(&self.part_ids[i]),
                     dynamics: g.dynamics.clone(),
                     state: if carry {
                         previous[k].state.clone()

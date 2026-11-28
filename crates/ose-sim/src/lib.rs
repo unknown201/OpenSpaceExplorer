@@ -5185,8 +5185,9 @@ mod tests {
             for ((part, angle), (other, reversed)) in d.iter().zip(&opposite) {
                 assert_eq!(part, other);
                 assert!(
-                    // a surface built not to answer this axis (the jet's wings ignore yaw) holds still
-                    angle.abs() < 1e-4 || angle * reversed < 0.0,
+                    // a surface built not to answer this axis (the jet's wings ignore yaw) holds still: within a
+                    // fraction of a degree, as the jet sits nose down on its springs and its yaw axis leans
+                    angle.abs() < 0.25_f64.to_radians() || angle * reversed < 0.0,
                     "{what}: reversing the key reverses deflection: {d:?} vs {opposite:?}"
                 );
             }
@@ -5289,9 +5290,8 @@ mod tests {
     }
 
     /// KSP2 run 21 (T10): Stock04_Jet on the runway, SAS holding, full pitch up at 60 m/s: the nose comes
-    /// up about 13 degrees in 0.95 s and it flies at 68 m/s. Turned by the moments about its main gear OSE's
-    /// nose comes up slower at first (1.46 s, 72.9 m/s): KSP2's starts rising at about 0.56 rad/s^2, more
-    /// than the airflow's 84-90 kNm against the weight ahead of the mains gives a rigid craft. Pitch up must turn the nose toward the
+    /// up about 13 degrees in 0.95 s and it flies at 68 m/s. Turned by the moments on it and its wheels'
+    /// springs, OSE's lifts off 1.12 s after the stick at 69.9 m/s.
     /// cockpit's canopy (the plane's control frame is its root part's, turned by its level layout).
     #[test]
     fn a_jet_rotates_on_the_stick_and_lifts_off_as_ksp2s() {
@@ -5347,7 +5347,7 @@ mod tests {
             "lifted off {after:.2} s after the stick at {speed:.1} m/s (KSP2 0.96 s, 68.2 m/s)"
         );
         assert!(
-            after > 0.4 && after < 1.5,
+            (after - 0.96).abs() < 0.3,
             "lifted off {after:.2} s after the stick (KSP2 0.96 s)"
         );
         assert!((speed - 68.0).abs() < 5.0, "at {speed:.1} m/s (KSP2 68.2)");
