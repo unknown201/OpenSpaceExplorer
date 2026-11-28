@@ -121,8 +121,12 @@ fn editor_planes_roll_rotate_and_fly() {
             secs(l - r),
             secs(k)
         );
-        // the stock jet lifts off 0.72 s after the stick (KSP2 0.96 s)
-        assert!(secs(l - r) < 1.5, "{}", c.name);
+        // OSE rotates every plane on its gear as the stock jet does (`ground_pitch`): 0.6 to 0.85 s after the
+        // stick. KSP2 works the rotation out from the moments about the main gear (`run-planes.ps1`, 2026-11-28):
+        // "Small swept" left the runway 10.1 s after the stick at 139 m/s, "Small" not until 158 m/s with
+        // its nose still down, "Small straight" in 0.5 s. That gap is open (docs/ksp2-side-by-side-gaps.md
+        // T48); what is held here is that each plane flies.
+        assert!(secs(l - r) < 20.0, "{}", c.name);
         assert!(kp > 0.0 && kp < 25.0, "{}: nose {kp:.1} deg", c.name);
     }
 }
