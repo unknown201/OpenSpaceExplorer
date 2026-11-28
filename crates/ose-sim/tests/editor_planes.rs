@@ -67,68 +67,98 @@ fn editor_planes_stand_level_on_three_wheels() {
     }
 }
 
-/// A minute of flight each: run in release builds (`cargo test --release -p ose-sim --test editor_planes`).
-#[test]
-#[cfg_attr(debug_assertions, ignore)]
-fn editor_planes_roll_rotate_and_fly() {
-    for c in planes() {
-        let (mut u, v, spin) = on_runway(&c);
+/// KSP2's `jetfly` runs of three of these planes (`run-planes.ps1`, reference\ksp2-plane-*, 2026-11-28),
+/// flown as `JetScenario.Fly` flies them: SAS on, full throttle, full stick at 60 m/s until the nose is 10
+/// degrees up (at most 10 s), then the stick let go. Per plane: seconds from the stick to leaving the
+/// runway and the speed then (m/s); `None` where it never flies.
+const KSP2_TAKEOFF: [(&str, Option<(f64, f64)>); 3] = [
+    // mains 0.9 m behind the centre of mass: the stick cannot lift the nose against the weight ahead of
+    // them, the wings push it down (-93 kN at 155 m/s), and it runs off the end of the runway
+    ("Small", None),
+    // the stick brings the nose up 4 degrees as the speed builds, and it flies off at 139 m/s
+    ("Small swept", Some((10.14, 138.9))),
+    // its long wings lift it almost at once
+    ("Small straight", Some((0.5, 55.0))),
+];
+
+/// Our run of KSP2's takeoff: (seconds from the stick to leaving the runway, speed then, the highest nose
+/// on the runway in degrees), or `None` if it never leaves within 60 s of the stick.
+fn ose_takeoff(c: &ose_data::craft::Craft) -> Option<(f64, f64, f64)> {
+    let (mut u, v, spin) = on_runway(c);
+    u.step();
+    let facing = u.powered(v).unwrap().facing;
+    u.stage(v);
+    u.set_controls(v, 1.0, flight::Attitude::Fixed(facing));
+    let mut stick: Option<u64> = None;
+    let mut held = true;
+    let mut top = f64::MIN;
+    for i in 0..(150 * TICKS_PER_SECOND) {
         u.step();
         let p = u.powered(v).unwrap().clone();
-        let alt0 = p.r.length();
-        let facing = p.facing;
-        u.stage(v);
-        u.set_controls(v, 1.0, flight::Attitude::Fixed(facing));
-        let mut rotated = None;
-        let mut lifted = None;
-        let mut climbed = None;
-        for i in 0..(60 * TICKS_PER_SECOND) {
-            u.step();
-            let p = u.powered(v).unwrap().clone();
-            assert!(!p.crashed, "{} crashed at {} s: {p:?}", c.name, i / 50);
-            let speed = (p.v - DVec3::new(0.0, 0.0, spin).cross(p.r)).length();
-            if rotated.is_none() && speed >= 60.0 {
-                rotated = Some(i);
+        assert!(!p.crashed, "{} crashed: {p:?}", c.name);
+        let speed = (p.v - DVec3::new(0.0, 0.0, spin).cross(p.r)).length();
+        let pitch = pitch_deg(&p);
+        match stick {
+            None if speed >= 60.0 => {
+                stick = Some(i);
                 u.set_rotation(v, 1.0, 0.0, 0.0);
             }
-            if rotated.is_some() && lifted.is_none() && !p.landed {
-                lifted = Some((i, speed));
-                // off the ground: let go of the stick and hold a 10 degree climb
-                u.set_rotation(v, 0.0, 0.0, 0.0);
-                u.set_controls(
-                    v,
-                    1.0,
-                    flight::Attitude::PitchHeading {
-                        pitch_deg: 10.0,
-                        heading_deg: 90.0,
-                    },
+            Some(s) => {
+                if held && (pitch >= 10.0 || i - s >= 10 * TICKS_PER_SECOND) {
+                    held = false;
+                    u.set_rotation(v, 0.0, 0.0, 0.0);
+                    u.set_controls(v, 1.0, flight::Attitude::Fixed(p.facing));
+                }
+                if !p.landed {
+                    return Some(((i - s) as f64 / TICKS_PER_SECOND as f64, speed, top));
+                }
+                top = top.max(pitch);
+                if i - s > 60 * TICKS_PER_SECOND {
+                    return None;
+                }
+            }
+            None => {}
+        }
+    }
+    None
+}
+
+/// A minute or two of runway each: run in release builds (`cargo test --release -p ose-sim --test
+/// editor_planes`).
+#[test]
+#[cfg_attr(debug_assertions, ignore)]
+fn editor_planes_take_off_as_in_ksp2() {
+    for (name, ksp2) in KSP2_TAKEOFF {
+        let c = planes().into_iter().find(|c| c.name == name).unwrap();
+        let ours = ose_takeoff(&c);
+        println!("{name}: off the runway after (s, m/s, nose deg) {ours:?}, KSP2 {ksp2:?}");
+        match (ours, ksp2) {
+            (None, None) => {}
+            (Some((s, v, _)), Some((ks, kv))) => {
+                assert!(
+                    (s - ks).abs() < 1.0,
+                    "{name}: {s:.2} s after the stick (KSP2 {ks})"
+                );
+                assert!(
+                    (v - kv).abs() < 0.05 * kv,
+                    "{name}: at {v:.1} m/s (KSP2 {kv})"
                 );
             }
-            if lifted.is_some() && p.r.length() - alt0 > 100.0 {
-                climbed = Some((i, speed, pitch_deg(&p)));
-                break;
-            }
+            _ => panic!("{name}: {ours:?} against KSP2's {ksp2:?}"),
         }
-        let secs = |i: u64| i as f64 / TICKS_PER_SECOND as f64;
-        let r = rotated.unwrap_or_else(|| panic!("{} never reaches 60 m/s", c.name));
-        let (l, ls) = lifted.unwrap_or_else(|| panic!("{} never lifts off", c.name));
-        let (k, ks, kp) =
-            climbed.unwrap_or_else(|| panic!("{} lifts off but never climbs 100 m", c.name));
-        println!(
-            "{}: 60 m/s at {:.1} s, lifts off {:.2} s after the stick at {ls:.1} m/s, 100 m up at {:.1} s ({ks:.1} m/s, nose {kp:.1} deg)",
-            c.name,
-            secs(r),
-            secs(l - r),
-            secs(k)
-        );
-        // OSE rotates every plane on its gear as the stock jet does (`ground_pitch`): 0.6 to 0.85 s after the
-        // stick. KSP2 works the rotation out from the moments about the main gear (`run-planes.ps1`, 2026-11-28):
-        // "Small swept" left the runway 10.1 s after the stick at 139 m/s, "Small" not until 158 m/s with
-        // its nose still down, "Small straight" in 0.5 s. That gap is open (docs/ksp2-side-by-side-gaps.md
-        // T48); what is held here is that each plane flies.
-        assert!(secs(l - r) < 20.0, "{}", c.name);
-        assert!(kp > 0.0 && kp < 25.0, "{}: nose {kp:.1} deg", c.name);
     }
+}
+
+/// The medium plane (its heavy wing and Panther have no KSP2 craft to copy) rotates on the stick and flies.
+#[test]
+#[cfg_attr(debug_assertions, ignore)]
+fn the_medium_plane_rotates_and_flies() {
+    let c = planes()
+        .into_iter()
+        .find(|c| c.name == "Medium heavy wing")
+        .unwrap();
+    let (s, v, n) = ose_takeoff(&c).expect("leaves the runway");
+    println!("Medium heavy wing: off the runway {s:.2} s after the stick at {v:.1} m/s, nose up to {n:.1} deg");
 }
 
 /// The KSP2 crafts of these planes (tools/ksp2-parity-pilot/make_craft_planes.py, flown by the parity pilot's
