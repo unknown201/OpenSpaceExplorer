@@ -182,6 +182,10 @@ fn ksp2_crafts_of_the_editor_planes_read_back_the_same() {
             "Small straight",
             include_str!("../../../tools/ksp2-parity-pilot/craft-plane-straight.json"),
         ),
+        (
+            "Booster plane",
+            include_str!("../../../tools/ksp2-parity-pilot/craft-plane-booster.json"),
+        ),
     ] {
         let plane = planes().into_iter().find(|c| c.name == name).unwrap();
         let value: serde_json::Value =
@@ -264,4 +268,51 @@ fn editor_wing_pairs_meet_the_ground_as_mirror_images() {
             );
         }
     }
+}
+
+/// Josh's booster plane: lit on the runway with nothing to steer it. Prints its run (and is what the KSP2
+/// capture `jetfly booster` is compared with).
+#[test]
+#[cfg_attr(debug_assertions, ignore)]
+fn the_booster_plane_burns_and_flies() {
+    let c = planes()
+        .into_iter()
+        .find(|c| c.name == "Booster plane")
+        .unwrap();
+    let (mut u, v, spin) = on_runway(&c);
+    u.step();
+    let p0 = u.powered(v).unwrap().clone();
+    let alt0 = p0.r.length();
+    println!(
+        "booster plane: {:.2} t, controlled {}, rests at {:.2} deg",
+        p0.mass_t,
+        p0.controlled,
+        pitch_deg(&p0)
+    );
+    u.stage(v);
+    let mut off = None;
+    for i in 0..(40 * TICKS_PER_SECOND) {
+        u.step();
+        let p = u.powered(v).unwrap().clone();
+        let speed = (p.v - DVec3::new(0.0, 0.0, spin).cross(p.r)).length();
+        if off.is_none() && !p.landed {
+            off = Some((i as f64 / 50.0, speed));
+        }
+        if i % 50 == 0 {
+            println!(
+                "t {:4.1} speed {speed:6.1} alt {:7.1} pitch {:6.2} landed {} crashed {} mass {:.2} t lift_up {:.1}",
+                i as f64 / 50.0,
+                p.r.length() - alt0,
+                pitch_deg(&p),
+                p.landed,
+                p.crashed,
+                p.mass_t,
+                p.lift_kn.dot(p.r.normalized())
+            );
+        }
+        if p.crashed {
+            break;
+        }
+    }
+    println!("off the runway: {off:?}");
 }

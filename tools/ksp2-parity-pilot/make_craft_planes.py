@@ -1,10 +1,11 @@
 """Build craft-plane-<name>.json for the KSP2 parity pilot's "jetfly <name>" scenario from the planes OSE's
 hangar editor builds (crates/ose-sim/tests/data/editor-planes.json, written by ose-client's plane_build test).
 
-Each part is the stock jet's own part of that kind (craft-jet.json) with OSE's pose, mirror flag, wing shape and
+Each part is the stock jet's own part of that kind (craft-jet.json; parts it lacks, such as a solid booster,
+from the pilot's other crafts) with OSE's pose, mirror flag, wing shape and
 links put in, so KSP2 flies exactly the plane OSE flies. Settings OSE leaves at the part's defaults are written
-as KSP2's defaults: control surfaces answer pitch, yaw and roll at full authority, every wheel steers. Only
-planes made of the stock jet's kinds of parts can be written; others are skipped and named.
+as KSP2's defaults: control surfaces answer pitch, yaw and roll at full authority, every wheel steers. A plane
+with a part no pilot craft has is skipped and named.
 
     python -I tools/ksp2-parity-pilot/make_craft_planes.py
 """
@@ -21,7 +22,7 @@ RIGS = REPO / "assets" / "own" / "procedural-wings.json"
 CATALOG = REPO / "assets" / "own" / "parts-catalog.json"
 
 # OSE plane name -> scenario name ("jetfly <name>", craft-plane-<name>.json)
-NAMES = {"Small": "small", "Small straight": "straight", "Small swept": "swept"}
+NAMES = {"Small": "small", "Small straight": "straight", "Small swept": "swept", "Booster plane": "booster"}
 
 
 def guid_of(plane: str, i: int) -> str:
@@ -45,12 +46,13 @@ def slider_starts(part_id: str, option: int) -> dict:
     return {s["name"]: s["start"] for s in opt["sliders"]}
 
 
-def build(plane: dict, template: dict, ranges: dict) -> dict:
+def build(plane: dict, template: dict, ranges: dict, others: list) -> dict:
     craft = copy.deepcopy(template)
     asm = craft["Assemblies"][0]["Assembly"]
     kinds = {}
-    for p in asm["parts"]:
-        kinds.setdefault(p["partName"], p)
+    for t in [template] + others:
+        for p in t["Assemblies"][0]["Assembly"]["parts"]:
+            kinds.setdefault(p["partName"], p)
     parts = plane["parts"]
     missing = sorted({p["part_id"] for p in parts} - set(kinds))
     if missing:
@@ -116,7 +118,7 @@ def build(plane: dict, template: dict, ranges: dict) -> dict:
         out.append(k)
     asm["parts"] = out
     root = next(i for i, p in enumerate(parts) if p.get("parent") is None)
-    engines = [guids[i] for i, p in enumerate(parts) if p["part_id"].startswith("engine_")]
+    engines = [guids[i] for i, p in enumerate(parts) if p["part_id"].startswith(("engine_", "booster_"))]
     stage = {"availableStages": [{"partGuids": None, "PartIds": [ref(g) for g in engines], "StageID": 0, "IsActive": False}],
              "unassignedParts": None, "totalStageCount": 0}
     asm["stagingState"] = copy.deepcopy(stage)
@@ -143,12 +145,14 @@ def main() -> None:
     template = json.loads((HERE / "craft-jet.json").read_text(encoding="utf-8-sig"))
     ranges = {d["id"]: d["ctrl_range_deg"] for d in json.loads(CATALOG.read_text(encoding="utf-8"))
               if d.get("ctrl_range_deg")}
+    others = [json.loads(f.read_text(encoding="utf-8-sig")) for f in sorted(HERE.glob("craft-*.json"))
+              if f.name != "craft-jet.json" and not f.name.startswith("craft-plane-")]
     for plane in planes:
         if plane["name"] not in NAMES:
             print(f"{plane['name']}: no KSP2 scenario name, skipped")
             continue
         try:
-            craft = build(plane, template, ranges)
+            craft = build(plane, template, ranges, others)
         except KeyError as e:
             print(f"{plane['name']}: the stock jet has no {e}, skipped")
             continue

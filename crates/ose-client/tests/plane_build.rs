@@ -378,6 +378,36 @@ fn build(
     e.craft.clone()
 }
 
+/// Josh's "plane rocket": a Thumper solid booster lying along the floor as the fuselage, a wing pair on its
+/// sides behind its middle, main gear under the wings and a nose wheel under its front. No cockpit or probe:
+/// nothing steers it, the booster just burns.
+fn booster_plane(cat: &Catalog) -> Craft {
+    let mut e = Editor::new("Booster plane");
+    e.plane_new = true;
+    let b = e.add_part(&cat["booster_1v_solid_thumper"], cat).unwrap();
+    assert!(e.is_plane());
+    // the booster's own +Y is its nose (top node): the wings 1 m behind its middle
+    let (hit, n) = on(&e, b, DVec3::new(0.635, -1.0, 0.0));
+    let wings = put(&mut e, cat, b, hit, n, "wing_1v_procedural_light", 2);
+    set_shape(&mut e, wings[0], &[("WING_SPAN", 0.4)]);
+    let root = e.craft.parts[wings[0]].local_position;
+    let at = under_wing(&e, wings[0], root.x + 0.5, root.z - 0.6);
+    let gear = put(
+        &mut e,
+        cat,
+        wings[0],
+        at,
+        DVec3::new(0.0, -1.0, 0.0),
+        "landinggear_1v",
+        1,
+    );
+    assert_eq!(gear.len(), 2);
+    let (hit, n) = on(&e, b, DVec3::new(0.0, 3.0, 0.7));
+    put(&mut e, cat, b, hit, n, "landinggear_0v_steerable", 1);
+    assert!(e.craft.is_tree());
+    e.craft.clone()
+}
+
 fn editor_planes(cat: &Catalog) -> Vec<Craft> {
     vec![
         // Small: the stock jet's layout, default wings.
@@ -420,6 +450,7 @@ fn editor_planes(cat: &Catalog) -> Vec<Craft> {
             (0.6, 1.5),
             "engine_1v_turbofan_methane_wheesley",
         ),
+        booster_plane(cat),
     ]
 }
 

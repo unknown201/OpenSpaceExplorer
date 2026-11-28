@@ -13,6 +13,7 @@
     small:    cockpit, two tanks, the default light wing pair, a Wheesley  -> reference\ksp2-plane-small
     swept:    the same with its wings swept well back                      -> reference\ksp2-plane-swept
     straight: the same with long unswept wings                             -> reference\ksp2-plane-straight
+    booster:  a Thumper solid booster with a wing pair and wheels, no cockpit -> reference\ksp2-plane-booster
   Each sits 12 s on the runway, then (JetScenario.Fly): brakes off, full throttle to 60 m/s, full pitch up until the
   nose is 10 degrees up, SAS holds 20 s, pitch down, bank. Logged every tick: jetfly-trace.csv (speed, altitude,
   pitch, roll, inputs, thrust), jetfly-forces.csv (every part's airflow forces) and jetfly-surfaces.csv (each
@@ -20,7 +21,7 @@
 #>
 param(
     [string]$Ksp2 = "C:\Program Files (x86)\Steam\steamapps\common\Kerbal Space Program 2",
-    [string[]]$Scenarios = @("small", "swept", "straight"),
+    [string[]]$Scenarios = @("small", "swept", "straight", "booster"),
     [int]$TimeoutMinutes = 20
 )
 $ErrorActionPreference = "Stop"
@@ -28,12 +29,12 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $pilotDir = Join-Path $Ksp2 "BepInEx\ose-parity"
 $plugin = Join-Path $Ksp2 "BepInEx\plugins\OSE.ParityPilot.dll"
 $campaign = Join-Path $env:USERPROFILE "AppData\LocalLow\Intercept Games\Kerbal Space Program 2\Saves\SinglePlayer\OSE Parity"
-$outNames = @{ small = "ksp2-plane-small"; swept = "ksp2-plane-swept"; straight = "ksp2-plane-straight" }
-$crafts = @("craft-plane-small.json", "craft-plane-swept.json", "craft-plane-straight.json")
+$outNames = @{ small = "ksp2-plane-small"; swept = "ksp2-plane-swept"; straight = "ksp2-plane-straight"; booster = "ksp2-plane-booster" }
+$crafts = @("craft-plane-small.json", "craft-plane-swept.json", "craft-plane-straight.json", "craft-plane-booster.json")
 
 if (-not (Test-Path $pilotDir)) { throw "No ${pilotDir}: the parity pilot (BepInEx) is not installed in KSP2." }
 if (Get-Process -Name "KSP2_x64" -ErrorAction SilentlyContinue) { throw "KSP2 is running; close it first." }
-foreach ($s in $Scenarios) { if (-not $outNames.ContainsKey($s)) { throw "Unknown plane '$s' (small, swept, straight)." } }
+foreach ($s in $Scenarios) { if (-not $outNames.ContainsKey($s)) { throw "Unknown plane '$s' (small, swept, straight, booster)." } }
 # another session may be driving KSP2 with its own run-*.ps1: two launches clobber run.txt
 $parent = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId
 $others = Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'pwsh.exe'" | Where-Object { $_.ProcessId -ne $PID -and $_.ProcessId -ne $parent -and $_.CommandLine -match 'ksp2-parity-pilot\\run-' }
