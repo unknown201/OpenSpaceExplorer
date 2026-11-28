@@ -435,11 +435,28 @@ fn editor_planes_fixture_is_current() {
     if std::env::var_os("OSE_WRITE_PLANES").is_some() {
         std::fs::write(&path, &text).unwrap();
     }
-    let on_disk = std::fs::read_to_string(&path)
-        .unwrap_or_default()
-        .replace("\r\n", "\n");
+    // equal to the last bit on one machine, to 1e-9 across them (each platform's sin and cos round alike
+    // only so far)
+    let on_disk: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap_or_default())
+            .unwrap_or_default();
+    let built: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert!(
-        on_disk == text,
+        same_json(&on_disk, &built),
         "editor-planes.json is stale: run with OSE_WRITE_PLANES=1"
     );
+}
+
+fn same_json(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    use serde_json::Value::*;
+    match (a, b) {
+        (Number(x), Number(y)) => (x.as_f64().unwrap() - y.as_f64().unwrap()).abs() < 1e-9,
+        (Array(x), Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same_json(p, q)),
+        (Object(x), Object(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(k, v)| y.get(k).is_some_and(|w| same_json(v, w)))
+        }
+        _ => a == b,
+    }
 }
