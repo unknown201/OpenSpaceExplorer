@@ -5289,7 +5289,9 @@ mod tests {
     }
 
     /// KSP2 run 21 (T10): Stock04_Jet on the runway, SAS holding, full pitch up at 60 m/s: the nose comes
-    /// up about 13 degrees in 0.95 s and it flies at 68 m/s. Pitch up must turn the nose toward the
+    /// up about 13 degrees in 0.95 s and it flies at 68 m/s. Turned by the moments about its main gear OSE's
+    /// nose comes up slower at first (1.46 s, 72.9 m/s): KSP2's starts rising at about 0.56 rad/s^2, more
+    /// than the airflow's 84-90 kNm against the weight ahead of the mains gives a rigid craft. Pitch up must turn the nose toward the
     /// cockpit's canopy (the plane's control frame is its root part's, turned by its level layout).
     #[test]
     fn a_jet_rotates_on_the_stick_and_lifts_off_as_ksp2s() {
@@ -5341,6 +5343,9 @@ mod tests {
             lifted.expect("lifts off"),
         );
         let after = (end - start) as f64 / TICKS_PER_SECOND as f64;
+        println!(
+            "lifted off {after:.2} s after the stick at {speed:.1} m/s (KSP2 0.96 s, 68.2 m/s)"
+        );
         assert!(
             after > 0.4 && after < 1.5,
             "lifted off {after:.2} s after the stick (KSP2 0.96 s)"

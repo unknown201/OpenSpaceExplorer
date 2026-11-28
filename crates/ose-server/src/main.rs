@@ -3229,22 +3229,32 @@ fn balance(
             .unwrap_or(0.0)
     };
     let def = |i: usize| s.parts.iter().find(|d| d.id == craft.parts[i].part_id);
-    let (mut m, mut c) = (0.0, DVec3::ZERO);
-    for (i, p) in craft.parts.iter().enumerate() {
-        let wet = def(i).map(|d| d.mass_t).unwrap_or(0.0)
-            + p.resources
-                .iter()
-                .map(|r| r.stored_units * unit(&r.resource))
-                .sum::<f64>();
-        m += wet;
-        c = c + p.local_position * wet;
-    }
-    let com = if m > 0.0 { c * (1.0 / m) } else { DVec3::ZERO };
     let rotate = |q: ose_data::craft::Quat, v: DVec3| {
         let u = DVec3::new(q.x, q.y, q.z);
         let t = u.cross(v) * 2.0;
         v + t * q.w + u.cross(t)
     };
+    // each part's own mass (a shaped wing's from its shape) at its own centre of mass
+    let (mut m, mut c) = (0.0, DVec3::ZERO);
+    for (i, p) in craft.parts.iter().enumerate() {
+        let (dry, at) = def(i)
+            .map(|d| {
+                let f = p.flight_definition(d);
+                (
+                    f.mass_t,
+                    p.local_position + rotate(p.local_rotation.normalized(), f.mass_offset_m),
+                )
+            })
+            .unwrap_or((0.0, p.local_position));
+        let wet = dry
+            + p.resources
+                .iter()
+                .map(|r| r.stored_units * unit(&r.resource))
+                .sum::<f64>();
+        m += wet;
+        c = c + at * wet;
+    }
+    let com = if m > 0.0 { c * (1.0 / m) } else { DVec3::ZERO };
     let (mut thrust, mut at, mut dir) = (0.0, DVec3::ZERO, DVec3::ZERO);
     if let Some(stage) = report.stages.iter().find(|st| st.thrust_kn > 0.0) {
         for &i in &stage.engines {
@@ -3265,19 +3275,33 @@ fn balance(
     }
 }
 
-/// The lifting surfaces' centre, weighted by their lift coefficient (craft frame; zero without any).
+/// The lifting surfaces' centre, weighted by their lift coefficient (craft frame; zero without any). Each
+/// surface lifts at its own centre of pressure, as in flight: a shaped wing at its baked mesh's centre with
+/// its shape's coefficients (fixed and moving parts), not at the root where it is attached.
 fn centre_of_lift(s: &Shared, craft: &ose_data::craft::Craft) -> ose_math::DVec3 {
+    let rotate = |q: ose_data::craft::Quat, v: ose_math::DVec3| {
+        let u = ose_math::DVec3::new(q.x, q.y, q.z);
+        let t = u.cross(v) * 2.0;
+        v + t * q.w + u.cross(t)
+    };
     let (mut w, mut c) = (0.0, ose_math::DVec3::ZERO);
     for p in &craft.parts {
-        let coeff = s
-            .parts
-            .iter()
-            .find(|d| d.id == p.part_id)
-            .and_then(|d| d.lifting_surface.as_ref())
-            .map(|l| l.deflection_lift_coeff)
-            .unwrap_or(0.0);
+        let Some(def) = s.parts.iter().find(|d| d.id == p.part_id) else {
+            continue;
+        };
+        let def = p.flight_definition(def);
+        let Some(lift) = def.lifting_surface.as_ref() else {
+            continue;
+        };
+        let coeff = def
+            .flight_geometry
+            .surface
+            .as_ref()
+            .and_then(|f| Some(f.fixed_lift_coeff? + f.moving_lift_coeff.unwrap_or(0.0)))
+            .unwrap_or(lift.deflection_lift_coeff);
+        let at = p.local_position + rotate(p.local_rotation.normalized(), lift.pressure_offset_m);
         w += coeff;
-        c = c + p.local_position * coeff;
+        c = c + at * coeff;
     }
     if w > 0.0 {
         c * (1.0 / w)

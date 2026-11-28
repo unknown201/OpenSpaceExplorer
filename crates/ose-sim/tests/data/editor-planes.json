@@ -1,0 +1,1997 @@
+[
+  {
+    "name": "Small",
+    "description": "",
+    "parts": [
+      {
+        "guid": "p1",
+        "part_id": "cockpit_1v_m1_crew",
+        "parent": null,
+        "own_node": null,
+        "parent_node": null,
+        "local_position": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "ElectricCharge",
+            "stored_units": 50.0,
+            "capacity_units": 50.0
+          },
+          {
+            "resource": "MonoPropellant",
+            "stored_units": 0.02,
+            "capacity_units": 0.02
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p2",
+        "part_id": "fueltank_1v_m1_inline_methane",
+        "parent": 0,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+          "x": 0.0,
+          "y": 2.220446049250313e-16,
+          "z": -1.6883999705314638
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "Methane",
+            "stored_units": 2.0,
+            "capacity_units": 2.0
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p3",
+        "part_id": "fueltank_1v_m1_inline_methane",
+        "parent": 1,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+          "x": 0.0,
+          "y": 4.440892098500626e-16,
+          "z": -3.563399970531464
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "Methane",
+            "stored_units": 2.0,
+            "capacity_units": 2.0
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p4",
+        "part_id": "engine_1v_turbofan_methane_wheesley",
+        "parent": 2,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+          "x": 0.0,
+          "y": 6.661338147750939e-16,
+          "z": -5.473774970531465
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 1,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p5",
+        "part_id": "wing_1v_procedural_light",
+        "parent": 1,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 0.625,
+          "y": 2.220446049250313e-16,
+          "z": -2.188399970531464
+        },
+        "local_rotation": {
+          "x": 0.5000000000000001,
+          "y": 0.5000000000000001,
+          "z": 0.5000000000000001,
+          "w": 0.5000000000000001
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": {
+          "mirrored": true,
+          "part_id": "wing_1v_procedural_light",
+          "dry_mass_t": null,
+          "mass_offset_m": null,
+          "inertia_per_t": null,
+          "surface": null
+        },
+        "actions": [],
+        "symmetry": 1,
+        "shape": {
+          "option": 1,
+          "sliders": [],
+          "toggles": []
+        },
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p6",
+        "part_id": "wing_1v_procedural_light",
+        "parent": 1,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": -0.625,
+          "y": 2.220446049250313e-16,
+          "z": -2.188399970531464
+        },
+        "local_rotation": {
+          "x": -0.5000000000000001,
+          "y": 0.5000000000000001,
+          "z": 0.5000000000000001,
+          "w": -0.5000000000000001
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 1,
+        "shape": {
+          "option": 1,
+          "sliders": [],
+          "toggles": []
+        },
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p7",
+        "part_id": "landinggear_1v",
+        "parent": 4,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 1.125,
+          "y": -0.014163359042331125,
+          "z": -3.1435544607193773
+        },
+        "local_rotation": {
+          "x": 1.1102230246251565e-16,
+          "y": 0.0,
+          "z": 5.551115123125783e-17,
+          "w": 1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 2,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p8",
+        "part_id": "landinggear_1v",
+        "parent": 5,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": -1.125,
+          "y": -0.014163359042331125,
+          "z": -3.1435544607193773
+        },
+        "local_rotation": {
+          "x": -1.1102230246251565e-16,
+          "y": 0.0,
+          "z": 5.551115123125783e-17,
+          "w": -1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": {
+          "mirrored": true,
+          "part_id": "landinggear_1v",
+          "dry_mass_t": null,
+          "mass_offset_m": null,
+          "inertia_per_t": null,
+          "surface": null
+        },
+        "actions": [],
+        "symmetry": 2,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p9",
+        "part_id": "landinggear_0v_steerable",
+        "parent": 0,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 0.0,
+          "y": -0.6300000000000006,
+          "z": 0.8500000000000001
+        },
+        "local_rotation": {
+          "x": 1.1102230246251565e-16,
+          "y": 2.2993471702930937e-17,
+          "z": -7.850462293418875e-17,
+          "w": 1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p10",
+        "part_id": "stabilizer_1v_procedural_light",
+        "parent": 2,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 0.625,
+          "y": 5.551115123125783e-16,
+          "z": -4.163399970531464
+        },
+        "local_rotation": {
+          "x": 0.5000000000000001,
+          "y": 0.5000000000000001,
+          "z": 0.5000000000000001,
+          "w": 0.5000000000000001
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": {
+          "mirrored": true,
+          "part_id": "stabilizer_1v_procedural_light",
+          "dry_mass_t": null,
+          "mass_offset_m": null,
+          "inertia_per_t": null,
+          "surface": null
+        },
+        "actions": [],
+        "symmetry": 3,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p11",
+        "part_id": "stabilizer_1v_procedural_light",
+        "parent": 2,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": -0.625,
+          "y": 5.551115123125783e-16,
+          "z": -4.163399970531464
+        },
+        "local_rotation": {
+          "x": -0.5000000000000001,
+          "y": 0.5000000000000001,
+          "z": 0.5000000000000001,
+          "w": -0.5000000000000001
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 3,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p12",
+        "part_id": "stabilizer_1v_procedural_light",
+        "parent": 2,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 0.0,
+          "y": 0.6250000000000009,
+          "z": -4.163399970531464
+        },
+        "local_rotation": {
+          "x": 7.850462293418876e-17,
+          "y": -0.7071067811865475,
+          "z": -0.7071067811865477,
+          "w": 7.850462293418876e-17
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p13",
+        "part_id": "intake_1v_radial",
+        "parent": 2,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": -5.204170427930421e-18,
+          "y": -0.6380000002682208,
+          "z": -3.3633999705314643
+        },
+        "local_rotation": {
+          "x": 0.5000000000000002,
+          "y": 0.49999999999999983,
+          "z": 0.49999999999999994,
+          "w": 0.5
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "IntakeAir",
+            "stored_units": 0.01,
+            "capacity_units": 0.01
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      }
+    ],
+    "stages": [
+      [
+        3
+      ]
+    ],
+    "loose": [],
+    "colors": null
+  },
+  {
+    "name": "Medium heavy wing",
+    "description": "",
+    "parts": [
+      {
+        "guid": "p1",
+        "part_id": "cockpit_1v_m1_crew",
+        "parent": null,
+        "own_node": null,
+        "parent_node": null,
+        "local_position": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "ElectricCharge",
+            "stored_units": 50.0,
+            "capacity_units": 50.0
+          },
+          {
+            "resource": "MonoPropellant",
+            "stored_units": 0.02,
+            "capacity_units": 0.02
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p2",
+        "part_id": "fueltank_1v_m1_inline_methane",
+        "parent": 0,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+          "x": 0.0,
+          "y": 2.220446049250313e-16,
+          "z": -1.6883999705314638
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "Methane",
+            "stored_units": 2.0,
+            "capacity_units": 2.0
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p3",
+        "part_id": "fueltank_1v_m1_inline_methane",
+        "parent": 1,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+          "x": 0.0,
+          "y": 4.440892098500626e-16,
+          "z": -3.563399970531464
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "Methane",
+            "stored_units": 2.0,
+            "capacity_units": 2.0
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p4",
+        "part_id": "fueltank_1v_m1_inline_methane",
+        "parent": 2,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+          "x": 0.0,
+          "y": 6.661338147750939e-16,
+          "z": -5.4383999705314645
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "Methane",
+            "stored_units": 2.0,
+            "capacity_units": 2.0
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p5",
+        "part_id": "engine_1v_turbofan_methane_panther",
+        "parent": 3,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+          "x": 0.0,
+          "y": 7.771561172376096e-16,
+          "z": -6.3758999705314645
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 1,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p6",
+        "part_id": "wing_2v_procedural_heavy",
+        "parent": 1,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 0.625,
+          "y": 2.220446049250313e-16,
+          "z": -2.188399970531464
+        },
+        "local_rotation": {
+          "x": 0.5000000000000001,
+          "y": 0.5000000000000001,
+          "z": 0.5000000000000001,
+          "w": 0.5000000000000001
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": {
+          "mirrored": true,
+          "part_id": "wing_2v_procedural_heavy",
+          "dry_mass_t": null,
+          "mass_offset_m": null,
+          "inertia_per_t": null,
+          "surface": null
+        },
+        "actions": [],
+        "symmetry": 1,
+        "shape": {
+          "option": 1,
+          "sliders": [
+            [
+              "WING_ANGLE",
+              0.4
+            ],
+            [
+              "WING_SPAN",
+              0.3
+            ]
+          ],
+          "toggles": []
+        },
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p7",
+        "part_id": "wing_2v_procedural_heavy",
+        "parent": 1,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": -0.625,
+          "y": 2.220446049250313e-16,
+          "z": -2.188399970531464
+        },
+        "local_rotation": {
+          "x": -0.5000000000000001,
+          "y": 0.5000000000000001,
+          "z": 0.5000000000000001,
+          "w": -0.5000000000000001
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 1,
+        "shape": {
+          "option": 1,
+          "sliders": [
+            [
+              "WING_ANGLE",
+              0.4
+            ],
+            [
+              "WING_SPAN",
+              0.3
+            ]
+          ],
+          "toggles": []
+        },
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p8",
+        "part_id": "landinggear_1v",
+        "parent": 5,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 1.425,
+          "y": -0.09231803717821552,
+          "z": -3.3094238891804926
+        },
+        "local_rotation": {
+          "x": 1.1102230246251565e-16,
+          "y": 0.0,
+          "z": 5.551115123125783e-17,
+          "w": 1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 2,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p9",
+        "part_id": "landinggear_1v",
+        "parent": 6,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": -1.425,
+          "y": -0.09231803717821552,
+          "z": -3.3094238891804926
+        },
+        "local_rotation": {
+          "x": -1.1102230246251565e-16,
+          "y": 0.0,
+          "z": 5.551115123125783e-17,
+          "w": -1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": {
+          "mirrored": true,
+          "part_id": "landinggear_1v",
+          "dry_mass_t": null,
+          "mass_offset_m": null,
+          "inertia_per_t": null,
+          "surface": null
+        },
+        "actions": [],
+        "symmetry": 2,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p10",
+        "part_id": "landinggear_0v_steerable",
+        "parent": 0,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 0.0,
+          "y": -0.6300000000000006,
+          "z": 0.8500000000000001
+        },
+        "local_rotation": {
+          "x": 1.1102230246251565e-16,
+          "y": 2.2993471702930937e-17,
+          "z": -7.850462293418875e-17,
+          "w": 1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p11",
+        "part_id": "stabilizer_1v_procedural_light",
+        "parent": 3,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 0.625,
+          "y": 7.771561172376096e-16,
+          "z": -6.038399970531465
+        },
+        "local_rotation": {
+          "x": 0.5000000000000001,
+          "y": 0.5000000000000001,
+          "z": 0.5000000000000001,
+          "w": 0.5000000000000001
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": {
+          "mirrored": true,
+          "part_id": "stabilizer_1v_procedural_light",
+          "dry_mass_t": null,
+          "mass_offset_m": null,
+          "inertia_per_t": null,
+          "surface": null
+        },
+        "actions": [],
+        "symmetry": 3,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p12",
+        "part_id": "stabilizer_1v_procedural_light",
+        "parent": 3,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": -0.625,
+          "y": 7.771561172376096e-16,
+          "z": -6.038399970531465
+        },
+        "local_rotation": {
+          "x": -0.5000000000000001,
+          "y": 0.5000000000000001,
+          "z": 0.5000000000000001,
+          "w": -0.5000000000000001
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 3,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p13",
+        "part_id": "stabilizer_1v_procedural_light",
+        "parent": 3,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 0.0,
+          "y": 0.6250000000000011,
+          "z": -6.038399970531464
+        },
+        "local_rotation": {
+          "x": 7.850462293418876e-17,
+          "y": -0.7071067811865475,
+          "z": -0.7071067811865477,
+          "w": 7.850462293418876e-17
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p14",
+        "part_id": "intake_1v_radial",
+        "parent": 3,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": -5.204170427930421e-18,
+          "y": -0.6380000002682206,
+          "z": -5.238399970531464
+        },
+        "local_rotation": {
+          "x": 0.5000000000000002,
+          "y": 0.49999999999999983,
+          "z": 0.49999999999999994,
+          "w": 0.5
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "IntakeAir",
+            "stored_units": 0.01,
+            "capacity_units": 0.01
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      }
+    ],
+    "stages": [
+      [
+        4
+      ]
+    ],
+    "loose": [],
+    "colors": null
+  },
+  {
+    "name": "Small swept",
+    "description": "",
+    "parts": [
+      {
+        "guid": "p1",
+        "part_id": "cockpit_1v_m1_crew",
+        "parent": null,
+        "own_node": null,
+        "parent_node": null,
+        "local_position": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "ElectricCharge",
+            "stored_units": 50.0,
+            "capacity_units": 50.0
+          },
+          {
+            "resource": "MonoPropellant",
+            "stored_units": 0.02,
+            "capacity_units": 0.02
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p2",
+        "part_id": "fueltank_1v_m1_inline_methane",
+        "parent": 0,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+          "x": 0.0,
+          "y": 2.220446049250313e-16,
+          "z": -1.6883999705314638
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "Methane",
+            "stored_units": 2.0,
+            "capacity_units": 2.0
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p3",
+        "part_id": "fueltank_1v_m1_inline_methane",
+        "parent": 1,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+          "x": 0.0,
+          "y": 4.440892098500626e-16,
+          "z": -3.563399970531464
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "Methane",
+            "stored_units": 2.0,
+            "capacity_units": 2.0
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p4",
+        "part_id": "engine_1v_turbofan_methane_wheesley",
+        "parent": 2,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+          "x": 0.0,
+          "y": 6.661338147750939e-16,
+          "z": -5.473774970531465
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 1,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p5",
+        "part_id": "wing_1v_procedural_light",
+        "parent": 1,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 0.625,
+          "y": 2.220446049250313e-16,
+          "z": -2.188399970531464
+        },
+        "local_rotation": {
+          "x": 0.5000000000000001,
+          "y": 0.5000000000000001,
+          "z": 0.5000000000000001,
+          "w": 0.5000000000000001
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": {
+          "mirrored": true,
+          "part_id": "wing_1v_procedural_light",
+          "dry_mass_t": null,
+          "mass_offset_m": null,
+          "inertia_per_t": null,
+          "surface": null
+        },
+        "actions": [],
+        "symmetry": 1,
+        "shape": {
+          "option": 1,
+          "sliders": [
+            [
+              "WING_ANGLE",
+              0.15
+            ],
+            [
+              "WING_SPAN",
+              0.3
+            ]
+          ],
+          "toggles": []
+        },
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p6",
+        "part_id": "wing_1v_procedural_light",
+        "parent": 1,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": -0.625,
+          "y": 2.220446049250313e-16,
+          "z": -2.188399970531464
+        },
+        "local_rotation": {
+          "x": -0.5000000000000001,
+          "y": 0.5000000000000001,
+          "z": 0.5000000000000001,
+          "w": -0.5000000000000001
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 1,
+        "shape": {
+          "option": 1,
+          "sliders": [
+            [
+              "WING_ANGLE",
+              0.15
+            ],
+            [
+              "WING_SPAN",
+              0.3
+            ]
+          ],
+          "toggles": []
+        },
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p7",
+        "part_id": "landinggear_1v",
+        "parent": 4,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 1.125,
+          "y": -0.01415823308269304,
+          "z": -3.705164627549891
+        },
+        "local_rotation": {
+          "x": 1.1102230246251565e-16,
+          "y": 0.0,
+          "z": 5.551115123125783e-17,
+          "w": 1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 2,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p8",
+        "part_id": "landinggear_1v",
+        "parent": 5,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": -1.125,
+          "y": -0.01415823308269304,
+          "z": -3.705164627549891
+        },
+        "local_rotation": {
+          "x": -1.1102230246251565e-16,
+          "y": 0.0,
+          "z": 5.551115123125783e-17,
+          "w": -1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": {
+          "mirrored": true,
+          "part_id": "landinggear_1v",
+          "dry_mass_t": null,
+          "mass_offset_m": null,
+          "inertia_per_t": null,
+          "surface": null
+        },
+        "actions": [],
+        "symmetry": 2,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p9",
+        "part_id": "landinggear_0v_steerable",
+        "parent": 0,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 0.0,
+          "y": -0.6300000000000006,
+          "z": 0.8500000000000001
+        },
+        "local_rotation": {
+          "x": 1.1102230246251565e-16,
+          "y": 2.2993471702930937e-17,
+          "z": -7.850462293418875e-17,
+          "w": 1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p10",
+        "part_id": "stabilizer_1v_procedural_light",
+        "parent": 2,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 0.625,
+          "y": 5.551115123125783e-16,
+          "z": -4.163399970531464
+        },
+        "local_rotation": {
+          "x": 0.5000000000000001,
+          "y": 0.5000000000000001,
+          "z": 0.5000000000000001,
+          "w": 0.5000000000000001
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": {
+          "mirrored": true,
+          "part_id": "stabilizer_1v_procedural_light",
+          "dry_mass_t": null,
+          "mass_offset_m": null,
+          "inertia_per_t": null,
+          "surface": null
+        },
+        "actions": [],
+        "symmetry": 3,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p11",
+        "part_id": "stabilizer_1v_procedural_light",
+        "parent": 2,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": -0.625,
+          "y": 5.551115123125783e-16,
+          "z": -4.163399970531464
+        },
+        "local_rotation": {
+          "x": -0.5000000000000001,
+          "y": 0.5000000000000001,
+          "z": 0.5000000000000001,
+          "w": -0.5000000000000001
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 3,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p12",
+        "part_id": "stabilizer_1v_procedural_light",
+        "parent": 2,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 0.0,
+          "y": 0.6250000000000009,
+          "z": -4.163399970531464
+        },
+        "local_rotation": {
+          "x": 7.850462293418876e-17,
+          "y": -0.7071067811865475,
+          "z": -0.7071067811865477,
+          "w": 7.850462293418876e-17
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p13",
+        "part_id": "intake_1v_radial",
+        "parent": 2,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": -5.204170427930421e-18,
+          "y": -0.6380000002682208,
+          "z": -3.3633999705314643
+        },
+        "local_rotation": {
+          "x": 0.5000000000000002,
+          "y": 0.49999999999999983,
+          "z": 0.49999999999999994,
+          "w": 0.5
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "IntakeAir",
+            "stored_units": 0.01,
+            "capacity_units": 0.01
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      }
+    ],
+    "stages": [
+      [
+        3
+      ]
+    ],
+    "loose": [],
+    "colors": null
+  },
+  {
+    "name": "Small straight",
+    "description": "",
+    "parts": [
+      {
+        "guid": "p1",
+        "part_id": "cockpit_1v_m1_crew",
+        "parent": null,
+        "own_node": null,
+        "parent_node": null,
+        "local_position": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "ElectricCharge",
+            "stored_units": 50.0,
+            "capacity_units": 50.0
+          },
+          {
+            "resource": "MonoPropellant",
+            "stored_units": 0.02,
+            "capacity_units": 0.02
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p2",
+        "part_id": "fueltank_1v_m1_inline_methane",
+        "parent": 0,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+          "x": 0.0,
+          "y": 2.220446049250313e-16,
+          "z": -1.6883999705314638
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "Methane",
+            "stored_units": 2.0,
+            "capacity_units": 2.0
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p3",
+        "part_id": "fueltank_1v_m1_inline_methane",
+        "parent": 1,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+          "x": 0.0,
+          "y": 4.440892098500626e-16,
+          "z": -3.563399970531464
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "Methane",
+            "stored_units": 2.0,
+            "capacity_units": 2.0
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p4",
+        "part_id": "engine_1v_turbofan_methane_wheesley",
+        "parent": 2,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+          "x": 0.0,
+          "y": 6.661338147750939e-16,
+          "z": -5.473774970531465
+        },
+        "local_rotation": {
+          "x": 0.7071067811865476,
+          "y": 0.0,
+          "z": 0.0,
+          "w": 0.7071067811865476
+        },
+        "stage_index": 1,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p5",
+        "part_id": "wing_1v_procedural_light",
+        "parent": 1,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 0.625,
+          "y": 2.220446049250313e-16,
+          "z": -2.188399970531464
+        },
+        "local_rotation": {
+          "x": 0.5000000000000001,
+          "y": 0.5000000000000001,
+          "z": 0.5000000000000001,
+          "w": 0.5000000000000001
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": {
+          "mirrored": true,
+          "part_id": "wing_1v_procedural_light",
+          "dry_mass_t": null,
+          "mass_offset_m": null,
+          "inertia_per_t": null,
+          "surface": null
+        },
+        "actions": [],
+        "symmetry": 1,
+        "shape": {
+          "option": 1,
+          "sliders": [
+            [
+              "WING_ANGLE",
+              0.5
+            ],
+            [
+              "WING_SPAN",
+              0.6
+            ],
+            [
+              "TIP_LENGTH",
+              0.6
+            ]
+          ],
+          "toggles": []
+        },
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p6",
+        "part_id": "wing_1v_procedural_light",
+        "parent": 1,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": -0.625,
+          "y": 2.220446049250313e-16,
+          "z": -2.188399970531464
+        },
+        "local_rotation": {
+          "x": -0.5000000000000001,
+          "y": 0.5000000000000001,
+          "z": 0.5000000000000001,
+          "w": -0.5000000000000001
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 1,
+        "shape": {
+          "option": 1,
+          "sliders": [
+            [
+              "WING_ANGLE",
+              0.5
+            ],
+            [
+              "WING_SPAN",
+              0.6
+            ],
+            [
+              "TIP_LENGTH",
+              0.6
+            ]
+          ],
+          "toggles": []
+        },
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p7",
+        "part_id": "landinggear_1v",
+        "parent": 4,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 1.225,
+          "y": -0.014593722906422135,
+          "z": -3.255863942762424
+        },
+        "local_rotation": {
+          "x": 1.1102230246251565e-16,
+          "y": 0.0,
+          "z": 5.551115123125783e-17,
+          "w": 1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 2,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p8",
+        "part_id": "landinggear_1v",
+        "parent": 5,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": -1.225,
+          "y": -0.014593722906422135,
+          "z": -3.255863942762424
+        },
+        "local_rotation": {
+          "x": -1.1102230246251565e-16,
+          "y": 0.0,
+          "z": 5.551115123125783e-17,
+          "w": -1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": {
+          "mirrored": true,
+          "part_id": "landinggear_1v",
+          "dry_mass_t": null,
+          "mass_offset_m": null,
+          "inertia_per_t": null,
+          "surface": null
+        },
+        "actions": [],
+        "symmetry": 2,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p9",
+        "part_id": "landinggear_0v_steerable",
+        "parent": 0,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 0.0,
+          "y": -0.6300000000000006,
+          "z": 0.8500000000000001
+        },
+        "local_rotation": {
+          "x": 1.1102230246251565e-16,
+          "y": 2.2993471702930937e-17,
+          "z": -7.850462293418875e-17,
+          "w": 1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p10",
+        "part_id": "stabilizer_1v_procedural_light",
+        "parent": 2,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 0.625,
+          "y": 5.551115123125783e-16,
+          "z": -4.163399970531464
+        },
+        "local_rotation": {
+          "x": 0.5000000000000001,
+          "y": 0.5000000000000001,
+          "z": 0.5000000000000001,
+          "w": 0.5000000000000001
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": {
+          "mirrored": true,
+          "part_id": "stabilizer_1v_procedural_light",
+          "dry_mass_t": null,
+          "mass_offset_m": null,
+          "inertia_per_t": null,
+          "surface": null
+        },
+        "actions": [],
+        "symmetry": 3,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p11",
+        "part_id": "stabilizer_1v_procedural_light",
+        "parent": 2,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": -0.625,
+          "y": 5.551115123125783e-16,
+          "z": -4.163399970531464
+        },
+        "local_rotation": {
+          "x": -0.5000000000000001,
+          "y": 0.5000000000000001,
+          "z": 0.5000000000000001,
+          "w": -0.5000000000000001
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 3,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p12",
+        "part_id": "stabilizer_1v_procedural_light",
+        "parent": 2,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": 0.0,
+          "y": 0.6250000000000009,
+          "z": -4.163399970531464
+        },
+        "local_rotation": {
+          "x": 7.850462293418876e-17,
+          "y": -0.7071067811865475,
+          "z": -0.7071067811865477,
+          "w": 7.850462293418876e-17
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      },
+      {
+        "guid": "p13",
+        "part_id": "intake_1v_radial",
+        "parent": 2,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+          "x": -5.204170427930421e-18,
+          "y": -0.6380000002682208,
+          "z": -3.3633999705314643
+        },
+        "local_rotation": {
+          "x": 0.5000000000000002,
+          "y": 0.49999999999999983,
+          "z": 0.49999999999999994,
+          "w": 0.5
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+          {
+            "resource": "IntakeAir",
+            "stored_units": 0.01,
+            "capacity_units": 0.01
+          }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0,
+        "shape": null,
+        "fairing": null,
+        "shroud_shields": null,
+        "chute": null,
+        "control": null
+      }
+    ],
+    "stages": [
+      [
+        3
+      ]
+    ],
+    "loose": [],
+    "colors": null
+  }
+]
